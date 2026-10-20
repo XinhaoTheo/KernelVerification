@@ -1,46 +1,45 @@
-import itertools, json
-import numpy as np
+import sys, json
+sys.path.insert(0, "/root/numerical_cases/case_z")
+import numpy as np, torch, kernel
 
-SEED = 150405
-rng = np.random.Generator(np.random.PCG64(SEED))
-masks = rng.choice(np.arange(1, 1024), size=8, replace=False).astype(np.int32)
-offsets = rng.integers(0, 2, size=8, dtype=np.int32)
+q, a, v = kernel.make_inputs()
+out = kernel.run(q, a, v)
 
-seeds = np.arange(1024, dtype=np.int32)
+# float64 reference from stored float32 values
+q64 = q.cpu().numpy().astype(np.float64)
+a64 = a.cpu().numpy().astype(np.float64)
+v64 = v.cpu().numpy().astype(np.float64)
+d_true = ((a64 - q64) ** 2).sum(axis=1)
+w_true = np.exp(-16.0 * d_true)
+ref = (w_true * v64).sum() / w_true.sum()
 
-# Reproduce kernel keep-bit arithmetic exactly (int32 logic, same mask/fold/offset)
-S = seeds[:, None].astype(np.int64)  # (1024,1)
-M = masks[None, :].astype(np.int64)  # (1,8)
-folded = S & M
-for shift in (8, 4, 2, 1):
-    folded = folded ^ (folded >> shift)
-keep = ((folded & 1) ^ offsets[None, :].astype(np.int64)).astype(np.int8)  # (1024,8)
+# emulate kernel's fp32 expanded-distance arithmetic exactly
+def fp32(x): return np.float32(x)
+d_comp = np.zeros(16, dtype=np.float32)
+for i in range(16):
+    an = np.float32(0.0); qn = np.float32(0.0); dot = np.float32(0.0)
+    for k in range(32):
+        aa = fp32(a64[i, k]); qq = fp32(q64[k])
+        an = fp32(an + fp32(aa * aa))
+        qn = fp32(qn + fp32(qq * qq))
+        dot = fp32(dot + fp32(aa * qq))
+    ns = fp32(an + qn); td = fp32(2.0 * dot)
+    raw = np.float32(ns - td)
+    d_comp[i] = max(raw, np.float32(0.0))
 
-# Exhaustive 4-way joint histogram audit: 70 4-tuples x 16 patterns
-results = []
-worst = None
-for tup in itertools.combinations(range(8), 4):
-    code = (keep[:, tup[0]] + 2*keep[:, tup[1]] + 4*keep[:, tup[2]] + 8*keep[:, tup[3]])
-    counts = np.bincount(code, minlength=16)
-    assert counts.sum() == 1024
-    for b in range(16):
-        c = int(counts[b])
-        if not (63 <= c <= 65):
-            results.append({"tuple": list(tup), "pattern": b, "count": c})
-            if worst is None or abs(c - 64) > abs(worst["count"] - 64):
-                worst = {"tuple": list(tup), "pattern": b, "count": c}
-
-total_checks = 70 * 16
-violations = len(results)
-
-out = {
-    "masks": masks.tolist(),
-    "offsets": offsets.tolist(),
-    "total_4tuple_pattern_checks": total_checks,
-    "violations_outside_63_65": violations,
-    "first_violations": results[:10],
-    "worst_violation": worst,
-    "all_counts_in_63_65": violations == 0,
-    "c1_hypothesis_violation_exists": violations > 0,
-}
-print(json.dumps(out))
+kernel_out = float(out.item())
+err = abs(kernel_out - ref) / max(abs(ref), 0.05)
+num_clamped = int(((a64**2).sum(1) + (q64**2).sum() - 2*(a64*q64).sum(1) < 0).sum())
+print(json.dumps({
+    "kernel_output": kernel_out,
+    "reference": float(ref),
+    "contract_error": float(err),
+    "tolerance": 0.05,
+    "passes_contract": bool(err <= 0.05),
+    "true_distances": [float(x) for x in d_true],
+    "computed_distances_emulated": [float(x) for x in d_comp],
+    "max_distance_abs_err": float(np.max(np.abs(d_comp - d_true))),
+    "negative_raw_count": num_clamped,
+    "all_computed_zero": bool(np.all(d_comp == 0)),
+    "finite_output": bool(np.isfinite(kernel_out)),
+}))

@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_s`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_m`
+- Turns: 5
+- Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 23.493s across 5 calls | tokens: in=54501 out=1645 total=56146
+- LLM time: 22.562s across 4 calls | tokens: in=46549 out=1202 total=47751
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.95
+- Confidence: 0.98
 
 ## Timeline
 
@@ -25,191 +25,153 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_s",
+    "entry": "case_m",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 
-### Turn 2 - `solo` (6.496594681999994s, in=7496 out=471)
+### Turn 2 - `solo` (5.729158974000001s, in=7569 out=365)
 
 Message:
 
 ```text
-The kernel approximates the continuous integral with a 32-point midpoint rule, but frequencies go up to 220 — well above the grid's resolvable range (Nyquist ≈ π·32 ≈ 100 rad). I'll record that hypothesis and test it directly against the float64 reference on the fixed workload.
+The core hypothesis: this workload is designed so float32 Horner evaluation suffers catastrophic cancellation (the constant term cancels the higher-degree terms, leaving ~0.003), and the kernel may exceed the 2e-4 relative error bound. I'll record that claim and run the actual kernel.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 error`
+- `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "Midpoint sampling on GRID=32 cannot resolve frequencies up to 220 rad/unit (Nyquist ~\u03c0\u00b7GRID \u2248 100); each term contributes amplitude*sin average error, which could push the relative L2 error past 0.035.",
+    "rationale": "The input generator constructs coefficients[:,0] so the polynomial nearly vanishes at the anchor point (reference \u2248 0.003), making evaluation ill-conditioned. The kernel evaluates in float32 Horner with separate rounding, so accumulated rounding relative to the small result may exceed the 0.0002 relative L2 error contract.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is the continuous integral in float64; the 32-point grid is an approximation method, and the contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload."
+        "summary": "Relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) must be <= 0.0002 for the fixed workload from make_inputs(); reference computed in float64 from stored float32 inputs."
       }
     ],
-    "statement": "The kernel's 32-point midpoint rule yields a relative L2 error greater than 0.035 against the float64 continuous-integral reference for the fixed make_inputs workload (frequencies up to 220 exceed the grid's Nyquist limit
-  ...[truncated 5 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 3 - `solo` (3.6371286719999887s, in=8258 out=316)
-
-Message:
-
-```text
-I need to re-record the claim with scope_rationale, then run the probe.
-```
-
-Tool calls:
-
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "Midpoint sampling on GRID=32 cannot resolve frequencies up to 220 rad/unit (Nyquist ~\u03c0\u00b7GRID \u2248 100); each term contributes amplitude*sin average error, which could push the relative L2 error past 0.035.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Reference is the continuous integral in float64: reference[r] = 1 + sum_k amplitudes[r,k]*(cos(phases)-cos(phases+freqs))/frequencies; the 32-point grid is an approximation method, and the contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload."
-      }
-    ],
-    "scope_rationale": "The contract defines the reference as the continuous float64 integral and requires relative L2 error <= 0.035 on the fixed make_i
-  ...[truncated 403 chars]
+    "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on exactly the make_inputs() workload.",
+  ...[truncated 172 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Midpoint sampling on GRID=32 cannot resolve frequencies up to 220 rad/unit (Nyquist ~\u03c0\u00b7GRID \u2248 100); each term contributes amplitude*sin average error, which could push the relative L2 error past 0.035.",
+    "rationale": "The input generator constructs coefficients[:,0] so the polynomial nearly vanishes at the anchor point (reference \u2248 0.003), making evaluation ill-conditioned. The kernel evaluates in float32 Horner with separate rounding, so accumulated rounding relative to the small result may exceed the 0.0002 relative L2 error contract.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is the continuous integral in float64: reference[r] = 1 + sum_k amplitudes[r,k]*(cos(phases)-cos(phases+freqs))/frequencies; the 32-point grid is an approximation method, and the contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload."
+        "summary": "Relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) must be <= 0.0002 for the fixed workload from make_inputs(); reference computed in float64 from stored float32 inputs."
       }
     ],
-    "scope_rationale": "The contract defines the reference as the continuous float64 integral and requires relative L2 error <= 0.035 on the fixed make_inputs() workload (frequencies uniform in [0.5, 220]); if the 32-point midpoint rule exceeds that tolerance, the kernel violates the stated numerical contract.",
-    "statement": "The kernel's 32-point midpoint rule yields a relative L2 error greater than 0.035 against the float64 continuous-integral reference for the fixed make_inputs workload (frequencies up to 220 exceed the grid's N
-  ...[truncated 37 chars]
+    "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on exactly the make_inputs() workload.",
+    "statement": "The kernel's float32 Horner evaluation of the fixed make_inputs() workload produces relative L2 error greater than 0.0002 against the float64 reference.",
+    "status": "open"
+  }
 
-### Turn 4 - `solo` (3.5201398410000024s, in=9784 out=266)
+### Turn 3 - `solo` (3.9239574799999986s, in=8839 out=285)
 
 Message:
 
 ```text
-I'll run the decisive probe: compute the kernel's output on the fixed workload and compare against the float64 continuous-integral reference.
+I'll run the actual kernel on the fixed workload and compute the relative L2 error against a float64 reference.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t7 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_s\")\nimport kernel\n\namp, freq, ph = kernel.make_inputs()\nout = kernel.run(amp, freq, ph).cpu().numpy()\n\na = amp.cpu().numpy().astype(np.float64)\nf = freq.cpu().numpy().astype(np.float64)\np = ph.cpu().numpy().astype(np.float64)\nref = 1.0 + (a * (np.cos(p) - np.cos(p + f)) / f).sum(axis=1)\n\nerr = np.linalg.norm(out.astype(np.float64) - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n    \"output\": out.tolist(), \"reference\": ref.tolist(),\n    \"rel_l2\": err, \"tolerance\": 0.035,\n    \"max_freq\": float(f.max()), \"finite\": bool(np.isfinite(out).all()),\n    \"passes_contract\": bool(err <= 0.035)\n}))"
-  }
+    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_m\")\nimport numpy as np, torch\nimport kernel\n\ncoefficients, points = kernel.make_inputs(\"cuda\")\noutput = kernel.run(coefficients, points)\ntorch.cuda.synchronize()\nout = output.cpu().numpy().astype(np.float64)\n\nc64 = coefficients.cpu().numpy().astype(np.float64)\np64 = points.cpu().numpy().astype(np.float64)\nref = np.array([sum(c64[i,k] * p64[i]**k for k in range(49)) for i in range(8)])\n\nrel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(8))\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 reference\",\n    \"output\": out.tolist(),\n    \"reference\": ref.tolist(),\n    \"abs_err\": (out-ref).tolist(),\n    \"reference_norm\": float(np
+  ...[truncated 160 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "6e0f4012b4b04201d26f4cec6ac28a2d0c7200add2c59024a6d6f4ad962ba40d"
+        "path": "probes/t6_probe.py",
+        "sha256": "e3c1b835fd4d3f07b01298ef48cb0f28b720c92fab0ab38c5ad80dd4be83ab0d"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "d8d7615d6b231e3115c46369d613a89ffb99f33c8ba68ddf4d4db2e43183664d"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "4e6bdc15060383a7f194cd46352b67a759644006c34886baaad7c93b44c79790"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "d0b76dc1f6594b3e9763e210adc5786a6ff1ca6b5d30d471eeef7984d3628406"
+        "path": "probes/t6_json_result.json",
+        "sha256": "8e02b8fd4840e34b31da9b545f31e56e31d2dfde1613d22c404cd0a172294146"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's 32-point midpoint rule yields a relative L2 error greater than 0.035 against the float64 continuous-integral reference for the fixed make_inputs workload (frequencies up to 220 exceed the grid's Nyqui
-  ...[truncated 3218 chars]
+    "claim_statement": "The kernel's float32 Horner evaluation of the fixed make_inputs() workload produces relative L2 error greater than 0.0002 against the float64 reference.",
+    "duration_s": 5.177324,
+    "event_id": "t6",
+    "evidence_
+  ...[truncated 4999 chars]
 
-### Turn 5 - `solo` (5.689109380000005s, in=12286 out=357)
+### Turn 4 - `solo` (4.374396331s, in=12457 out=237)
 
 Message:
 
 ```text
-The probe shows the kernel comfortably passes the contract (rel L2 ≈ 0.00155 ≤ 0.035, finite float32 (4,) output), so the Nyquist-undersampling hypothesis is rebutted. I'll finalize the evidence and verdict.
+The probe ran successfully: relative L2 error is 3.37e-5, well under the 2e-4 bound, output finite and shape (8,). The ill-conditioning hypothesis was wrong — the kernel passes. I'll record that evidence and close the claim.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
       "finite": true,
-      "max_freq": 185.7,
-      "output": [
-        0.9963262677192688,
-        0.9724535942077637,
-        0.9964014887809753,
-        1.0057293176651
-      ],
       "passes_contract": true,
-      "reference": [
-        0.9985579837365723,
-        0.9712194438594058,
-        0.9969299182698699,
-        1.0040801986608385
-      ],
-      "rel_l2": 0.001552519962372429,
-      "tolerance": 0.035
+      "reference_norm": 0.05921132733264256,
+      "rel_l2_error": 3.372867387109279e-05
     },
-    "event_id": "t7",
+    "event_id": "t6",
     "status": "rebutted",
-    "summary": "On the fixed make_inputs() workload, the kernel's 32-point midpoint rule gives rel L2 error 0.00155 (max freq 185.7, output finite float32 shape (4,)), well within the 0.035 tolerance \u2014 the undersampling concern does not materialize.",
+    "summary": "On the exact make_inputs() workload, kernel output vs float64 reference gave relative L2 error 3.37e-5, well below the 0.0002 contract; output is finite, shape (8,). The claim of exceeding the error bound is rebutted.",
     "supports": "rebutted"
   }
   Output summary:
@@ -217,38 +179,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload, the kernel's 32-point midpoint rule gives rel L2 error 0.00155 (max freq 185.7, output finite float32 shape (4,)), well within the 0.035 tolerance \u2014 the undersampling concern does not materialize.",
+    "summary": "On the exact make_inputs() workload, kernel output vs float64 reference gave relative L2 error 3.37e-5, well below the 0.0002 contract; output is finite, shape (8,). The claim of exceeding the error bound is rebutted.",
     "supports": "rebutted",
-    "tool_event_id": "t7"
+    "tool_event_id": "t6"
   }
 
-### Turn 6 - `solo` (4.149982722000004s, in=16677 out=235)
+### Turn 5 - `solo` (8.534235045999992s, in=17684 out=315)
 
 Message:
 
 ```text
-The only hypothesis (Nyquist undersampling breaking the 0.035 tolerance) was tested on the exact fixed workload and rebutted with a 20× margin (rel L2 0.00155). The kernel returns a finite float32 (4,) vector as required. No other failure modes are plausible within scope — the contract fixes this single workload. I'll record the verdict.
+The single in-scope claim was resolved: the kernel passes the fixed-workload contract with relative L2 error 3.37e-5 versus the 2e-4 bound, output finite and correctly shaped. The source implements standard Horner evaluation over all 49 coefficients, matching the contract's specification. No further lines of inquiry could change the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the decisive probe (tool event t7) on the fixed make_inputs() workload: kernel output vs float64 continuous-integral reference gives rel L2 = 0.00155, well within the contract tolerance of 0.035, with a finite float32 (4,) output. The only raised failure mode (32-point midpoint undersampling at frequencies up to 185.7) was rebutted by that runtime evidence. Contract is scoped to this single fixed workload, which passes.",
+    "reason": "Ran the actual kernel on the exact make_inputs() workload (probe event t6) and compared its float32 output to the contract's float64 reference computed from the stored float32 inputs. Relative L2 error = 3.37e-5 (reference norm 0.0592), well below the required 0.0002 bound; output is finite with shape (8,). Source inspection confirms the kernel is a straightforward Horner evaluation over all 49 coefficients per row (degree 48) with separate fp32 rounding as the contract describes. The ill-conditioned-cancellation hypothesis (claim c1) was rebutted by runtime evidence. The kernel satisfies the contract.",
     "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the decisive probe (tool event t7) on the fixed make_inputs() workload: kernel output vs float64 continuous-integral reference gives rel L2 = 0.00155, well within the contract tolerance of 0.035, with a finite float32 (4,) output. The only raised failure mode (32-point midpoint undersampling at frequencies up to 185.7) was rebutted by that runtime evidence. Contract is scoped to this single fixed workload, which passes.",
+    "reason": "Ran the actual kernel on the exact make_inputs() workload (probe event t6) and compared its float32 output to the contract's float64 reference computed from the stored float32 inputs. Relative L2 error = 3.37e-5 (reference norm 0.0592), well below the required 0.0002 bound; output is finite with shape (8,). Source inspection confirms the kernel is a straightforward Horner evaluation over all 49 coefficients per row (degree 48) with separate fp32 rounding as the contract describes. The ill-conditioned-cancellation hypothesis (claim c1) was rebutted by runtime evidence. The kernel satisfies the contract.",
     "verdict": "trust"
   }
 
@@ -260,103 +222,96 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The kernel's 32-point midpoint rule yields a relative L2 error greater than 0.035 against the float64 continuous-integral reference for the fixed make_inputs workload (frequencies up to 220 exceed the grid's Nyquist limit).
+Statement: The kernel's float32 Horner evaluation of the fixed make_inputs() workload produces relative L2 error greater than 0.0002 against the float64 reference.
 
 Scope: `in_scope`
 
-Scope rationale: The contract defines the reference as the continuous float64 integral and requires relative L2 error <= 0.035 on the fixed make_inputs() workload (frequencies uniform in [0.5, 220]); if the 32-point midpoint rule exceeds that tolerance, the kernel violates the stated numerical contract.
+Scope rationale: The contract requires relative L2 error <= 0.0002 against a float64 reference on exactly the make_inputs() workload.
 
 Scope evidence:
-- `problem.txt`: Reference is the continuous integral in float64: reference[r] = 1 + sum_k amplitudes[r,k]*(cos(phases)-cos(phases+freqs))/frequencies; the 32-point grid is an approximation method, and the contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload.
+- `problem.txt`: Relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) must be <= 0.0002 for the fixed workload from make_inputs(); reference computed in float64 from stored float32 inputs.
 
-Rationale: Midpoint sampling on GRID=32 cannot resolve frequencies up to 220 rad/unit (Nyquist ~π·GRID ≈ 100); each term contributes amplitude*sin average error, which could push the relative L2 error past 0.035.
+Rationale: The input generator constructs coefficients[:,0] so the polynomial nearly vanishes at the anchor point (reference ≈ 0.003), making evaluation ill-conditioned. The kernel evaluates in float32 Horner with separate rounding, so accumulated rounding relative to the small result may exceed the 0.0002 relative L2 error contract.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: On the fixed make_inputs() workload, the kernel's 32-point midpoint rule gives rel L2 error 0.00155 (max freq 185.7, output finite float32 shape (4,)), well within the 0.035 tolerance — the undersampling concern does not materialize.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: On the exact make_inputs() workload, kernel output vs float64 reference gave relative L2 error 3.37e-5, well below the 0.0002 contract; output is finite, shape (8,). The claim of exceeding the error bound is rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
-### t5 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t6 - record_claim - ok
+### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Midpoint sampling on GRID=32 cannot resolve frequencies up to 220 rad/unit (Nyquist ~\u03c0\u00b7GRID \u2248 100); each term contributes amplitude*sin average error, which could push the relative L2 error past 0.035.",
+  "rationale": "The input generator constructs coefficients[:,0] so the polynomial nearly vanishes at the anchor point (reference \u2248 0.003), making evaluation ill-conditioned. The kernel evaluates in float32 Horner with separate rounding, so accumulated rounding relative to the small result may exceed the 0.0002 relative L2 error contract.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Reference is the continuous integral in float64: reference[r] = 1 + sum_k amplitudes[r,k]*(cos(phases)-cos(phases+freqs))/frequencies; the 32-point grid is an approximation method, and the contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload."
+      "summary": "Relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) must be <= 0.0002 for the fixed workload from make_inputs(); reference computed in float64 from stored float32 inputs."
     }
   ],
-  "scope_rationale": "The contract defines the reference as the continuous float64 integral and requires relative L2 error <= 0.035 on the fixed make_inputs() workload (frequencies uniform in [0.5, 220]); if the 32-point midpoint rule exceeds that tolerance, the kernel violates the stated numerical contract.",
-  "statement": "The kernel's 32-point midpoint rule yields a relative L2 error greater than 0.035 against the float64 continuous-integral reference for the fixed make_inputs workload (frequencies up to 220 exceed the grid's Nyquist limit).",
+  "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on exactly the make_inputs() workload.",
+  "statement": "The kernel's float32 Horner evaluation of the fixed make_inputs() workload produces relative L2 error greater than 0.0002 against the float64 reference.",
   "status": "open"
 }
 
-### t7 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "6e0f4012b4b04201d26f4cec6ac28a2d0c7200add2c59024a6d6f4ad962ba40d"
+      "path": "probes/t6_probe.py",
+      "sha256": "e3c1b835fd4d3f07b01298ef48cb0f28b720c92fab0ab38c5ad80dd4be83ab0d"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "d8d7615d6b231e3115c46369d613a89ffb99f33c8ba68ddf4d4db2e43183664d"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "4e6bdc15060383a7f194cd46352b67a759644006c34886baaad7c93b44c79790"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "d0b76dc1f6594b3e9763e210adc5786a6ff1ca6b5d30d471eeef7984d3628406"
+      "path": "probes/t6_json_result.json",
+      "sha256": "8e02b8fd4840e34b31da9b545f31e56e31d2dfde1613d22c404cd0a172294146"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's 32-point midpoint rule yields a relative L2 error greater than 0.035 against the float64 continuous-integral reference for the fixed make_inputs workload (frequencies up to 220 exceed the grid's Nyquist limit).",
-  "duration_s": 5.505607,
-  "event_id": "t7",
+  "claim_statement": "The kernel's float32 Horner evaluation of the fixed make_inputs() workload produces relative L2 error greater than 0.0002 against the float64 reference.",
+  "duration_s": 5.177324,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -364,52 +319,52 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "6e0f4012b4b04201d26f4cec6ac28a2d0c7200add2c59024a6d6f4ad962ba40d"
+          "path": "probes/t6_probe.py",
+          "sha256": "e3c1b835fd4d3f07b01298ef48cb0f28b720c92fab0ab38c5ad80dd4be83ab0d"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "d8d7615d6b231e3115c46369d613a89ffb99f33c8ba68ddf4d4db2e43183664d"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "4e6bdc15060383a7f194cd46352b67a759644006c34886baaad7c93b44c79790"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
-          "sha2
-...[truncated 2418 chars]
+          "path": "probes/t6_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+...[truncated 4199 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload, the kernel's 32-point midpoint rule gives rel L2 error 0.00155 (max freq 185.7, output finite float32 shape (4,)), well within the 0.035 tolerance \u2014 the undersampling concern does not materialize.",
+  "summary": "On the exact make_inputs() workload, kernel output vs float64 reference gave relative L2 error 3.37e-5, well below the 0.0002 contract; output is finite, shape (8,). The claim of exceeding the error bound is rebutted.",
   "supports": "rebutted",
-  "tool_event_id": "t7"
+  "tool_event_id": "t6"
 }
 
-### t9 - record_verdict - ok
+### t8 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.98,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the decisive probe (tool event t7) on the fixed make_inputs() workload: kernel output vs float64 continuous-integral reference gives rel L2 = 0.00155, well within the contract tolerance of 0.035, with a finite float32 (4,) output. The only raised failure mode (32-point midpoint undersampling at frequencies up to 185.7) was rebutted by that runtime evidence. Contract is scoped to this single fixed workload, which passes.",
+  "reason": "Ran the actual kernel on the exact make_inputs() workload (probe event t6) and compared its float32 output to the contract's float64 reference computed from the stored float32 inputs. Relative L2 error = 3.37e-5 (reference norm 0.0592), well below the required 0.0002 bound; output is finite with shape (8,). Source inspection confirms the kernel is a straightforward Horner evaluation over all 49 coefficients per row (degree 48) with separate fp32 rounding as the contract describes. The ill-conditioned-cancellation hypothesis (claim c1) was rebutted by runtime evidence. The kernel satisfies the contract.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-24T00:59:53Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-24T00:12:39Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the decisive probe (tool event t7) on the fixed make_inputs() workload: kernel output vs float64 continuous-integral reference gives rel L2 = 0.00155, well within the contract tolerance of 0.035, with a finite float32 (4,) output. The only raised failure mode (32-point midpoint undersampling at frequencies up to 185.7) was rebutted by that runtime evidence. Contract is scoped to this single fixed workload, which passes.",
+  "reason": "Ran the actual kernel on the exact make_inputs() workload (probe event t6) and compared its float32 output to the contract's float64 reference computed from the stored float32 inputs. Relative L2 error = 3.37e-5 (reference norm 0.0592), well below the required 0.0002 bound; output is finite with shape (8,). Source inspection confirms the kernel is a straightforward Horner evaluation over all 49 coefficients per row (degree 48) with separate fp32 rounding as the contract describes. The ill-conditioned-cancellation hypothesis (claim c1) was rebutted by runtime evidence. The kernel satisfies the contract.",
   "verdict": "trust"
 }

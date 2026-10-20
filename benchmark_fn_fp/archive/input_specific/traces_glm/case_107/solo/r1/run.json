@@ -5,36 +5,36 @@
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_o",
+    "entry": "case_i",
     "has_error": null,
-    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _projection_kernel(U, B, Output, N: tl.constexpr):\n    numerator = tl.full((), 0.0, tl.float32)\n    denominator = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        numerator = numerator + u * b\n        denominator = denominator + u * u\n    coefficient = tl.div_rn(numerator, denominator)\n    norm_squared = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        residual = b - u * coefficient\n        norm_squared = norm_squared + residual * residual\n    norm = tl.sqrt(norm_squared)\n    j = tl.arange(0, N)\n    u = tl.load(U + j).to(tl.float32)\n    b = tl.load(B + j).to(tl.float32)\n    residual = b - u * coefficient\n    tl.store(Output + j, tl.div_rn(residual, norm))\n\n\ndef run(u, b):\n    output = torch.empty((32,), device=u.device, dtype=torch.float32)\n    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(830230))\n    u = rng.normal(size=32).astype(np.float32)\n    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n    return u, b\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Output, N: tl.constexpr):\n    total = tl.full((), 0.0, tl.float32)\n    squares = tl.full((), 0.0, tl.float32)\n    for i in range(0, N):\n        value = tl.load(X + i).to(tl.float32)\n        total = total + value\n        squares = squares + value * value\n    mean = total / N\n    variance = tl.maximum(squares / N - mean * mean, 0.0)\n    denominator = tl.sqrt(variance + 0.00001)\n    offsets = tl.arange(0, N)\n    values = tl.load(X + offsets).to(tl.float32)\n    tl.store(Output + offsets, (values - mean) / denominator)\n\n\ndef run(x):\n    output = torch.empty((128,), device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,\n                            enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(782515))\n    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
     "passed": null,
-    "problem_text": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+    "problem_text": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
     "rounds": null,
-    "session_dir": "/root/numerical_cases/case_o",
+    "session_dir": "/root/numerical_cases/case_i",
     "status": "unverified",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-24T00:57:53Z",
+      "created_at": "2026-09-24T00:09:26Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-24T00:58:11Z",
+          "created_at": "2026-09-24T00:09:41Z",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
+                "sha256": "96cc2fe4a12a48772db18c2fd575ddb89359917ef973508717b529ea9fec49be"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
+                "sha256": "a30d5c7689a61824e69439d623f69dc0aa1d5db70294391c2fd8162695519add"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -46,56 +46,57 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "f48263b45eec67bb3a2d646e393f7ee1468faa276f13ed77928db853079febdc"
+                "sha256": "f15eac82d242068de6153055f4d487e873a3ebc857c00cc6f2e753dc28a9bf81"
               }
             ],
-            "duration_s": 7.878197,
+            "duration_s": 6.415957,
+            "error": 0.00024261613799325,
             "exit_code": 0,
             "expected_signal": null,
+            "finite": true,
             "json_parse_error": null,
             "json_result": {
+              "denominator_kernelish": 0.12790424781228815,
+              "error": 0.00024261613799325,
               "finite": true,
-              "max_abs_err": 0.0005855331971066635,
-              "norm_b": 4.335016031142284,
-              "norm_res": 6.621097760007478e-05,
-              "passes": true,
-              "relative_l2": 0.0015436494833812023,
+              "max_abs_diff": 0.0007283590858730982,
+              "metric": "relative L2 error vs float64 reference",
               "shape": [
-                32
+                128
               ],
-              "tolerance": 0.01
+              "threshold": 0.02
             },
-            "max_abs_err": 0.0005855331971066635,
-            "norm_res": 6.621097760007478e-05,
-            "passes": true,
-            "relative_l2": 0.0015436494833812023,
+            "max_abs_diff": 0.0007283590858730982,
+            "shape": [
+              128
+            ],
             "stderr": "",
-            "stdout": "{\"relative_l2\": 0.0015436494833812023, \"tolerance\": 0.01, \"passes\": true, \"finite\": true, \"shape\": [32], \"norm_res\": 6.621097760007478e-05, \"norm_b\": 4.335016031142284, \"max_abs_err\": 0.0005855331971066635}\n",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"error\": 0.00024261613799325, \"threshold\": 0.02, \"finite\": true, \"shape\": [128], \"max_abs_diff\": 0.0007283590858730982, \"denominator_kernelish\": 0.12790424781228815}\n",
+            "threshold": 0.02,
             "timed_out": false,
-            "timeout_s": 60,
-            "tolerance": 0.01
+            "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
+          "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.00024 vs float64 reference, well under the 0.02 threshold; output is finite with shape (128,). The suspected float32 cancellation does not violate the contract.",
           "supports": "rebutted",
           "tool_event_id": "t7"
         }
       ],
       "id": "c1",
       "raised_by": "solo",
-      "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
+      "rationale": "The kernel accumulates sum and sum-of-squares in float32 on values around 64 (E[x^2]\u22484096, variance\u22480.016), so catastrophic cancellation in squares/N - mean*mean could distort the denominator; the contract requires relative L2 error <= 0.02 against the float64 reference for the fixed make_inputs() vector.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
+          "summary": "Reference is mean/variance of the original float32 values evaluated in float64; relative L2 error ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(128)) must be <= 0.02 for the fixed (128,) make_inputs() workload."
         }
       ],
-      "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
-      "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.",
+      "scope_rationale": "The contract requires relative L2 error <= 0.02 on the fixed (128,) float32 input from make_inputs(); any excess error on that exact workload violates the contract.",
+      "statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement.",
       "status": "rebutted",
-      "updated_at": "2026-09-24T00:58:11Z"
+      "updated_at": "2026-09-24T00:09:41Z"
     }
   ],
   "convergence": null,
@@ -108,7 +109,7 @@
   },
   "description_tasks": [],
   "description_updates": [],
-  "entry": "case_o",
+  "entry": "case_i",
   "history": [
     {
       "duration_s": null,
@@ -118,25 +119,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_o"
+            "entry": "case_i"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_o"
+            "entry": "case_i"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_o"
+            "entry": "case_i"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_o",
+            "entry": "case_i",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -145,22 +146,22 @@
       "usage": null
     },
     {
-      "duration_s": 5.206141744999999,
+      "duration_s": 6.9165053720000005,
       "role": "solo",
       "round": 2,
-      "text": "The suspicious point: b \u2248 1.125\u00b7u + tiny noise, so the residual is tiny and fp32 cancellation in `b - alpha*u` could exceed the 1% relative tolerance. I'll record that claim and run the actual kernel against a float64 reference on the exact fixed workload.",
+      "text": "I'll record the core claim and run the fixed workload against a float64 reference.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "The workload makes residual ~1e-5 relative to b; fp32 error in alpha (~1e-7 relative) can produce residual relative errors near or above the 1% contract tolerance.",
+            "rationale": "The kernel accumulates sum and sum-of-squares in float32 on values around 64, which can lose precision; the contract requires relative L2 error <= 0.02 against the float64 reference for the fixed make_inputs() vector.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
+                "summary": "Reference evaluated in float64; relative L2 error must be <= 0.02 for the fixed (128,) input from make_inputs()."
               }
             ],
-            "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference."
+            "statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement."
           },
           "tool": "record_claim"
         }
@@ -168,29 +169,29 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.206,
-        "input_tokens": 7383,
-        "output_tokens": 376
+        "duration_s": 6.917,
+        "input_tokens": 7115,
+        "output_tokens": 180
       }
     },
     {
-      "duration_s": 3.159164876,
+      "duration_s": 3.797404189,
       "role": "solo",
       "round": 3,
-      "text": "The claim needs the scope_rationale field; I'll re-send it, then run the kernel against a float64 reference on the fixed workload.",
+      "text": "I'll re-record the claim with the missing scope_rationale, then run the fixed workload against a float64 reference.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
+            "rationale": "The kernel accumulates sum and sum-of-squares in float32 on values around 64 (E[x^2]\u22484096, variance\u22480.016), so catastrophic cancellation in squares/N - mean*mean could distort the denominator; the contract requires relative L2 error <= 0.02 against the float64 reference for the fixed make_inputs() vector.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
+                "summary": "Reference is mean/variance of the original float32 values evaluated in float64; relative L2 error ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(128)) must be <= 0.02 for the fixed (128,) make_inputs() workload."
               }
             ],
-            "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
-            "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference."
+            "scope_rationale": "The contract requires relative L2 error <= 0.02 on the fixed (128,) float32 input from make_inputs(); any excess error on that exact workload violates the contract.",
+            "statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement."
           },
           "tool": "record_claim"
         }
@@ -198,22 +199,21 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 3.159,
-        "input_tokens": 8060,
-        "output_tokens": 295
+        "duration_s": 3.797,
+        "input_tokens": 7686,
+        "output_tokens": 275
       }
     },
     {
-      "duration_s": 5.668587982999998,
+      "duration_s": 3.6503065489999997,
       "role": "solo",
       "round": 4,
-      "text": "I'll run the kernel on the fixed workload and compare against a float64 reference.",
+      "text": "I'll run the fixed workload through the kernel and compare against the float64 reference.",
       "tool_calls": [
         {
           "args": {
             "claim_id": "c1",
-            "code": "\nimport numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nfrom kernel import run, make_inputs\n\nu, b = make_inputs()\nout = run(u, b)\n\n# float64 reference (recentring to avoid cancellation in the reference itself)\nu64 = u.cpu().numpy().astype(np.float64)\nb64 = b.cpu().numpy().astype(np.float64)\n# reference: b = 1.125u + eps stored in fp32; compute alpha exactly from stored values\nalpha = (u64*b64).sum() / (u64*u64).sum()\nres = b64 - alpha*u64\n# alternative recentred: use dot of (b - mean-shift) \u2014 but straightforward fp64 is fine here\nref = res / np.linalg.norm(res)\n\no = out.cpu().numpy().astype(np.float64)\nrel = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"relative_l2\": float(rel),\n  \"tolerance\": 0.01,\n  \"passes\": bool(rel <= 0.01),\n  \"finite\": bool(np.all(np.isfinite(o))),\n  \"shape\": list(o.shape),\n  \"norm_res\": float(np.linalg.norm(res)),\n  \"norm_b\": float(np.linalg.norm(b64)),\n  \"max_abs_err\": float(np.abs(o-ref).max()),\n}))\n",
-            "use_gpu": true
+            "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as k\n\n(x,) = k.make_inputs(\"cuda\")\nout = k.run(x)\nx64 = x.cpu().numpy().astype(np.float64)\nmean = x64.sum() / 128\nvar = ((x64 - mean) ** 2).sum() / 128\nref = (x64 - mean) / np.sqrt(var + 1e-5)\no = out.detach().cpu().numpy().astype(np.float64)\nerr = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 reference\",\n    \"error\": float(err),\n    \"threshold\": 0.02,\n    \"finite\": bool(np.isfinite(o).all()),\n    \"shape\": list(o.shape),\n    \"max_abs_diff\": float(np.abs(o - ref).max()),\n    \"denominator_kernelish\": float(np.sqrt(max(var, 0) + 1e-5)),\n}))\n"
           },
           "tool": "run_claim_probe"
         }
@@ -221,29 +221,31 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.669,
-        "input_tokens": 9406,
-        "output_tokens": 347
+        "duration_s": 3.65,
+        "input_tokens": 8999,
+        "output_tokens": 277
       }
     },
     {
-      "duration_s": 4.703358552000001,
+      "duration_s": 5.198613761000001,
       "role": "solo",
       "round": 5,
-      "text": "The probe ran the kernel on the exact fixed workload against a float64 reference: relative L2 error is 0.00154, well within the 1% tolerance, with a finite shape-(32,) output. The claimed precision failure did not materialize. I'll finalize that evidence and record the verdict.",
+      "text": "The probe on the exact fixed workload shows relative L2 error 0.00024, far below the 0.02 threshold, with finite output of shape (128,). The claim is rebutted; I'll finalize the evidence and record a trust verdict.",
       "tool_calls": [
         {
           "args": {
             "data": {
-              "max_abs_err": 0.0005855331971066635,
-              "norm_res": 6.621097760007478e-05,
-              "passes": true,
-              "relative_l2": 0.0015436494833812023,
-              "tolerance": 0.01
+              "error": 0.00024261613799325,
+              "finite": true,
+              "max_abs_diff": 0.0007283590858730982,
+              "shape": [
+                128
+              ],
+              "threshold": 0.02
             },
             "event_id": "t7",
             "status": "rebutted",
-            "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
+            "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.00024 vs float64 reference, well under the 0.02 threshold; output is finite with shape (128,). The suspected float32 cancellation does not violate the contract.",
             "supports": "rebutted"
           },
           "tool": "finalize_probe_evidence"
@@ -252,24 +254,24 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 4.703,
-        "input_tokens": 11754,
-        "output_tokens": 284
+        "duration_s": 5.199,
+        "input_tokens": 11112,
+        "output_tokens": 227
       }
     },
     {
-      "duration_s": 3.0809151890000024,
+      "duration_s": 7.317892958999998,
       "role": "solo",
       "round": 6,
-      "text": "The single claim is resolved: the kernel passes the contract tolerance on the exact fixed workload. I'll record the trust verdict.",
+      "text": "The single in-scope claim is resolved with runtime evidence: the kernel's output on the exact fixed make_inputs() workload has relative L2 error 0.00024 against the float64 reference, far under the 0.02 threshold, with a finite (128,) output. Nothing else is in scope per the contract. I'll record the trust verdict.",
       "tool_calls": [
         {
           "args": {
-            "confidence": 0.95,
+            "confidence": 0.98,
             "decisive_claims": [
               "c1"
             ],
-            "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
+            "reason": "Ran the kernel on the exact fixed workload from make_inputs() (probe t7) and compared to the contract's float64 reference. Relative L2 error = 0.0002426 (threshold 0.02), max abs diff 0.000728, output finite with shape (128,), population variance formula and eps=1e-5 match the contract. The hypothesized float32 cancellation failure was rebutted; no other input is in scope per problem.txt.",
             "verdict": "trust"
           },
           "tool": "record_verdict"
@@ -278,9 +280,9 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 3.081,
-        "input_tokens": 14995,
-        "output_tokens": 184
+        "duration_s": 7.318,
+        "input_tokens": 14149,
+        "output_tokens": 212
       }
     }
   ],
@@ -298,9 +300,9 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_o"
+        "entry": "case_i"
       },
-      "created_at": "2026-09-24T00:57:43Z",
+      "created_at": "2026-09-24T00:09:14Z",
       "id": "t1",
       "output": {
         "artifact_files": [
@@ -308,13 +310,13 @@
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_o",
+        "entry": "case_i",
         "has_error": null,
-        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _projection_kernel(U, B, Output, N: tl.constexpr):\n    numerator = tl.full((), 0.0, tl.float32)\n    denominator = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        numerator = numerator + u * b\n        denominator = denominator + u * u\n    coefficient = tl.div_rn(numerator, denominator)\n    norm_squared = tl.full((), 0.0, tl.float32)\n    for j in tl.static_range(0, N):\n        u = tl.load(U + j).to(tl.float32)\n        b = tl.load(B + j).to(tl.float32)\n        residual = b - u * coefficient\n        norm_squared = norm_squared + residual * residual\n    norm = tl.sqrt(norm_squared)\n    j = tl.arange(0, N)\n    u = tl.load(U + j).to(tl.float32)\n    b = tl.load(B + j).to(tl.float32)\n    residual = b - u * coefficient\n    tl.store(Output + j, tl.div_rn(residual, norm))\n\n\ndef run(u, b):\n    output = torch.empty((32,), device=u.device, dtype=torch.float32)\n    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(830230))\n    u = rng.normal(size=32).astype(np.float32)\n    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)\n    return u, b\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _layer_norm_kernel(X, Output, N: tl.constexpr):\n    total = tl.full((), 0.0, tl.float32)\n    squares = tl.full((), 0.0, tl.float32)\n    for i in range(0, N):\n        value = tl.load(X + i).to(tl.float32)\n        total = total + value\n        squares = squares + value * value\n    mean = total / N\n    variance = tl.maximum(squares / N - mean * mean, 0.0)\n    denominator = tl.sqrt(variance + 0.00001)\n    offsets = tl.arange(0, N)\n    values = tl.load(X + offsets).to(tl.float32)\n    tl.store(Output + offsets, (values - mean) / denominator)\n\n\ndef run(x):\n    output = torch.empty((128,), device=x.device, dtype=torch.float32)\n    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,\n                            enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(782515))\n    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)\n    return (x,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
         "passed": null,
-        "problem_text": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
+        "problem_text": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
         "rounds": null,
-        "session_dir": "/root/numerical_cases/case_o",
+        "session_dir": "/root/numerical_cases/case_i",
         "status": "unverified",
         "test_code": ""
       },
@@ -323,13 +325,13 @@
     },
     {
       "args": {
-        "entry": "case_o"
+        "entry": "case_i"
       },
-      "created_at": "2026-09-24T00:57:43Z",
+      "created_at": "2026-09-24T00:09:14Z",
       "id": "t2",
       "output": {
-        "content": "Compute a normalized orthogonal projection for a fixed public workload.\n\nOnly the two float32 vectors u and b returned by make_inputs() are in scope.\nEach has shape (32,). The mathematical reference on these actual stored inputs is\n  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]\n  residual[j] = b[j] - alpha*u[j]\n  reference = residual / ||residual||_2.\nUse at least float64 accuracy for the reference. Algebraically equivalent\nrecentring is allowed to avoid numerical cancellation in the reference itself.\nThe residual on this workload is nonzero.\n\nThe output must be a finite vector of shape (32,), and\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.\n\nDecide whether this kernel satisfies that contract for the fixed generated\nworkload. Arbitrary alternative vectors are outside the scope. The kernel uses\nfloat32 arithmetic, sequential accumulations and separately rounded products\nand sums; its launch disables FP multiply/add fusion.\n",
-        "entry": "case_o",
+        "content": "Implement LayerNorm without an affine transform for this fixed workload.\n\nThe only input in scope is the float32 vector x returned by make_inputs() in\nkernel.py. Its shape is (128,), and its complete contents and element order are\nspecified by that public deterministic generator.\n\nThe reference uses the original float32 input values, evaluated in float64:\n  mean = sum_i x[i] / 128\n  variance = sum_i (x[i] - mean)**2 / 128\n  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)\nUse population variance, with no degrees-of-freedom correction.\n\nThe output must be one finite vector with shape (128,). Its relative L2 error is\n  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).\nThe numerical contract requires this error to be <= 0.02.\n\nDecide whether this implementation satisfies that contract for this fixed\nworkload. Arbitrary alternative tensors are outside this question's scope.\n",
+        "entry": "case_i",
         "exists": true,
         "path": "problem.txt"
       },
@@ -338,17 +340,17 @@
     },
     {
       "args": {
-        "entry": "case_o"
+        "entry": "case_i"
       },
-      "created_at": "2026-09-24T00:57:43Z",
+      "created_at": "2026-09-24T00:09:14Z",
       "id": "t3",
       "output": {
-        "entry": "case_o",
+        "entry": "case_i",
         "files": [
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 1519
+            "size_bytes": 1132
           },
           {
             "kind": "metadata",
@@ -358,7 +360,7 @@
           {
             "kind": "problem",
             "path": "problem.txt",
-            "size_bytes": 952
+            "size_bytes": 908
           }
         ]
       },
@@ -367,14 +369,14 @@
     },
     {
       "args": {
-        "entry": "case_o",
+        "entry": "case_i",
         "path": "meta.json"
       },
-      "created_at": "2026-09-24T00:57:43Z",
+      "created_at": "2026-09-24T00:09:14Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_o\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
-        "entry": "case_o",
+        "content": "{\n  \"name\": \"case_i\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_i",
         "kind": "metadata",
         "path": "meta.json",
         "size_chars": 67,
@@ -385,17 +387,17 @@
     },
     {
       "args": {
-        "rationale": "The workload makes residual ~1e-5 relative to b; fp32 error in alpha (~1e-7 relative) can produce residual relative errors near or above the 1% contract tolerance.",
+        "rationale": "The kernel accumulates sum and sum-of-squares in float32 on values around 64, which can lose precision; the contract requires relative L2 error <= 0.02 against the float64 reference for the fixed make_inputs() vector.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
+            "summary": "Reference evaluated in float64; relative L2 error must be <= 0.02 for the fixed (128,) input from make_inputs()."
           }
         ],
-        "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference."
+        "statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement."
       },
-      "created_at": "2026-09-24T00:57:50Z",
+      "created_at": "2026-09-24T00:09:22Z",
       "id": "t5",
       "output": {
         "error": {
@@ -413,36 +415,36 @@
     },
     {
       "args": {
-        "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
+        "rationale": "The kernel accumulates sum and sum-of-squares in float32 on values around 64 (E[x^2]\u22484096, variance\u22480.016), so catastrophic cancellation in squares/N - mean*mean could distort the denominator; the contract requires relative L2 error <= 0.02 against the float64 reference for the fixed make_inputs() vector.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
+            "summary": "Reference is mean/variance of the original float32 values evaluated in float64; relative L2 error ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(128)) must be <= 0.02 for the fixed (128,) make_inputs() workload."
           }
         ],
-        "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
-        "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference."
+        "scope_rationale": "The contract requires relative L2 error <= 0.02 on the fixed (128,) float32 input from make_inputs(); any excess error on that exact workload violates the contract.",
+        "statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement."
       },
-      "created_at": "2026-09-24T00:57:53Z",
+      "created_at": "2026-09-24T00:09:26Z",
       "id": "t6",
       "output": {
-        "created_at": "2026-09-24T00:57:53Z",
+        "created_at": "2026-09-24T00:09:26Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "solo",
-        "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
+        "rationale": "The kernel accumulates sum and sum-of-squares in float32 on values around 64 (E[x^2]\u22484096, variance\u22480.016), so catastrophic cancellation in squares/N - mean*mean could distort the denominator; the contract requires relative L2 error <= 0.02 against the float64 reference for the fixed make_inputs() vector.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
+            "summary": "Reference is mean/variance of the original float32 values evaluated in float64; relative L2 error ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(128)) must be <= 0.02 for the fixed (128,) make_inputs() workload."
           }
         ],
-        "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
-        "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.",
+        "scope_rationale": "The contract requires relative L2 error <= 0.02 on the fixed (128,) float32 input from make_inputs(); any excess error on that exact workload violates the contract.",
+        "statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement.",
         "status": "open",
-        "updated_at": "2026-09-24T00:57:53Z"
+        "updated_at": "2026-09-24T00:09:26Z"
       },
       "status": "ok",
       "tool": "record_claim"
@@ -450,10 +452,9 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "\nimport numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nfrom kernel import run, make_inputs\n\nu, b = make_inputs()\nout = run(u, b)\n\n# float64 reference (recentring to avoid cancellation in the reference itself)\nu64 = u.cpu().numpy().astype(np.float64)\nb64 = b.cpu().numpy().astype(np.float64)\n# reference: b = 1.125u + eps stored in fp32; compute alpha exactly from stored values\nalpha = (u64*b64).sum() / (u64*u64).sum()\nres = b64 - alpha*u64\n# alternative recentred: use dot of (b - mean-shift) \u2014 but straightforward fp64 is fine here\nref = res / np.linalg.norm(res)\n\no = out.cpu().numpy().astype(np.float64)\nrel = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"relative_l2\": float(rel),\n  \"tolerance\": 0.01,\n  \"passes\": bool(rel <= 0.01),\n  \"finite\": bool(np.all(np.isfinite(o))),\n  \"shape\": list(o.shape),\n  \"norm_res\": float(np.linalg.norm(res)),\n  \"norm_b\": float(np.linalg.norm(b64)),\n  \"max_abs_err\": float(np.abs(o-ref).max()),\n}))\n",
-        "use_gpu": true
+        "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as k\n\n(x,) = k.make_inputs(\"cuda\")\nout = k.run(x)\nx64 = x.cpu().numpy().astype(np.float64)\nmean = x64.sum() / 128\nvar = ((x64 - mean) ** 2).sum() / 128\nref = (x64 - mean) / np.sqrt(var + 1e-5)\no = out.detach().cpu().numpy().astype(np.float64)\nerr = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 reference\",\n    \"error\": float(err),\n    \"threshold\": 0.02,\n    \"finite\": bool(np.isfinite(o).all()),\n    \"shape\": list(o.shape),\n    \"max_abs_diff\": float(np.abs(o - ref).max()),\n    \"denominator_kernelish\": float(np.sqrt(max(var, 0) + 1e-5)),\n}))\n"
       },
-      "created_at": "2026-09-24T00:58:07Z",
+      "created_at": "2026-09-24T00:09:36Z",
       "id": "t7",
       "output": {
         "artifacts": [
@@ -461,13 +462,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t7_probe.py",
-            "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
+            "sha256": "96cc2fe4a12a48772db18c2fd575ddb89359917ef973508717b529ea9fec49be"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t7_stdout.txt",
-            "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
+            "sha256": "a30d5c7689a61824e69439d623f69dc0aa1d5db70294391c2fd8162695519add"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -479,13 +480,13 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t7_json_result.json",
-            "sha256": "f48263b45eec67bb3a2d646e393f7ee1468faa276f13ed77928db853079febdc"
+            "sha256": "f15eac82d242068de6153055f4d487e873a3ebc857c00cc6f2e753dc28a9bf81"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.",
-        "cwd": "/root/numerical_cases/case_o",
-        "duration_s": 7.878197,
+        "claim_statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement.",
+        "cwd": "/root/numerical_cases/case_i",
+        "duration_s": 6.415957,
         "event_id": "t7",
         "evidence_draft": {
           "claim_id": "c1",
@@ -495,13 +496,13 @@
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
+                "sha256": "96cc2fe4a12a48772db18c2fd575ddb89359917ef973508717b529ea9fec49be"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
+                "sha256": "a30d5c7689a61824e69439d623f69dc0aa1d5db70294391c2fd8162695519add"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -513,27 +514,26 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "f48263b45eec67bb3a2d646e393f7ee1468faa276f13ed77928db853079febdc"
+                "sha256": "f15eac82d242068de6153055f4d487e873a3ebc857c00cc6f2e753dc28a9bf81"
               }
             ],
-            "duration_s": 7.878197,
+            "duration_s": 6.415957,
             "exit_code": 0,
             "expected_signal": null,
             "json_parse_error": null,
             "json_result": {
+              "denominator_kernelish": 0.12790424781228815,
+              "error": 0.00024261613799325,
               "finite": true,
-              "max_abs_err": 0.0005855331971066635,
-              "norm_b": 4.335016031142284,
-              "norm_res": 6.621097760007478e-05,
-              "passes": true,
-              "relative_l2": 0.0015436494833812023,
+              "max_abs_diff": 0.0007283590858730982,
+              "metric": "relative L2 error vs float64 reference",
               "shape": [
-                32
+                128
               ],
-              "tolerance": 0.01
+              "threshold": 0.02
             },
             "stderr": "",
-            "stdout": "{\"relative_l2\": 0.0015436494833812023, \"tolerance\": 0.01, \"passes\": true, \"finite\": true, \"shape\": [32], \"norm_res\": 6.621097760007478e-05, \"norm_b\": 4.335016031142284, \"max_abs_err\": 0.0005855331971066635}\n",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"error\": 0.00024261613799325, \"threshold\": 0.02, \"finite\": true, \"shape\": [128], \"max_abs_diff\": 0.0007283590858730982, \"denominator_kernelish\": 0.12790424781228815}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -546,16 +546,15 @@
         "expected_signal": null,
         "json_parse_error": null,
         "json_result": {
+          "denominator_kernelish": 0.12790424781228815,
+          "error": 0.00024261613799325,
           "finite": true,
-          "max_abs_err": 0.0005855331971066635,
-          "norm_b": 4.335016031142284,
-          "norm_res": 6.621097760007478e-05,
-          "passes": true,
-          "relative_l2": 0.0015436494833812023,
+          "max_abs_diff": 0.0007283590858730982,
+          "metric": "relative L2 error vs float64 reference",
           "shape": [
-            32
+            128
           ],
-          "tolerance": 0.01
+          "threshold": 0.02
         },
         "sandbox": {
           "cpu_limit_s": 90,
@@ -565,7 +564,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "{\"relative_l2\": 0.0015436494833812023, \"tolerance\": 0.01, \"passes\": true, \"finite\": true, \"shape\": [32], \"norm_res\": 6.621097760007478e-05, \"norm_b\": 4.335016031142284, \"max_abs_err\": 0.0005855331971066635}\n",
+        "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"error\": 0.00024261613799325, \"threshold\": 0.02, \"finite\": true, \"shape\": [128], \"max_abs_diff\": 0.0007283590858730982, \"denominator_kernelish\": 0.12790424781228815}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -576,39 +575,41 @@
     {
       "args": {
         "data": {
-          "max_abs_err": 0.0005855331971066635,
-          "norm_res": 6.621097760007478e-05,
-          "passes": true,
-          "relative_l2": 0.0015436494833812023,
-          "tolerance": 0.01
+          "error": 0.00024261613799325,
+          "finite": true,
+          "max_abs_diff": 0.0007283590858730982,
+          "shape": [
+            128
+          ],
+          "threshold": 0.02
         },
         "event_id": "t7",
         "status": "rebutted",
-        "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
+        "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.00024 vs float64 reference, well under the 0.02 threshold; output is finite with shape (128,). The suspected float32 cancellation does not violate the contract.",
         "supports": "rebutted"
       },
-      "created_at": "2026-09-24T00:58:11Z",
+      "created_at": "2026-09-24T00:09:41Z",
       "id": "t8",
       "output": {
         "claim": {
-          "created_at": "2026-09-24T00:57:53Z",
+          "created_at": "2026-09-24T00:09:26Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-24T00:58:11Z",
+              "created_at": "2026-09-24T00:09:41Z",
               "data": {
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
                     "path": "probes/t7_probe.py",
-                    "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
+                    "sha256": "96cc2fe4a12a48772db18c2fd575ddb89359917ef973508717b529ea9fec49be"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t7_stdout.txt",
-                    "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
+                    "sha256": "a30d5c7689a61824e69439d623f69dc0aa1d5db70294391c2fd8162695519add"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -620,73 +621,74 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t7_json_result.json",
-                    "sha256": "f48263b45eec67bb3a2d646e393f7ee1468faa276f13ed77928db853079febdc"
+                    "sha256": "f15eac82d242068de6153055f4d487e873a3ebc857c00cc6f2e753dc28a9bf81"
                   }
                 ],
-                "duration_s": 7.878197,
+                "duration_s": 6.415957,
+                "error": 0.00024261613799325,
                 "exit_code": 0,
                 "expected_signal": null,
+                "finite": true,
                 "json_parse_error": null,
                 "json_result": {
+                  "denominator_kernelish": 0.12790424781228815,
+                  "error": 0.00024261613799325,
                   "finite": true,
-                  "max_abs_err": 0.0005855331971066635,
-                  "norm_b": 4.335016031142284,
-                  "norm_res": 6.621097760007478e-05,
-                  "passes": true,
-                  "relative_l2": 0.0015436494833812023,
+                  "max_abs_diff": 0.0007283590858730982,
+                  "metric": "relative L2 error vs float64 reference",
                   "shape": [
-                    32
+                    128
                   ],
-                  "tolerance": 0.01
+                  "threshold": 0.02
                 },
-                "max_abs_err": 0.0005855331971066635,
-                "norm_res": 6.621097760007478e-05,
-                "passes": true,
-                "relative_l2": 0.0015436494833812023,
+                "max_abs_diff": 0.0007283590858730982,
+                "shape": [
+                  128
+                ],
                 "stderr": "",
-                "stdout": "{\"relative_l2\": 0.0015436494833812023, \"tolerance\": 0.01, \"passes\": true, \"finite\": true, \"shape\": [32], \"norm_res\": 6.621097760007478e-05, \"norm_b\": 4.335016031142284, \"max_abs_err\": 0.0005855331971066635}\n",
+                "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"error\": 0.00024261613799325, \"threshold\": 0.02, \"finite\": true, \"shape\": [128], \"max_abs_diff\": 0.0007283590858730982, \"denominator_kernelish\": 0.12790424781228815}\n",
+                "threshold": 0.02,
                 "timed_out": false,
-                "timeout_s": 60,
-                "tolerance": 0.01
+                "timeout_s": 60
               },
               "id": "c1.e1",
               "kind": "runtime_probe",
-              "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
+              "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.00024 vs float64 reference, well under the 0.02 threshold; output is finite with shape (128,). The suspected float32 cancellation does not violate the contract.",
               "supports": "rebutted",
               "tool_event_id": "t7"
             }
           ],
           "id": "c1",
           "raised_by": "solo",
-          "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
+          "rationale": "The kernel accumulates sum and sum-of-squares in float32 on values around 64 (E[x^2]\u22484096, variance\u22480.016), so catastrophic cancellation in squares/N - mean*mean could distort the denominator; the contract requires relative L2 error <= 0.02 against the float64 reference for the fixed make_inputs() vector.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
+              "summary": "Reference is mean/variance of the original float32 values evaluated in float64; relative L2 error ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(128)) must be <= 0.02 for the fixed (128,) make_inputs() workload."
             }
           ],
-          "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
-          "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.",
+          "scope_rationale": "The contract requires relative L2 error <= 0.02 on the fixed (128,) float32 input from make_inputs(); any excess error on that exact workload violates the contract.",
+          "statement": "The kernel's output on the fixed make_inputs() workload violates the contract's relative L2 error <= 0.02 requirement.",
           "status": "rebutted",
-          "updated_at": "2026-09-24T00:58:11Z"
+          "updated_at": "2026-09-24T00:09:41Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-24T00:58:11Z",
+          "created_at": "2026-09-24T00:09:41Z",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
+                "sha256": "96cc2fe4a12a48772db18c2fd575ddb89359917ef973508717b529ea9fec49be"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
+                "sha256": "a30d5c7689a61824e69439d623f69dc0aa1d5db70294391c2fd8162695519add"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -698,38 +700,39 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "f48263b45eec67bb3a2d646e393f7ee1468faa276f13ed77928db853079febdc"
+                "sha256": "f15eac82d242068de6153055f4d487e873a3ebc857c00cc6f2e753dc28a9bf81"
               }
             ],
-            "duration_s": 7.878197,
+            "duration_s": 6.415957,
+            "error": 0.00024261613799325,
             "exit_code": 0,
             "expected_signal": null,
+            "finite": true,
             "json_parse_error": null,
             "json_result": {
+              "denominator_kernelish": 0.12790424781228815,
+              "error": 0.00024261613799325,
               "finite": true,
-              "max_abs_err": 0.0005855331971066635,
-              "norm_b": 4.335016031142284,
-              "norm_res": 6.621097760007478e-05,
-              "passes": true,
-              "relative_l2": 0.0015436494833812023,
+              "max_abs_diff": 0.0007283590858730982,
+              "metric": "relative L2 error vs float64 reference",
               "shape": [
-                32
+                128
               ],
-              "tolerance": 0.01
+              "threshold": 0.02
             },
-            "max_abs_err": 0.0005855331971066635,
-            "norm_res": 6.621097760007478e-05,
-            "passes": true,
-            "relative_l2": 0.0015436494833812023,
+            "max_abs_diff": 0.0007283590858730982,
+            "shape": [
+              128
+            ],
             "stderr": "",
-            "stdout": "{\"relative_l2\": 0.0015436494833812023, \"tolerance\": 0.01, \"passes\": true, \"finite\": true, \"shape\": [32], \"norm_res\": 6.621097760007478e-05, \"norm_b\": 4.335016031142284, \"max_abs_err\": 0.0005855331971066635}\n",
+            "stdout": "{\"metric\": \"relative L2 error vs float64 reference\", \"error\": 0.00024261613799325, \"threshold\": 0.02, \"finite\": true, \"shape\": [128], \"max_abs_diff\": 0.0007283590858730982, \"denominator_kernelish\": 0.12790424781228815}\n",
+            "threshold": 0.02,
             "timed_out": false,
-            "timeout_s": 60,
-            "tolerance": 0.01
+            "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
+          "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.00024 vs float64 reference, well under the 0.02 threshold; output is finite with shape (128,). The suspected float32 cancellation does not violate the contract.",
           "supports": "rebutted",
           "tool_event_id": "t7"
         }
@@ -739,22 +742,22 @@
     },
     {
       "args": {
-        "confidence": 0.95,
+        "confidence": 0.98,
         "decisive_claims": [
           "c1"
         ],
-        "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
+        "reason": "Ran the kernel on the exact fixed workload from make_inputs() (probe t7) and compared to the contract's float64 reference. Relative L2 error = 0.0002426 (threshold 0.02), max abs diff 0.000728, output finite with shape (128,), population variance formula and eps=1e-5 match the contract. The hypothesized float32 cancellation failure was rebutted; no other input is in scope per problem.txt.",
         "verdict": "trust"
       },
-      "created_at": "2026-09-24T00:58:14Z",
+      "created_at": "2026-09-24T00:09:48Z",
       "id": "t9",
       "output": {
-        "confidence": 0.95,
-        "created_at": "2026-09-24T00:58:14Z",
+        "confidence": 0.98,
+        "created_at": "2026-09-24T00:09:48Z",
         "decisive_claims": [
           "c1"
         ],
-        "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
+        "reason": "Ran the kernel on the exact fixed workload from make_inputs() (probe t7) and compared to the contract's float64 reference. Relative L2 error = 0.0002426 (threshold 0.02), max abs diff 0.000728, output finite with shape (128,), population variance formula and eps=1e-5 match the contract. The hypothesized float32 cancellation failure was rebutted; no other input is in scope per problem.txt.",
         "verdict": "trust"
       },
       "status": "ok",
@@ -762,12 +765,12 @@
     }
   ],
   "verdict": {
-    "confidence": 0.95,
-    "created_at": "2026-09-24T00:58:14Z",
+    "confidence": 0.98,
+    "created_at": "2026-09-24T00:09:48Z",
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
+    "reason": "Ran the kernel on the exact fixed workload from make_inputs() (probe t7) and compared to the contract's float64 reference. Relative L2 error = 0.0002426 (threshold 0.02), max abs diff 0.000728, output finite with shape (128,), population variance formula and eps=1e-5 match the contract. The hypothesized float32 cancellation failure was rebutted; no other input is in scope per problem.txt.",
     "verdict": "trust"
   }
 }

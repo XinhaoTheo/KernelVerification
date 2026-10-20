@@ -67,7 +67,7 @@ def test_private_validation_takes_precedence_over_stale_legacy_copy(tmp_path, da
     assert checked_case_hashes(tmp_path, dataset_name, "case_38") == hashes
 
 
-@pytest.mark.parametrize("existing_case", ["case_93", "case_94"])
+@pytest.mark.parametrize("existing_case", ["case_99", "case_100"])
 def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monkeypatch, existing_case):
     from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.correlation_pair import build
     dataset = tmp_path / "benchmark_fn_fp/single_call_vs_tools_challenges"
@@ -145,6 +145,36 @@ def test_compacted_source_checks_use_frozen_id_and_never_numeric_coincidence(tmp
     write(frozen, {"cases": {"case_36": {"ground_truth": "trust", **hashes}}})
     with pytest.raises(ValueError, match="No GPU validation"):
         checked_case_hashes(tmp_path, "real_kernel_challenges", "case_36")
+
+
+def test_archived_author_keys_resolve_current_paths_without_rewriting_evidence(tmp_path):
+    from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.archive_paths import (
+        canonical_case_rows, frozen_case_id, frozen_case_rows,
+    )
+
+    benchmark = tmp_path / "benchmark_fn_fp"
+    collection = benchmark / "archive/input_specific/single_call_vs_tools_challenges"
+    write(benchmark / "case_map.json", {"case_details": {
+        "case_99": {"dataset": "correlation_pair", "validation_case_id": "case_36"},
+        "case_100": {"dataset": "correlation_pair", "validation_case_id": "case_37"},
+        "case_36": {"dataset": "real_kernel_challenges", "validation_case_id": "case_109"},
+    }})
+    key = collection / "private_data/correlation_pair/answer_key_cpu.json"
+    frozen = {"case_36": {"cpu_ground_truth": "reject"},
+              "case_37": {"cpu_ground_truth": "trust"}}
+    write(key, {"cases": frozen})
+    before = key.read_bytes()
+
+    current = canonical_case_rows(collection, "correlation_pair",
+                                  json.loads(before)["cases"])
+    assert current == {"case_99": frozen["case_36"], "case_100": frozen["case_37"]}
+    assert frozen_case_id(collection, "correlation_pair", "case_99") == "case_36"
+    assert frozen_case_rows(collection, "correlation_pair", current) == frozen
+    assert key.read_bytes() == before
+    with pytest.raises(ValueError, match="Unresolved or ambiguous"):
+        canonical_case_rows(collection, "correlation_pair", {"case_missing": {}})
+    with pytest.raises(ValueError, match="dataset mismatch"):
+        frozen_case_id(collection, "correlation_pair", "case_36")
 
 
 def test_compacted_scoreboard_uses_dataset_scoped_frozen_labels(tmp_path):

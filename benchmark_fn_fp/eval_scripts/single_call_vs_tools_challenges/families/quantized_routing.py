@@ -13,7 +13,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_109", "case_110")
+CASES = ("case_115", "case_116")
 TOLERANCE = 0.1
 N, D, E = 16, 32, 8
 SEARCH_SEEDS = tuple(range(840100, 840356))
@@ -177,8 +177,8 @@ def build(output_root):
     root = archived_collection(output_root)
     candidates = [_candidate(seed) for seed in SEARCH_SEEDS]
     eligible = [row for row in candidates if row["reference_top2_gap"] > 1e-5 and row["quantized_top2_gap"] >= 0.015625]
-    selected = {"case_109": next(row for row in eligible if row["error"] <= 0.75 * TOLERANCE),
-                "case_110": next(row for row in eligible if row["error"] >= 1.25 * TOLERANCE)}
+    selected = {"case_115": next(row for row in eligible if row["error"] <= 0.75 * TOLERANCE),
+                "case_116": next(row for row in eligible if row["error"] >= 1.25 * TOLERANCE)}
     answer = {"family": "quantized_routing", "budget": TOLERANCE, "cases": {}}
     for case, row in selected.items():
         inputs = _inputs(row["seed"])

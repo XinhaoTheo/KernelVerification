@@ -1,4 +1,4 @@
-"""Independent mathematical log1p qualification for case_165 and case_166."""
+"""Independent mathematical log1p qualification for case_93 and case_94."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -15,7 +15,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_165": "trust", "case_166": "reject"}
+EXPECTED = {"case_93": "trust", "case_94": "reject"}
 ATOL = 1e-6
 REFERENCE_BUDGET = 1e-10
 

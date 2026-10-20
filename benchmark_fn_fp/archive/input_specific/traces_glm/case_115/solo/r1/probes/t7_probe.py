@@ -1,19 +1,17 @@
-
-import sys, json
-sys.path.insert(0, "/root/numerical_cases/case_w")
-import numpy as np, torch
-import kernel
-
-(matrix,) = kernel.make_inputs(device="cuda")
-out = kernel.run(matrix)
-torch.cuda.synchronize()
-
-ref = np.linalg.slogdet(matrix.cpu().numpy().astype(np.float64))[1]
-o = float(out.cpu().numpy()[0])
-err = abs(o - ref) / max(abs(ref), 1.0)
-print(json.dumps({
-    "metric": "relative error vs float64 slogdet on fixed workload",
-    "output": o, "reference": ref, "rel_err": err,
-    "finite": bool(np.isfinite(o)), "dtype": str(out.dtype), "shape": list(out.shape),
-    "tol": 1e-4, "pass": bool(err <= 1e-4 and np.isfinite(o)),
-}))
+import numpy as np, torch, importlib.util
+spec = importlib.util.spec_from_file_location("kernel", "/root/numerical_cases/case_q/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+q, c, e = k.make_inputs("cuda")
+out = k.run(q, c, e)
+d = ((c.double() - q.double())**2).sum(dim=1)
+ref_idx = int(np.argmin(d.cpu().numpy()))  # argmin picks smallest index on ties
+ref = e[ref_idx]
+rel = (out - ref).norm().item() / max(ref.norm().item(), 1e-12)
+# kernel's winner for diagnosis
+qd = np.floor(q.double().cpu().numpy()*8+0.5)/8
+cd = np.floor(c.double().cpu().numpy()*8+0.5)/8
+kd = ((cd - qd)**2).sum(1)
+kidx = int(np.argmin(kd))
+print({"rel_err": rel, "ref_idx": ref_idx, "kernel_idx": kidx,
+       "true_d": d.cpu().numpy().tolist(), "quant_d": kd.tolist(),
+       "output": out.cpu().numpy().tolist(), "ref": ref.cpu().numpy().tolist()})

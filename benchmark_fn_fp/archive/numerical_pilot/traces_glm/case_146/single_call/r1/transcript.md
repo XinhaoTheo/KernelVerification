@@ -61,7 +61,7 @@ def run(a, b):
     _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'recurrence', 'seed': 451, 't': 512, 'd': 32, 'decay': 0.999, 'noise': 0.001, 'bias': 0.01}
+CONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 1.0, 'noise': 0.001, 'bias': 0.01}
 
 def make_inputs(device="cuda"):
     import numpy as np
@@ -108,20 +108,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-h stored in fp16 each step. Decay 0.999 — fp16 can represent 0.999? 0.999 in fp16 rounds to 0.99902... relative error ~1e-3 per step. With decay^t amplification: error grows like t*eps*... After 512 steps, h ≈ bias accumulation. a=0.999 fp16 ≈ 0.99902, error per step ~1e-3*h. Over 512 steps relative error ~ 512*1e-3? Actually relative error of decay: (0.99902-0.999)/0.999 ≈ 1e-3... wait fp16 has ~1e-3 relative precision. So a in fp16 has rel error up to 4.9e-4. Product of decays: error ~ t*4.9e-4? h ~ geometric series with sum ~1/(1-a) ~ 1000*b. Decay error changes effective decay: 0.999023 vs 0.999 → sum factor 1/(1-0.999023)=1024 vs 1000. So h differs by ~2.4% relative! That exceeds 0.003 budget. Also h stored in fp16: h ~ magnitude b/(1-a) ~ 0.01*1000=10 (b noise 0.001, bias 0.01). h ≈ 10. fp16 quantization of h each step: rel error 5e-4 each step, accumulate randomly... error ~ sqrt(t)*5e-4*10 ~ 0.11 vs ||h|| ~ sqrt(t*d)*10 ≈ 10*sqrt(512*32)=1278. E ≈ sqrt(512*32)*0.11/1278 ≈ ... per-element error ~0.11, norm ref ~10*128=1278. E ~ 0.11*128/1278=0.011 > 0.003. Plus decay drift: per-element drift 2.4% of 10 = 0.24, E ~ 0.024. Reject.
-
-Wait, but is 0.999 representable? fp16 nearest to 0.999: spacing at ~1 is 2^-10≈0.000977. 0.999/0.000977... nearest values 0.99902 and 0.99805. 0.999 rounds to 0.99902. So a*h uses a from fp32? a loaded as fp32, h fp16-rounded. h quantization: rel err 2^-11 each step. System: h_t = a h_{t-1} + b, then round. Errors accumulate: e_t = a e_{t-1} + rounding(5e-4*h_t). Since a<1, steady error ~5e-4*h/(1-a) = 5e-4*10/0.001*? Wait h steady ~ b/(1-a)=0.01/0.001=10. error steady ~ 5e-4*10/(0.001)? No: e_{t} = a e_{t-1} + q_t, steady e ≈ q/(1-a) = 5e-4*10/0.001 = 5. That's huge! Wait q_t = 5e-4*h_t = 5e-3. e = 5e-3/0.001 = 5. Relative 50%? No—rounding errors are random sign, so e ~ q*sqrt(1/(1-a^2)) ≈ 5e-3*sqrt(500)≈0.11. Still relative 1% of h≈10. E ≈ 0.01 > 0.003. Reject.
+h truncates to fp16 each step: relative error ~2^-11 per step, accumulated ~640 steps but decay=1, values grow ~h ≈ sum of b's with random walk plus bias. fp16 rounding error per step ~ h*2^-11, accumulated over 640 steps could be ~640*0.0005*h... Actually errors accumulate like recurrence too: error_t = a*error_{t-1} + rounding_t. Rounding per step relative to h magnitude. Final h magnitude: bias 0.01 accumulated ~640*0.01=6.4 plus noise random walk ~0.001*sqrt(640)=0.025. So h ~ up to ~6.4 but varies per channel? b same across... no, b is (t,d) independent per channel. Each channel accumulates bias 6.4. Error: rounding error per step ~ h*2^-11 ~ 6*5e-4 = 3e-3 per step at late steps, accumulated with decay 1 over 640 steps: error grows roughly linearly? error_t = error_{t-1} + 3e-3 → total ~ 640*... no, error_{t-1} grows too. Actually total error ~ sum over t of eps*h_t ≈ eps * T*(T*0.01)/2 ≈ 5e-4 * 640*3.2 ≈ 1.0. h magnitude ~6.4. Relative error ~1/6.4 ≈ 0.15 >> 0.003. Also fp16 max 65504, fine. So budget violated → reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.8, "reason": "The kernel rounds h to float16 at every step of a slowly decaying (0.999, T=512) recurrence, where the steady-state h ≈ b/(1-a) ≈ 10. Per-step fp16 quantization error (~5e-4 * h ≈ 5e-3) accumulates with effective gain ~1/sqrt(1-a^2) ≈ 22, giving per-element error ~0.1, i.e. relative error ~1%, well above the 0.003 budget."}
+{"verdict": "reject", "confidence": 0.85, "reason": "The kernel rounds h to fp16 after every step; with decay=1.0 over 640 steps, per-step fp16 rounding errors (~h·2^-11) accumulate in the recurrence to a relative error far above the 0.003 budget (final h ≈ 6.4 from accumulated bias, with accumulated rounding error on the order of eps·T²·bias/2 ≈ 1, i.e. ~15% relative error)."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.8,
-  "reason": "The kernel rounds h to float16 at every step of a slowly decaying (0.999, T=512) recurrence, where the steady-state h ≈ b/(1-a) ≈ 10. Per-step fp16 quantization error (~5e-4 * h ≈ 5e-3) accumulates with effective gain ~1/sqrt(1-a^2) ≈ 22, giving per-element error ~0.1, i.e. relative error ~1%, well above the 0.003 budget."
+  "confidence": 0.85,
+  "reason": "The kernel rounds h to fp16 after every step; with decay=1.0 over 640 steps, per-step fp16 rounding errors (~h·2^-11) accumulate in the recurrence to a relative error far above the 0.003 budget (final h ≈ 6.4 from accumulated bias, with accumulated rounding error on the order of eps·T²·bias/2 ≈ 1, i.e. ~15% relative error)."
 }
 
 ## Usage and stop reason
@@ -131,22 +129,22 @@ Wait, but is 0.999 representable? fp16 nearest to 0.999: spacing at ~1 is 2^-10�
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.8,
-    "reason": "The kernel rounds h to float16 at every step of a slowly decaying (0.999, T=512) recurrence, where the steady-state h ≈ b/(1-a) ≈ 10. Per-step fp16 quantization error (~5e-4 * h ≈ 5e-3) accumulates with effective gain ~1/sqrt(1-a^2) ≈ 22, giving per-element error ~0.1, i.e. relative error ~1%, well above the 0.003 budget."
+    "confidence": 0.85,
+    "reason": "The kernel rounds h to fp16 after every step; with decay=1.0 over 640 steps, per-step fp16 rounding errors (~h·2^-11) accumulate in the recurrence to a relative error far above the 0.003 budget (final h ≈ 6.4 from accumulated bias, with accumulated rounding error on the order of eps·T²·bias/2 ≈ 1, i.e. ~15% relative error)."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1291,
-    "output_tokens": 958
+    "input_tokens": 1292,
+    "output_tokens": 478
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 16.91656025010161,
-  "kernel_sha256": "572b831cf7676a469f35c4d40e889d7ced753e58875ebb17e7ca70f0fec422c3",
+  "elapsed_s": 11.125227625016123,
+  "kernel_sha256": "84aef7790f2c0fe66b8ff98084e4518818a39ebff10f23030b4db5bb317483ec",
   "problem_sha256": "22ce93754852e56cfecc79c77ac4de457f77a2f12fe87278b91b48e3475e10eb",
   "prompt_variant": "original",
-  "estimated_usd": 0.0060226,
+  "estimated_usd": 0.003912,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

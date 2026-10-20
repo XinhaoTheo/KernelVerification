@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e09`
+- Entry: `case_e03`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 36.4s across 5 calls | tokens: in=65614 out=2415 total=68029
+- LLM time: 45.847s across 5 calls | tokens: in=64261 out=2675 total=66936
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.97
+- Confidence: 1.0
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e09"
+    "entry": "case_e03"
   }
   Output summary:
   {
-    "entry": "case_e09"
+    "entry": "case_e03"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e09"
+    "entry": "case_e03"
   }
   Output summary:
   {
-    "entry": "case_e09"
+    "entry": "case_e03"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e09"
+    "entry": "case_e03"
   }
   Output summary:
   {
-    "entry": "case_e09"
+    "entry": "case_e03"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e09",
+    "entry": "case_e03",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e09"
+    "entry": "case_e03"
   }
 
-### Turn 2 - `solo` (11.170074167000024s, in=9349 out=736)
+### Turn 2 - `solo` (24.687805751s, in=10154 out=1514)
 
 Message:
 
 ```text
-The kernel looks mathematically correct per step, but `step()` returns `weights.view(N)` — an alias of the mutable state. Since the contract's caller observes retained tensors only after all six updates, H will contain w[6] in every row, not w[1..6]. I'll record this hypothesis and test it.
+The kernel's `_append` indexes Delta by `Order[row]` (physical index) rather than by logical row, which could violate the contract's "Delta always addresses CURRENT LOGICAL rows" for words with an odd number of reorders before an append. The exhaustive 121-word probe is the decisive test. I'll record that claim and run it.
 ```
 
 Tool calls:
@@ -73,25 +73,28 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "step() returns weights.view(N), which aliases the in-place mutated state. The contract requires H (values of the six returned tensors observed after the full sequence) to equal w[1..6]; aliased views would all hold w[6], a large history error, even though initial_probe passed because its reference also aliased.",
+    "rationale": "_append loads Delta from source = Order[row] (the physical index of logical row r) instead of Delta[r], so whenever the order map is non-identity at append time the wrong Delta row is added; the smoke words may accidentally avoid exposing this, so all 121 words must be tested.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]. Acceptance requires: ||H-H_target||_F / max(...) <= 0.025\" and \"Storage aliasing itself is neither forbidden nor a failure: only the stated numeric
-  ...[truncated 296 chars]
+        "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences ... Delta always addresses CURRENT LOGICAL rows ... max(abs(output - mathematical_reference)) <= 0.00001."
+      }
+    ],
+    "statement": "There exists at least one word among the 121 in-scope operation sequences (length 0-4 over {0,1,2}) for which run_sequence output differs from the mathematical reference by more th
+  ...[truncated 11 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (4.677417800000001s, in=10177 out=347)
+### Turn 3 - `solo` (3.6199935940000003s, in=10882 out=270)
 
 Message:
 
 ```text
-Re-send record_claim with scope_rationale.
+I'll re-record the claim with scope_rationale, then run the exhaustive 121-word probe.
 ```
 
 Tool calls:
@@ -99,33 +102,39 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "step() returns weights.view(N), which aliases the in-place mutated state. The contract requires H (values of the six returned tensors observed after the full sequence) to equal w[1..6]; aliased views would all hold w[6], a large history error, even though initial_probe passed because its reference aliased identically.",
+    "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]. Acceptance requires: ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025\" and \"Storage aliasing itself is neither forbidden nor a failure: 
-  ...[truncated 687 chars]
+        "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+      }
+    ],
+    "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+    "statement": "There 
+  ...[truncated 159 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "step() returns weights.view(N), which aliases the in-place mutated state. The contract requires H (values of the six returned tensors observed after the full sequence) to equal w[1..6]; aliased views would all hold w[6], a large history error, even though initial_probe passed because its reference aliased identically.",
+    "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]. Acceptance requires: ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025\" and \"Storage aliasing itself is neither forbidden nor a failure: only the stated numerical values at the stated observation time ... determine acceptance.\""
+        "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
       }
     ],
-    "scope_rationale": "The contract requires H \u2014 the values of the six retained returned tensors, observed only after the full six-step sequence \u2014 to equal w[1..6] within the 0.025 Frobenius-relative tolerance. If the returned tensors alias the mutated weights storage, eac
-  ...[truncated 321 chars]
+    "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+    "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+    "status": "open"
+  }
 
-### Turn 4 - `solo` (8.102070747999988s, in=11835 out=664)
+### Turn 4 - `solo` (5.771595364999996s, in=12107 out=352)
 
 Message:
 
 ```text
-I'll run a probe testing the aliasing hypothesis against the contract's acceptance criteria, including an independent float64 reference.
+I'll run the exhaustive 121-word probe against the mathematical reference.
 ```
 
 Tool calls:
@@ -134,8 +143,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import json, torch, numpy as np, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e09\")\nimport kernel\n\ndev = \"cuda\"\nw, v, G = kernel.make_inputs(dev)\nw0 = w.double().cpu().numpy().copy(); v0 = v.double().cpu().numpy().copy()\nGd = G.double().cpu().numpy().copy(); G_bytes = G.cpu().numpy().tobytes()\nG_backup = G.clone()\n\n# reference in float64\nref_w = w0.copy(); ref_v = v0.copy()\nref_hist = []\nfor t in range(6):\n    ref_v = 0.75*ref_v + 0.25*Gd[t]\n    ref_w = ref_w - 0.03125*ref_v\n    ref_hist.append(ref_w.copy())\nH_target = np.stack(ref_hist)\nw6, v6 = ref_w, ref_v\n\nhist = kernel.run_sequence(w, v, G)   # retained, observed after\nH = torch.stack(hist).double().cpu().numpy()\nfw = w.double().cpu().numpy(); fv = v.double().cpu().numpy(
-  ...[truncated 1166 chars]
+    "code": "import itertools, sys, json\nsys.path.insert(0, \"/root/evidence_cases/case_e03\")\nimport numpy as np, torch\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs(\"cuda\")\nC, Delta, P = cpu[0].astype(np.float64), cpu[1].astype(np.float64), cpu[2]\n\nwords = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]\nassert len(words) == 121\nfails = []\nmaxerr = 0.0\nfor w in words:\n    ref = C.copy()\n    for op in w:\n        if op < 2: ref = ref[P[op]].copy()\n        else: ref = ref + Delta\n    out = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(out.astype(np.float64) - ref)))\n    ok = out.shape == (8,32) and out.dtype == np.float32 and np.isfinite(out).all() and err <= 1e-5\n    ma
+  ...[truncated 340 chars]
   Output summary:
   {
     "artifacts": [
@@ -143,13 +152,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "7c20fe82139be8ddd55299072c475903202db7fbf9b14ae8f0e455c8139975e0"
+        "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "f38a05d617c61b452ebafa1e6e52e42dcf263518081ca59f87ef6a8b447de009"
+        "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -161,20 +170,22 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t7_json_result.json",
-        "sha256": "8fc51a411e22faace524e551e3012905c3122ed94a4d76632e2cff74dc881829"
+        "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The history tensors returned by run_sequence alias the weights storage, so at final observation time every retained history row equals w[6] and H fails the 0.025 history tolerance against w[1..6].",
-    "duration_s"
-  ...[truncated 4489 chars]
+    "claim_statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+    "duration_s": 5.392899,
+    "event_id": "t7",
+    
+  ...[truncated 2193 chars]
 
-### Turn 5 - `solo` (6.574158552s, in=15194 out=322)
+### Turn 5 - `solo` (6.159952552000007s, in=14187 out=279)
 
 Message:
 
 ```text
-The probe shows the aliasing exists (all rows equal final weights, data_ptr matches) but the resulting history error 0.00574 is well within the 0.025 tolerance — this input's gradients barely move the weights. The acceptance criterion is the stated tolerance, not exact w[1..6], so the contract passes on the fixed workload. I'll record this evidence and finalize.
+The exhaustive probe ran cleanly: all 121 in-scope words passed with zero error, so the suspected Delta-indexing defect did not materialize (the reorder composition makes the physical indexing consistent). I'll finalize the evidence, mark c1 rebutted, and record a trust verdict.
 ```
 
 Tool calls:
@@ -183,13 +194,14 @@ Tool calls:
   Args:
   {
     "data": {
-      "alias": true,
-      "history_relative_error": 0.005744695547110313,
-      "history_rows_equal_final_weights": true,
-      "tolerance": 0.025
+      "first_failures": [],
+      "max_abs_error_over_all": 0.0,
+      "num_failures": 0,
+      "num_words": 121
     },
     "event_id": "t7",
-    "summary": "All six returned tensors alias weights storage (data_ptr identical, every row equals final weights at observation time), confirming aliasing exists. However history_relative_error = 0.00574 <= 0.025 tolerance, and state errors ~7e-8 <= 1e-5; G unchanged; acceptance_pass=true. The tolerance criterion the contract states is satisfied, so the claimed failure (>0.025) is rebutted.",
+    "status": "rebutted",
+    "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
     "supports": "rebutted"
   }
   Output summary:
@@ -197,17 +209,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "All six returned tensors alias weights storage (data_ptr identical, every row equals final weights at observation time), confirming aliasing exists. However history_relative_error = 0.00574 <= 0.025 tolerance, and state errors ~7e-8 <= 1e-5; G unchanged; acceptance_pass=true. The tolerance criterion the contract states is satisfied, so the claimed failure (>0.025) is rebutted.",
+    "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
     "supports": "rebutted",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (5.876542243999978s, in=19059 out=346)
+### Turn 6 - `solo` (5.607946427000002s, in=16931 out=260)
 
 Message:
 
 ```text
-The one in-scope hypothesis (aliased history tensors failing the 0.025 tolerance) was tested and rebutted: although every returned tensor aliases weights storage, the measured history relative error (0.00574) and state errors (~7e-8) are far within the contract's tolerances on the fixed make_inputs() workload, G is unchanged, shapes and finiteness hold. No further claims would change the verdict — the kernel implements the exact contract math and passes every stated acceptance criterion.
+The exhaustive 121-word probe covered the entire finite contract domain with zero error, so nothing further is needed — I'll record the verdict.
 ```
 
 Tool calls:
@@ -215,19 +227,20 @@ Tool calls:
 - `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 1,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 ran the full contract workflow on the fixed make_inputs() workload with an independent float64 reference. It confirmed the only suspected deviation (step() returns weights.view(N), so all six retained history tensors alias the weights storage and show w[6] at observation time), but the contract's stated acceptance criterion is the numerical tolerance, and history_relative_error = 0.00574 <= 0.025, final weights/velocity errors ~7e-8/4.5e-8 <= 1e-5, G byte-for-byte unchanged, all outputs finite float32 with correct shapes (6x128, 128, 128). The contract explicitly states storage aliasing is not a failure. Claim c1 is therefore rebutted and no other contract requirement is violated; the kernel satisfies the co
-  ...[truncated 32 chars]
+    "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+    
+  ...[truncated 20 chars]
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 1.0,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 ran the full contract workflow on the fixed make_inputs() workload with an independent float64 reference. It confirmed the only suspected deviation (step() returns weights.view(N), so all six retained history tensors alias the weights storage and show w[6] at observation time), but the contract's stated acceptance criterion is the numerical tolerance, and history_relative_error = 0.00574 <= 0.025, final weights/velocity errors ~7e-8/4.5e-8 <= 1e-5, G byte-for-byte unchanged, all outputs finite float32 with correct shapes (6x128, 128, 128). The contract explicitly states storage aliasing is not a failure. Claim c1 is therefore rebutted and no other contract requirement is violated; the kernel satisfies the contract.",
+    "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
     "verdict": "trust"
   }
 
@@ -239,44 +252,44 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The history tensors returned by run_sequence alias the weights storage, so at final observation time every retained history row equals w[6] and H fails the 0.025 history tolerance against w[1..6].
+Statement: There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires H — the values of the six retained returned tensors, observed only after the full six-step sequence — to equal w[1..6] within the 0.025 Frobenius-relative tolerance. If the returned tensors alias the mutated weights storage, each retained row shows w[6] at observation time, violating that acceptance criterion.
+Scope rationale: The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.
 
 Scope evidence:
-- `problem.txt`: "The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]. Acceptance requires: ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025" and "Storage aliasing itself is neither forbidden nor a failure: only the stated numerical values at the stated observation time ... determine acceptance."
+- `problem.txt`: Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001.
 
-Rationale: step() returns weights.view(N), which aliases the in-place mutated state. The contract requires H (values of the six returned tensors observed after the full sequence) to equal w[1..6]; aliased views would all hold w[6], a large history error, even though initial_probe passed because its reference aliased identically.
+Rationale: _append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: All six returned tensors alias weights storage (data_ptr identical, every row equals final weights at observation time), confirming aliasing exists. However history_relative_error = 0.00574 <= 0.025 tolerance, and state errors ~7e-8 <= 1e-5; G unchanged; acceptance_pass=true. The tolerance criterion the contract states is satisfied, so the claimed failure (>0.025) is rebutted.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e09"
+  "entry": "case_e03"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e09"
+  "entry": "case_e03"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e09"
+  "entry": "case_e03"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e09"
+  "entry": "case_e03"
 }
 
 ### t5 - record_claim - error
@@ -290,16 +303,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "step() returns weights.view(N), which aliases the in-place mutated state. The contract requires H (values of the six returned tensors observed after the full sequence) to equal w[1..6]; aliased views would all hold w[6], a large history error, even though initial_probe passed because its reference aliased identically.",
+  "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]. Acceptance requires: ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025\" and \"Storage aliasing itself is neither forbidden nor a failure: only the stated numerical values at the stated observation time ... determine acceptance.\""
+      "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
     }
   ],
-  "scope_rationale": "The contract requires H \u2014 the values of the six retained returned tensors, observed only after the full six-step sequence \u2014 to equal w[1..6] within the 0.025 Frobenius-relative tolerance. If the returned tensors alias the mutated weights storage, each retained row shows w[6] at observation time, violating that acceptance criterion.",
-  "statement": "The history tensors returned by run_sequence alias the weights storage, so at final observation time every retained history row equals w[6] and H fails the 0.025 history tolerance against w[1..6].",
+  "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
+  "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
   "status": "open"
 }
 
@@ -311,13 +324,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "7c20fe82139be8ddd55299072c475903202db7fbf9b14ae8f0e455c8139975e0"
+      "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "f38a05d617c61b452ebafa1e6e52e42dcf263518081ca59f87ef6a8b447de009"
+      "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -329,12 +342,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t7_json_result.json",
-      "sha256": "8fc51a411e22faace524e551e3012905c3122ed94a4d76632e2cff74dc881829"
+      "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The history tensors returned by run_sequence alias the weights storage, so at final observation time every retained history row equals w[6] and H fails the 0.025 history tolerance against w[1..6].",
-  "duration_s": 7.382012,
+  "claim_statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+  "duration_s": 5.392899,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -344,20 +357,20 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "7c20fe82139be8ddd55299072c475903202db7fbf9b14ae8f0e455c8139975e0"
+          "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "f38a05d617c61b452ebafa1e6e52e42dcf263518081ca59f87ef6a8b447de009"
+          "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf
-...[truncated 3689 chars]
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991
+...[truncated 1393 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
@@ -365,7 +378,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "All six returned tensors alias weights storage (data_ptr identical, every row equals final weights at observation time), confirming aliasing exists. However history_relative_error = 0.00574 <= 0.025 tolerance, and state errors ~7e-8 <= 1e-5; G unchanged; acceptance_pass=true. The tolerance criterion the contract states is satisfied, so the claimed failure (>0.025) is rebutted.",
+  "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
   "supports": "rebutted",
   "tool_event_id": "t7"
 }
@@ -373,22 +386,22 @@ Evidence:
 ### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 1.0,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 ran the full contract workflow on the fixed make_inputs() workload with an independent float64 reference. It confirmed the only suspected deviation (step() returns weights.view(N), so all six retained history tensors alias the weights storage and show w[6] at observation time), but the contract's stated acceptance criterion is the numerical tolerance, and history_relative_error = 0.00574 <= 0.025, final weights/velocity errors ~7e-8/4.5e-8 <= 1e-5, G byte-for-byte unchanged, all outputs finite float32 with correct shapes (6x128, 128, 128). The contract explicitly states storage aliasing is not a failure. Claim c1 is therefore rebutted and no other contract requirement is violated; the kernel satisfies the contract.",
+  "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-24T06:40:23Z",
+  "confidence": 1.0,
+  "created_at": "2026-09-24T06:11:44Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 ran the full contract workflow on the fixed make_inputs() workload with an independent float64 reference. It confirmed the only suspected deviation (step() returns weights.view(N), so all six retained history tensors alias the weights storage and show w[6] at observation time), but the contract's stated acceptance criterion is the numerical tolerance, and history_relative_error = 0.00574 <= 0.025, final weights/velocity errors ~7e-8/4.5e-8 <= 1e-5, G byte-for-byte unchanged, all outputs finite float32 with correct shapes (6x128, 128, 128). The contract explicitly states storage aliasing is not a failure. Claim c1 is therefore rebutted and no other contract requirement is violated; the kernel satisfies the contract.",
+  "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
   "verdict": "trust"
 }

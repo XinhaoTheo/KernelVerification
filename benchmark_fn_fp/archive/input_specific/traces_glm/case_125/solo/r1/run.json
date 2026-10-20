@@ -5,37 +5,36 @@
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_e07",
+    "entry": "case_e01",
     "has_error": null,
-    "kernel_code": "import itertools\nimport numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _canonicalize(Features, Anchors, Out):\n    view = tl.program_id(0)\n    column = tl.program_id(1)\n    anchor = tl.load(Anchors + view * 4 + column)\n    a0 = tl.abs(tl.load(Anchors + view * 4))\n    a1 = tl.abs(tl.load(Anchors + view * 4 + 1))\n    a2 = tl.abs(tl.load(Anchors + view * 4 + 2))\n    a3 = tl.abs(tl.load(Anchors + view * 4 + 3))\n    magnitude = tl.abs(anchor)\n    slot = ((a0 < magnitude).to(tl.int32) + (a1 < magnitude).to(tl.int32)\n            + (a2 < magnitude).to(tl.int32) + (a3 < magnitude).to(tl.int32))\n    rows = tl.arange(0, 8)\n    values = tl.load(Features + view * 32 + rows * 4 + column)\n    sign = tl.where(anchor >= 0, 1.0, -1.0)\n    tl.store(Out + view * 32 + rows * 4 + slot, values * sign)\n\n\ndef run(features, anchors):\n    output = torch.empty_like(features)\n    _canonicalize[(2, 4)](features, anchors, output, num_warps=1)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(171249))\n    features = rng.normal(0.0, 1.0, (2, 8, 4)).astype(np.float32)\n    features[0, :, 2:] = 0\n    features[1, :, (0, 3)] = 0\n    anchors = rng.normal(0.0, 1.0, (2, 4)).astype(np.float32)\n    return features, anchors\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef initial_probe():\n    features, anchors = make_inputs()\n    output = run(features, anchors)\n    x = features.detach().cpu().numpy().astype(np.float64)\n    y = output.detach().cpu().numpy().astype(np.float64)\n    local = []\n    for view in range(2):\n        best_error = float(\"inf\")\n        best_transform = None\n        for permutation in itertools.permutations(range(4)):\n            for signs in itertools.product((-1, 1), repeat=4):\n                expected = x[view][:, permutation] * np.asarray(signs)\n                error = float(np.linalg.norm(y[view] - expected) /\n                              max(np.linalg.norm(x[view]), 1e-12))\n                if error < best_error:\n                    best_error = error\n                    best_transform = {\"permutation\": list(permutation), \"signs\": list(signs)}\n        local.append({\"view\": view, \"relative_error\": best_error,\n                      \"chosen_transform\": best_transform})\n    gram_error = float(np.linalg.norm(y @ y.transpose(0, 2, 1) -\n                                      x @ x.transpose(0, 2, 1)))\n    return {\"per_view_alignment\": local, \"within_view_gram_error\": gram_error,\n            \"tolerance\": 0.05,\n            \"passed\": bool(all(row[\"relative_error\"] <= 0.05 for row in local))}\n",
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _fit_predict(X, Y, Q, Out, N: tl.constexpr):\n    s0 = tl.full((), 0.0, tl.float32)\n    s1 = tl.full((), 0.0, tl.float32)\n    sy = tl.full((), 0.0, tl.float32)\n    s00 = tl.full((), 0.0, tl.float32)\n    s01 = tl.full((), 0.0, tl.float32)\n    s11 = tl.full((), 0.0, tl.float32)\n    s0y = tl.full((), 0.0, tl.float32)\n    s1y = tl.full((), 0.0, tl.float32)\n    for i in tl.static_range(N):\n        x0 = tl.load(X + 2 * i)\n        x1 = tl.load(X + 2 * i + 1)\n        val = tl.load(Y + i)\n        s0 = s0 + x0\n        s1 = s1 + x1\n        sy = sy + val\n        s00 = s00 + x0 * x0\n        s01 = s01 + x0 * x1\n        s11 = s11 + x1 * x1\n        s0y = s0y + x0 * val\n        s1y = s1y + x1 * val\n    m0 = s0 / N\n    m1 = s1 / N\n    my = sy / N\n    a = (s00 / N - m0 * m0) + 0.0009765625\n    b = s01 / N - m0 * m1\n    c = (s11 / N - m1 * m1) + 0.0009765625\n    u = s0y / N - m0 * my\n    v = s1y / N - m1 * my\n    det = a * c - b * b\n    beta0 = tl.div_rn(c * u - b * v, det)\n    beta1 = tl.div_rn(a * v - b * u, det)\n    rows = tl.arange(0, 4)\n    q0 = tl.load(Q + rows * 2)\n    q1 = tl.load(Q + rows * 2 + 1)\n    result = (my + (q0 - m0) * beta0) + (q1 - m1) * beta1\n    tl.store(Out + rows, result)\n\n\ndef run(x, y, q):\n    output = torch.empty((4,), device=x.device, dtype=torch.float32)\n    _fit_predict[(1,)](x, y, q, output, N=32, num_warps=1,\n                      enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(130555))\n    latent = rng.normal(0.0, 0.0625, (32, 2))\n    x = (np.asarray([32.0, -24.0]) + latent).astype(np.float32)\n    y = (latent @ np.asarray([0.75, -1.25]) +\n         rng.normal(0.0, 0.015625, 32)).astype(np.float32)\n    q = (np.asarray([32.0, -24.0]) +\n         rng.normal(0.0, 0.25, (4, 2))).astype(np.float32)\n    return x, y, q\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef initial_probe():\n    x, y, q = make_inputs()\n    actual = run(x, y, q)\n    stats = torch.zeros((8,), dtype=torch.float32, device=x.device)\n    for i in range(32):\n        x0, x1, yi = x[i, 0], x[i, 1], y[i]\n        stats = stats + torch.stack((x0, x1, yi, x0*x0, x0*x1,\n                                      x1*x1, x0*yi, x1*yi))\n    m0, m1, my, second00, second01, second11, cross0, cross1 = stats / 32\n    cov00 = second00 - m0*m0 + 1/1024\n    cov01 = second01 - m0*m1\n    cov11 = second11 - m1*m1 + 1/1024\n    rhs0, rhs1 = cross0 - m0*my, cross1 - m1*my\n    determinant = cov00*cov11 - cov01*cov01\n    b0 = (cov11*rhs0 - cov01*rhs1) / determinant\n    b1 = (cov00*rhs1 - cov01*rhs0) / determinant\n    expected = (my + (q[:, 0]-m0)*b0) + (q[:, 1]-m1)*b1\n    error = torch.linalg.vector_norm(actual.double()-expected.double()) / torch.clamp(\n        torch.linalg.vector_norm(expected.double()), min=0.1)\n    return {\"output\": actual.detach().cpu().tolist(),\n            \"reference\": expected.detach().cpu().tolist(),\n            \"relative_error\": float(error.item()),\n            \"tolerance\": 0.05, \"passed\": bool(error.item() <= 0.05)}\n",
     "passed": null,
-    "problem_text": "Audit a channel canonicalizer for a shared multi-view latent space.\n\nTwo sensor views use the same four latent channels. A view can have an\nunobserved channel: a zero column means that feature is absent from that\nview, not that its identity is a new independent channel. The fixed workload\nis exactly the stored float32 arrays returned by make_inputs() in kernel.py:\nfeatures has shape (2, 8, 4), and anchors has shape (2, 4). Anchors are\nper-view summaries used by this candidate canonicalizer; they do not change\nthe mathematical target or the permitted representation equivalence.\n\nThe mathematical target is the input features tensor itself, up to ONE\nshared signed permutation of its four latent columns. Precisely, define\n  E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of\n      ||output[v,r,k] - s[k] * features[v,r,p[k]]||_F\n      / max(||features||_F, 1e-12).\nThe numerator and denominator include BOTH views and ALL eight rows.\nThe same p and s must be used for every view and every row. There are exactly\n384 permitted transforms; arbitrary rotations, row-dependent transforms,\nand view-dependent transforms are outside this equivalence. Missing columns\ncan make a view's best-fitting transform nonunique. No particular canonical\ncolumn order or sign is required as long as one shared transform fits.\n\nrun(features, anchors) must return finite float32 output of shape (2, 8, 4)\nwithout modifying either input. It satisfies this fixed workload iff E <=\n0.05, computed in float64 or more accurately from the actual float32 inputs\nand output. Other seeds and arrays are outside this contract.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its code\nand observed output are evidence to assess, not an authoritative verdict or\na separate specification. All evaluation systems receive the same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"per_view_alignment\": [\n    {\n      \"view\": 0,\n      \"relative_error\": 0.0,\n      \"chosen_transform\": {\n        \"permutation\": [\n          0,\n          2,\n          1,\n          3\n        ],\n        \"signs\": [\n          1,\n          -1,\n          -1,\n          -1\n        ]\n      }\n    },\n    {\n      \"view\": 1,\n      \"relative_error\": 0.0,\n      \"chosen_transform\": {\n        \"permutation\": [\n          0,\n          2,\n          1,\n          3\n        ],\n        \"signs\": [\n          -1,\n          1,\n          -1,\n          -1\n        ]\n      }\n    }\n  ],\n  \"within_view_gram_error\": 0.0,\n  \"tolerance\": 0.05,\n  \"passed\": true\n}\n",
+    "problem_text": "Fit a centered two-feature ridge regression and predict four queries.\n\nThe entire workload is the actual float32 arrays returned by make_inputs()\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\n  prediction = mu_y + (Q-mu_x) @ beta.\nAll target arithmetic is over the actual stored float32 input values and\nis evaluated in float64 or more accurately; the fit is uniquely defined.\n\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\nThe implementation satisfies this fixed workload iff\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\nNo separate acceptance thresholds apply to intermediate means, covariance\nentries, fitted coefficients, or training residuals. Inputs/seeds not\ngenerated by make_inputs() are outside this contract.\n\nkernel.py also includes initial_probe(), an executable prior experiment.\nIts code and any observed result are evidence to assess, not a separate\nspecification or an authoritative verdict. It may or may not be sufficient\nto establish the contract. All evaluation systems receive this same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"output\": [\n    -0.09472084045410156,\n    -0.30071359872817993,\n    -0.18633419275283813,\n    0.1702047884464264\n  ],\n  \"reference\": [\n    -0.09472084045410156,\n    -0.30071359872817993,\n    -0.18633419275283813,\n    0.1702047884464264\n  ],\n  \"relative_error\": 0.0,\n  \"tolerance\": 0.05,\n  \"passed\": true\n}\n",
     "rounds": null,
-    "session_dir": "/root/evidence_cases/case_e07",
+    "session_dir": "/root/evidence_cases/case_e01",
     "status": "unverified",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-24T06:38:12Z",
+      "created_at": "2026-09-24T06:10:32Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-24T06:38:26Z",
+          "created_at": "2026-09-24T06:11:08Z",
           "data": {
-            "E": 0.0,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "5a8893418d65187be037940f0f7b3378e7ca640a59066ece0ab3d183a8a79a4a"
+                "sha256": "f0bfaff4a2f5d199524a2c1a5800ff01c77ba0c60d4b08263ab5ed0b1418b1b9"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "b1d2dec5a715576be074ae26e212c191388ef118a385e13afb29e82ed32a698f"
+                "sha256": "9aa848baeb10f697cd5b7ca8870e23bdb50ec9a38379f196bc3af129878b16d0"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -47,85 +46,81 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "b99a28da121e29f62b5fdf6175615019a523678aa4149ac0f4ececec84a1b9d5"
+                "sha256": "ca53a59b19b99223153c9adf51d227f8dc45cf2ad1d868869a9f099e9a682c52"
               }
             ],
-            "best_transform": {
-              "permutation": [
-                0,
-                2,
-                1,
-                3
-              ],
-              "signs": [
-                1,
-                1,
-                -1,
-                -1
-              ]
-            },
-            "duration_s": 4.77397,
+            "duration_s": 6.649395,
             "exit_code": 0,
-            "expected_signal": null,
+            "expected_signal": "relative_error <= 0.05",
             "finite": true,
-            "inputs_unmodified": true,
             "json_parse_error": null,
             "json_result": {
-              "E": 0.0,
-              "best_transform": {
-                "permutation": [
-                  0,
-                  2,
-                  1,
-                  3
-                ],
-                "signs": [
-                  1,
-                  1,
-                  -1,
-                  -1
-                ]
-              },
-              "dtype": "torch.float32",
+              "beta": [
+                0.6214937239107042,
+                -0.9744126996365189
+              ],
               "finite": true,
-              "inputs_unmodified": true,
-              "metric": "contract E (shared signed permutation, both views, all rows, float64)",
-              "passes_contract": true,
+              "metric": "relative_l2_vs_float64_prediction",
+              "output": [
+                -0.09472084045410156,
+                -0.30071359872817993,
+                -0.18633419275283813,
+                0.1702047884464264
+              ],
+              "passed": true,
+              "prediction": [
+                -0.09472288505871636,
+                -0.3012943469888915,
+                -0.18583023043004424,
+                0.16988139132100616
+              ],
+              "relative_error": 0.0020652327553574673,
               "shape": [
-                2,
-                8,
                 4
               ],
               "tolerance": 0.05
             },
-            "passes_contract": true,
+            "output": [
+              -0.09472084045410156,
+              -0.30071359872817993,
+              -0.18633419275283813,
+              0.1702047884464264
+            ],
+            "passed": true,
+            "prediction": [
+              -0.09472288505871636,
+              -0.3012943469888915,
+              -0.18583023043004424,
+              0.16988139132100616
+            ],
+            "relative_error": 0.0020652327553574673,
             "stderr": "",
-            "stdout": "{\"metric\": \"contract E (shared signed permutation, both views, all rows, float64)\", \"E\": 0.0, \"best_transform\": {\"permutation\": [0, 2, 1, 3], \"signs\": [1, 1, -1, -1]}, \"tolerance\": 0.05, \"finite\": true, \"dtype\": \"torch.float32\", \"shape\": [2, 8, 4], \"inputs_unmodified\": true, \"passes_contract\": true}\n",
+            "stdout": "{\"metric\": \"relative_l2_vs_float64_prediction\", \"output\": [-0.09472084045410156, -0.30071359872817993, -0.18633419275283813, 0.1702047884464264], \"prediction\": [-0.09472288505871636, -0.3012943469888915, -0.18583023043004424, 0.16988139132100616], \"beta\": [0.6214937239107042, -0.9744126996365189], \"relative_error\": 0.0020652327553574673, \"tolerance\": 0.05, \"finite\": true, \"shape\": [4], \"passed\": true}\n",
             "timed_out": false,
             "timeout_s": 60,
             "tolerance": 0.05
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Shared-transform contract error E computed in float64 over all 384 shared (p,s) transforms on the fixed make_inputs workload: E = 0.0 (best p=[0,2,1,3], s=[1,1,-1,-1]), far below the 0.05 tolerance. Output is finite float32 of shape (2,8,4) and inputs are unmodified. One shared transform fits both views and all rows, so the view-dependence concern is rebutted.",
-          "supports": "rebutted",
+          "summary": "On the contract's fixed make_inputs() workload, kernel output vs float64 ridge prediction gives relative error 0.00207 (norm 0.1 clamp), finite, shape (4, float32), far below the 0.05 tolerance.",
+          "supports": "confirmed",
           "tool_event_id": "t7"
         }
       ],
       "id": "c1",
       "raised_by": "solo",
-      "rationale": "slot is computed from each view's own anchors, so view 0 and view 1 may end up with different column mappings; the contract requires one shared (p,s) over both views. The initial probe picks per-view transforms independently, so it can pass even when no shared transform exists. Also anchor ties in magnitude could collide slots within a view.",
+      "rationale": "The kernel accumulates in float32 with cancellation-prone E[x\u00b2]-m\u00b2 formulas (E[x0\u00b2]\u22481024 while variance\u22480.004, ~10 bits lost); only the 0.05 relative tolerance on final predictions can decide compliance.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "The same p and s must be used for every view and every row... view-dependent transforms are outside this equivalence. E is a min over shared transforms only, numerator includes BOTH views and ALL eight rows."
+          "summary": "The implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05, with prediction arithmetic evaluated in float64 or more accurately over the make_inputs() float32 values."
         }
       ],
-      "scope_rationale": "Contract requires one shared signed permutation across both views and all rows; a view-dependent transform violates this and E>0.05 would fail the fixed workload.",
-      "statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows.",
-      "status": "rebutted",
-      "updated_at": "2026-09-24T06:38:26Z"
+      "scope_rationale": "Contract requires ||output - prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the fixed make_inputs() workload, with prediction computed in float64.",
+      "statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64.",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T06:11:08Z"
     }
   ],
   "convergence": null,
@@ -138,7 +133,7 @@
   },
   "description_tasks": [],
   "description_updates": [],
-  "entry": "case_e07",
+  "entry": "case_e01",
   "history": [
     {
       "duration_s": null,
@@ -148,25 +143,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_e07"
+            "entry": "case_e01"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_e07"
+            "entry": "case_e01"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_e07"
+            "entry": "case_e01"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_e07",
+            "entry": "case_e01",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -175,22 +170,22 @@
       "usage": null
     },
     {
-      "duration_s": 5.273423027999996,
+      "duration_s": 10.833973842,
       "role": "solo",
       "round": 2,
-      "text": "The kernel computes the permutation from per-view anchors, which risks a view-dependent transform \u2014 but the contract requires ONE shared signed permutation. The initial probe only checked per-view alignment with independently-chosen transforms, so it can't catch this. I'll record the claim and run a probe computing the true shared-transform error E.",
+      "text": "I'll verify the kernel against a float64 reference (the contract's authoritative metric), since the initial probe only compared against a float32 recomputation.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "The slot mapping is derived from that view's anchors independently, so view 0 and view 1 may use different permutations; the contract requires one shared (p,s) over both views and all rows. The initial probe picks per-view transforms and thus can pass even when no shared transform exists.",
+            "rationale": "The contract computes beta and predictions in float64 over the stored float32 inputs; the kernel accumulates in float32 and uses catastrophic-cancellation prone E[x\u00b2]-m\u00b2 formulas with x0\u224832, so E[x0\u00b2]\u22481024 while variance\u22480.004, losing ~10 bits. However the final tolerance is 0.05 relative, which may still hold.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "The same p and s must be used for every view and every row... view-dependent transforms are outside this equivalence. E is a min over shared transforms only, numerator includes BOTH views and ALL eight rows."
+                "summary": "The implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05, with target arithmetic evaluated in float64 or more accurately over the make_inputs() float32 values."
               }
             ],
-            "statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows."
+            "statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64."
           },
           "tool": "record_claim"
         }
@@ -198,29 +193,29 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.273,
-        "input_tokens": 9517,
-        "output_tokens": 408
+        "duration_s": 10.834,
+        "input_tokens": 9956,
+        "output_tokens": 305
       }
     },
     {
-      "duration_s": 3.3574866140000026,
+      "duration_s": 4.001287602000001,
       "role": "solo",
       "round": 3,
-      "text": "I'll re-record the claim with scope_rationale, then run the shared-transform probe.",
+      "text": "Re-record claim with scope_rationale, then probe.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "slot is computed from each view's own anchors, so view 0 and view 1 may end up with different column mappings; the contract requires one shared (p,s) over both views. The initial probe picks per-view transforms independently, so it can pass even when no shared transform exists. Also anchor ties in magnitude could collide slots within a view.",
+            "rationale": "The kernel accumulates in float32 with cancellation-prone E[x\u00b2]-m\u00b2 formulas (E[x0\u00b2]\u22481024 while variance\u22480.004, ~10 bits lost); only the 0.05 relative tolerance on final predictions can decide compliance.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "The same p and s must be used for every view and every row... view-dependent transforms are outside this equivalence. E is a min over shared transforms only, numerator includes BOTH views and ALL eight rows."
+                "summary": "The implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05, with prediction arithmetic evaluated in float64 or more accurately over the make_inputs() float32 values."
               }
             ],
-            "scope_rationale": "Contract requires one shared signed permutation across both views and all rows; a view-dependent transform violates this and E>0.05 would fail the fixed workload.",
-            "statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows."
+            "scope_rationale": "Contract requires ||output - prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the fixed make_inputs() workload, with prediction computed in float64.",
+            "statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64."
           },
           "tool": "record_claim"
         }
@@ -228,21 +223,22 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 3.357,
-        "input_tokens": 10198,
-        "output_tokens": 246
+        "duration_s": 4.001,
+        "input_tokens": 10732,
+        "output_tokens": 262
       }
     },
     {
-      "duration_s": 5.166228238999999,
+      "duration_s": 4.346693232,
       "role": "solo",
       "round": 4,
-      "text": "I'll run the decisive probe: compute the contract's exact shared-transform error E over all 384 transforms on the fixed workload, and verify inputs are unmodified and output is finite float32.",
+      "text": "Running the decisive probe for c1: compute the contract's float64 prediction and compare to the kernel's output.",
       "tool_calls": [
         {
           "args": {
             "claim_id": "c1",
-            "code": "import itertools, json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e07\")\nimport kernel\n\nfeatures, anchors = kernel.make_inputs()\nf0 = features.clone(); a0 = anchors.clone()\noutput = kernel.run(features, anchors)\n\nx = features.cpu().numpy().astype(np.float64)\ny = output.detach().cpu().numpy().astype(np.float64)\nden = max(np.linalg.norm(x), 1e-12)\nbest = (float(\"inf\"), None)\nfor p in itertools.permutations(range(4)):\n    for s in itertools.product((-1,1), repeat=4):\n        expected = x[:, :, list(p)] * np.asarray(s)\n        e = float(np.linalg.norm(y - expected) / den)\n        if e < best[0]:\n            best = (e, {\"permutation\": list(p), \"signs\": list(s)})\nprint(json.dumps({\n  \"metric\": \"contract E (shared signed permutation, both views, all rows, float64)\",\n  \"E\": best[0],\n  \"best_transform\": best[1],\n  \"tolerance\": 0.05,\n  \"finite\": bool(np.isfinite(y).all()),\n  \"dtype\": str(output.dtype),\n  \"shape\": list(output.shape),\n  \"inputs_unmodified\": bool(torch.equal(features, f0) and torch.equal(anchors, a0)),\n  \"passes_contract\": bool(best[0] <= 0.05 and np.isfinite(y).all())\n}))"
+            "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e01\")\nimport kernel\nx, y, q = kernel.make_inputs()\nout = kernel.run(x, y, q)\nX = x.cpu().numpy().astype(np.float64)\nY = y.cpu().numpy().astype(np.float64)\nQ = q.cpu().numpy().astype(np.float64)\nmu_x = X.mean(axis=0); mu_y = Y.mean()\nXc = X - mu_x; yc = Y - mu_y\nlam = 1.0/1024\nA = Xc.T@Xc/32 + lam*np.eye(2)\nbeta = np.linalg.solve(A, Xc.T@yc/32)\npred = mu_y + (Q - mu_x)@beta\no = out.cpu().numpy().astype(np.float64)\nerr = np.linalg.norm(o-pred)/max(np.linalg.norm(pred),0.1)\nprint(json.dumps({\"metric\":\"relative_l2_vs_float64_prediction\",\"output\":o.tolist(),\"prediction\":pred.tolist(),\"beta\":beta.tolist(),\"relative_error\":float(err),\"tolerance\":0.05,\"finite\":bool(np.all(np.isfinite(o))),\"shape\":list(out.shape),\"passed\":bool(err<=0.05)}))",
+            "expected_signal": "relative_error <= 0.05"
           },
           "tool": "run_claim_probe"
         }
@@ -250,44 +246,41 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.166,
-        "input_tokens": 11397,
-        "output_tokens": 397
+        "duration_s": 4.347,
+        "input_tokens": 12072,
+        "output_tokens": 340
       }
     },
     {
-      "duration_s": 4.176818990000001,
+      "duration_s": 24.234445392000005,
       "role": "solo",
       "round": 5,
-      "text": "The decisive probe already ran: E = 0.0 under a single shared signed permutation, with finite float32 output, correct shape, and inputs unmodified. The per-view-transform concern is rebutted. I'll finalize the evidence and record the verdict.",
+      "text": "The decisive probe ran: relative error vs the float64 contract prediction is 0.0021, well under 0.05. I'll finalize the evidence and verdict.",
       "tool_calls": [
         {
           "args": {
             "data": {
-              "E": 0.0,
-              "best_transform": {
-                "permutation": [
-                  0,
-                  2,
-                  1,
-                  3
-                ],
-                "signs": [
-                  1,
-                  1,
-                  -1,
-                  -1
-                ]
-              },
               "finite": true,
-              "inputs_unmodified": true,
-              "passes_contract": true,
+              "output": [
+                -0.09472084045410156,
+                -0.30071359872817993,
+                -0.18633419275283813,
+                0.1702047884464264
+              ],
+              "passed": true,
+              "prediction": [
+                -0.09472288505871636,
+                -0.3012943469888915,
+                -0.18583023043004424,
+                0.16988139132100616
+              ],
+              "relative_error": 0.0020652327553574673,
               "tolerance": 0.05
             },
             "event_id": "t7",
-            "status": "rebutted",
-            "summary": "Shared-transform contract error E computed in float64 over all 384 shared (p,s) transforms on the fixed make_inputs workload: E = 0.0 (best p=[0,2,1,3], s=[1,1,-1,-1]), far below the 0.05 tolerance. Output is finite float32 of shape (2,8,4) and inputs are unmodified. One shared transform fits both views and all rows, so the view-dependence concern is rebutted.",
-            "supports": "rebutted"
+            "status": "confirmed",
+            "summary": "On the contract's fixed make_inputs() workload, kernel output vs float64 ridge prediction gives relative error 0.00207 (norm 0.1 clamp), finite, shape (4, float32), far below the 0.05 tolerance.",
+            "supports": "confirmed"
           },
           "tool": "finalize_probe_evidence"
         }
@@ -295,16 +288,16 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 4.177,
-        "input_tokens": 13873,
-        "output_tokens": 295
+        "duration_s": 24.234,
+        "input_tokens": 14815,
+        "output_tokens": 308
       }
     },
     {
-      "duration_s": 4.384240659999996,
+      "duration_s": 5.7292839220000005,
       "role": "solo",
       "round": 6,
-      "text": "The sole open concern (view-dependent transforms violating the shared-permutation requirement) was directly tested with the contract's exact metric on the fixed workload and rebutted: E = 0.0 with a single shared (p,s), finite float32 output of shape (2,8,4), and unmodified inputs. The contract covers only this fixed workload, so no further claims would change the verdict.",
+      "text": "The decisive in-scope claim is resolved: the kernel's output matches the contract's float64 ridge prediction with relative error 0.0021, far under the 0.05 tolerance, on the exact make_inputs() workload. Output is finite float32 shape (4,). Recording the verdict.",
       "tool_calls": [
         {
           "args": {
@@ -312,7 +305,7 @@
             "decisive_claims": [
               "c1"
             ],
-            "reason": "Ran the contract's exact metric E (min over all 384 shared signed permutations, float64, both views and all eight rows) on the fixed make_inputs() workload via probe t7: E = 0.0 with best shared transform p=[0,2,1,3], s=[1,1,-1,-1], far below the 0.05 tolerance. Output was finite float32 of shape (2,8,4) and neither input was modified. The hypothesized failure (view-dependent transform from per-view anchors) was rebutted by this decisive shared-transform probe; the kernel satisfies the fixed-workload contract.",
+            "reason": "Ran the contract's fixed make_inputs() workload on the real GPU (tool event t7, run_claim_probe). Computed the contract's float64 ridge reference (beta = [0.6215, -0.9744], prediction over Q) and compared the kernel output: relative L2 error 0.00207 vs the 0.05 tolerance with the 0.1 norm clamp; output was a finite float32 vector of shape (4,). The only confirmed claim (c1, in_scope, evidenced by t7) is that the kernel satisfies the contract's acceptance criterion. The kernel's float32 E[x^2]-m^2 accumulation does introduce cancellation, but the resulting error is well within the contract's tolerance, and the contract explicitly imposes no thresholds on intermediates. No in-scope failures found; other inputs are excluded by the contract.",
             "verdict": "trust"
           },
           "tool": "record_verdict"
@@ -321,9 +314,9 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 4.384,
-        "input_tokens": 17548,
-        "output_tokens": 287
+        "duration_s": 5.729,
+        "input_tokens": 19273,
+        "output_tokens": 293
       }
     }
   ],
@@ -341,9 +334,9 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_e07"
+        "entry": "case_e01"
       },
-      "created_at": "2026-09-24T06:38:03Z",
+      "created_at": "2026-09-24T06:10:16Z",
       "id": "t1",
       "output": {
         "artifact_files": [
@@ -351,13 +344,13 @@
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_e07",
+        "entry": "case_e01",
         "has_error": null,
-        "kernel_code": "import itertools\nimport numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _canonicalize(Features, Anchors, Out):\n    view = tl.program_id(0)\n    column = tl.program_id(1)\n    anchor = tl.load(Anchors + view * 4 + column)\n    a0 = tl.abs(tl.load(Anchors + view * 4))\n    a1 = tl.abs(tl.load(Anchors + view * 4 + 1))\n    a2 = tl.abs(tl.load(Anchors + view * 4 + 2))\n    a3 = tl.abs(tl.load(Anchors + view * 4 + 3))\n    magnitude = tl.abs(anchor)\n    slot = ((a0 < magnitude).to(tl.int32) + (a1 < magnitude).to(tl.int32)\n            + (a2 < magnitude).to(tl.int32) + (a3 < magnitude).to(tl.int32))\n    rows = tl.arange(0, 8)\n    values = tl.load(Features + view * 32 + rows * 4 + column)\n    sign = tl.where(anchor >= 0, 1.0, -1.0)\n    tl.store(Out + view * 32 + rows * 4 + slot, values * sign)\n\n\ndef run(features, anchors):\n    output = torch.empty_like(features)\n    _canonicalize[(2, 4)](features, anchors, output, num_warps=1)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(171249))\n    features = rng.normal(0.0, 1.0, (2, 8, 4)).astype(np.float32)\n    features[0, :, 2:] = 0\n    features[1, :, (0, 3)] = 0\n    anchors = rng.normal(0.0, 1.0, (2, 4)).astype(np.float32)\n    return features, anchors\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef initial_probe():\n    features, anchors = make_inputs()\n    output = run(features, anchors)\n    x = features.detach().cpu().numpy().astype(np.float64)\n    y = output.detach().cpu().numpy().astype(np.float64)\n    local = []\n    for view in range(2):\n        best_error = float(\"inf\")\n        best_transform = None\n        for permutation in itertools.permutations(range(4)):\n            for signs in itertools.product((-1, 1), repeat=4):\n                expected = x[view][:, permutation] * np.asarray(signs)\n                error = float(np.linalg.norm(y[view] - expected) /\n                              max(np.linalg.norm(x[view]), 1e-12))\n                if error < best_error:\n                    best_error = error\n                    best_transform = {\"permutation\": list(permutation), \"signs\": list(signs)}\n        local.append({\"view\": view, \"relative_error\": best_error,\n                      \"chosen_transform\": best_transform})\n    gram_error = float(np.linalg.norm(y @ y.transpose(0, 2, 1) -\n                                      x @ x.transpose(0, 2, 1)))\n    return {\"per_view_alignment\": local, \"within_view_gram_error\": gram_error,\n            \"tolerance\": 0.05,\n            \"passed\": bool(all(row[\"relative_error\"] <= 0.05 for row in local))}\n",
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _fit_predict(X, Y, Q, Out, N: tl.constexpr):\n    s0 = tl.full((), 0.0, tl.float32)\n    s1 = tl.full((), 0.0, tl.float32)\n    sy = tl.full((), 0.0, tl.float32)\n    s00 = tl.full((), 0.0, tl.float32)\n    s01 = tl.full((), 0.0, tl.float32)\n    s11 = tl.full((), 0.0, tl.float32)\n    s0y = tl.full((), 0.0, tl.float32)\n    s1y = tl.full((), 0.0, tl.float32)\n    for i in tl.static_range(N):\n        x0 = tl.load(X + 2 * i)\n        x1 = tl.load(X + 2 * i + 1)\n        val = tl.load(Y + i)\n        s0 = s0 + x0\n        s1 = s1 + x1\n        sy = sy + val\n        s00 = s00 + x0 * x0\n        s01 = s01 + x0 * x1\n        s11 = s11 + x1 * x1\n        s0y = s0y + x0 * val\n        s1y = s1y + x1 * val\n    m0 = s0 / N\n    m1 = s1 / N\n    my = sy / N\n    a = (s00 / N - m0 * m0) + 0.0009765625\n    b = s01 / N - m0 * m1\n    c = (s11 / N - m1 * m1) + 0.0009765625\n    u = s0y / N - m0 * my\n    v = s1y / N - m1 * my\n    det = a * c - b * b\n    beta0 = tl.div_rn(c * u - b * v, det)\n    beta1 = tl.div_rn(a * v - b * u, det)\n    rows = tl.arange(0, 4)\n    q0 = tl.load(Q + rows * 2)\n    q1 = tl.load(Q + rows * 2 + 1)\n    result = (my + (q0 - m0) * beta0) + (q1 - m1) * beta1\n    tl.store(Out + rows, result)\n\n\ndef run(x, y, q):\n    output = torch.empty((4,), device=x.device, dtype=torch.float32)\n    _fit_predict[(1,)](x, y, q, output, N=32, num_warps=1,\n                      enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(130555))\n    latent = rng.normal(0.0, 0.0625, (32, 2))\n    x = (np.asarray([32.0, -24.0]) + latent).astype(np.float32)\n    y = (latent @ np.asarray([0.75, -1.25]) +\n         rng.normal(0.0, 0.015625, 32)).astype(np.float32)\n    q = (np.asarray([32.0, -24.0]) +\n         rng.normal(0.0, 0.25, (4, 2))).astype(np.float32)\n    return x, y, q\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n\n\ndef initial_probe():\n    x, y, q = make_inputs()\n    actual = run(x, y, q)\n    stats = torch.zeros((8,), dtype=torch.float32, device=x.device)\n    for i in range(32):\n        x0, x1, yi = x[i, 0], x[i, 1], y[i]\n        stats = stats + torch.stack((x0, x1, yi, x0*x0, x0*x1,\n                                      x1*x1, x0*yi, x1*yi))\n    m0, m1, my, second00, second01, second11, cross0, cross1 = stats / 32\n    cov00 = second00 - m0*m0 + 1/1024\n    cov01 = second01 - m0*m1\n    cov11 = second11 - m1*m1 + 1/1024\n    rhs0, rhs1 = cross0 - m0*my, cross1 - m1*my\n    determinant = cov00*cov11 - cov01*cov01\n    b0 = (cov11*rhs0 - cov01*rhs1) / determinant\n    b1 = (cov00*rhs1 - cov01*rhs0) / determinant\n    expected = (my + (q[:, 0]-m0)*b0) + (q[:, 1]-m1)*b1\n    error = torch.linalg.vector_norm(actual.double()-expected.double()) / torch.clamp(\n        torch.linalg.vector_norm(expected.double()), min=0.1)\n    return {\"output\": actual.detach().cpu().tolist(),\n            \"reference\": expected.detach().cpu().tolist(),\n            \"relative_error\": float(error.item()),\n            \"tolerance\": 0.05, \"passed\": bool(error.item() <= 0.05)}\n",
         "passed": null,
-        "problem_text": "Audit a channel canonicalizer for a shared multi-view latent space.\n\nTwo sensor views use the same four latent channels. A view can have an\nunobserved channel: a zero column means that feature is absent from that\nview, not that its identity is a new independent channel. The fixed workload\nis exactly the stored float32 arrays returned by make_inputs() in kernel.py:\nfeatures has shape (2, 8, 4), and anchors has shape (2, 4). Anchors are\nper-view summaries used by this candidate canonicalizer; they do not change\nthe mathematical target or the permitted representation equivalence.\n\nThe mathematical target is the input features tensor itself, up to ONE\nshared signed permutation of its four latent columns. Precisely, define\n  E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of\n      ||output[v,r,k] - s[k] * features[v,r,p[k]]||_F\n      / max(||features||_F, 1e-12).\nThe numerator and denominator include BOTH views and ALL eight rows.\nThe same p and s must be used for every view and every row. There are exactly\n384 permitted transforms; arbitrary rotations, row-dependent transforms,\nand view-dependent transforms are outside this equivalence. Missing columns\ncan make a view's best-fitting transform nonunique. No particular canonical\ncolumn order or sign is required as long as one shared transform fits.\n\nrun(features, anchors) must return finite float32 output of shape (2, 8, 4)\nwithout modifying either input. It satisfies this fixed workload iff E <=\n0.05, computed in float64 or more accurately from the actual float32 inputs\nand output. Other seeds and arrays are outside this contract.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its code\nand observed output are evidence to assess, not an authoritative verdict or\na separate specification. All evaluation systems receive the same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"per_view_alignment\": [\n    {\n      \"view\": 0,\n      \"relative_error\": 0.0,\n      \"chosen_transform\": {\n        \"permutation\": [\n          0,\n          2,\n          1,\n          3\n        ],\n        \"signs\": [\n          1,\n          -1,\n          -1,\n          -1\n        ]\n      }\n    },\n    {\n      \"view\": 1,\n      \"relative_error\": 0.0,\n      \"chosen_transform\": {\n        \"permutation\": [\n          0,\n          2,\n          1,\n          3\n        ],\n        \"signs\": [\n          -1,\n          1,\n          -1,\n          -1\n        ]\n      }\n    }\n  ],\n  \"within_view_gram_error\": 0.0,\n  \"tolerance\": 0.05,\n  \"passed\": true\n}\n",
+        "problem_text": "Fit a centered two-feature ridge regression and predict four queries.\n\nThe entire workload is the actual float32 arrays returned by make_inputs()\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\n  prediction = mu_y + (Q-mu_x) @ beta.\nAll target arithmetic is over the actual stored float32 input values and\nis evaluated in float64 or more accurately; the fit is uniquely defined.\n\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\nThe implementation satisfies this fixed workload iff\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\nNo separate acceptance thresholds apply to intermediate means, covariance\nentries, fitted coefficients, or training residuals. Inputs/seeds not\ngenerated by make_inputs() are outside this contract.\n\nkernel.py also includes initial_probe(), an executable prior experiment.\nIts code and any observed result are evidence to assess, not a separate\nspecification or an authoritative verdict. It may or may not be sufficient\nto establish the contract. All evaluation systems receive this same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"output\": [\n    -0.09472084045410156,\n    -0.30071359872817993,\n    -0.18633419275283813,\n    0.1702047884464264\n  ],\n  \"reference\": [\n    -0.09472084045410156,\n    -0.30071359872817993,\n    -0.18633419275283813,\n    0.1702047884464264\n  ],\n  \"relative_error\": 0.0,\n  \"tolerance\": 0.05,\n  \"passed\": true\n}\n",
         "rounds": null,
-        "session_dir": "/root/evidence_cases/case_e07",
+        "session_dir": "/root/evidence_cases/case_e01",
         "status": "unverified",
         "test_code": ""
       },
@@ -366,13 +359,13 @@
     },
     {
       "args": {
-        "entry": "case_e07"
+        "entry": "case_e01"
       },
-      "created_at": "2026-09-24T06:38:03Z",
+      "created_at": "2026-09-24T06:10:16Z",
       "id": "t2",
       "output": {
-        "content": "Audit a channel canonicalizer for a shared multi-view latent space.\n\nTwo sensor views use the same four latent channels. A view can have an\nunobserved channel: a zero column means that feature is absent from that\nview, not that its identity is a new independent channel. The fixed workload\nis exactly the stored float32 arrays returned by make_inputs() in kernel.py:\nfeatures has shape (2, 8, 4), and anchors has shape (2, 4). Anchors are\nper-view summaries used by this candidate canonicalizer; they do not change\nthe mathematical target or the permitted representation equivalence.\n\nThe mathematical target is the input features tensor itself, up to ONE\nshared signed permutation of its four latent columns. Precisely, define\n  E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of\n      ||output[v,r,k] - s[k] * features[v,r,p[k]]||_F\n      / max(||features||_F, 1e-12).\nThe numerator and denominator include BOTH views and ALL eight rows.\nThe same p and s must be used for every view and every row. There are exactly\n384 permitted transforms; arbitrary rotations, row-dependent transforms,\nand view-dependent transforms are outside this equivalence. Missing columns\ncan make a view's best-fitting transform nonunique. No particular canonical\ncolumn order or sign is required as long as one shared transform fits.\n\nrun(features, anchors) must return finite float32 output of shape (2, 8, 4)\nwithout modifying either input. It satisfies this fixed workload iff E <=\n0.05, computed in float64 or more accurately from the actual float32 inputs\nand output. Other seeds and arrays are outside this contract.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its code\nand observed output are evidence to assess, not an authoritative verdict or\na separate specification. All evaluation systems receive the same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"per_view_alignment\": [\n    {\n      \"view\": 0,\n      \"relative_error\": 0.0,\n      \"chosen_transform\": {\n        \"permutation\": [\n          0,\n          2,\n          1,\n          3\n        ],\n        \"signs\": [\n          1,\n          -1,\n          -1,\n          -1\n        ]\n      }\n    },\n    {\n      \"view\": 1,\n      \"relative_error\": 0.0,\n      \"chosen_transform\": {\n        \"permutation\": [\n          0,\n          2,\n          1,\n          3\n        ],\n        \"signs\": [\n          -1,\n          1,\n          -1,\n          -1\n        ]\n      }\n    }\n  ],\n  \"within_view_gram_error\": 0.0,\n  \"tolerance\": 0.05,\n  \"passed\": true\n}\n",
-        "entry": "case_e07",
+        "content": "Fit a centered two-feature ridge regression and predict four queries.\n\nThe entire workload is the actual float32 arrays returned by make_inputs()\nin kernel.py: X has shape (32, 2), y has shape (32,), and Q has shape (4, 2).\nDefine mu_x = mean(X, axis=0), mu_y = mean(y), Xc = X-mu_x,\nyc = y-mu_y, and lambda = 1/1024. The mathematical target is\n  beta = argmin_b [ ||Xc b - yc||_2^2 / 32 + lambda * ||b||_2^2 ]\n  prediction = mu_y + (Q-mu_x) @ beta.\nAll target arithmetic is over the actual stored float32 input values and\nis evaluated in float64 or more accurately; the fit is uniquely defined.\n\nrun(X, y, Q) must return a finite float32 vector with shape (4,).\nThe implementation satisfies this fixed workload iff\n  ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.\nNo separate acceptance thresholds apply to intermediate means, covariance\nentries, fitted coefficients, or training residuals. Inputs/seeds not\ngenerated by make_inputs() are outside this contract.\n\nkernel.py also includes initial_probe(), an executable prior experiment.\nIts code and any observed result are evidence to assess, not a separate\nspecification or an authoritative verdict. It may or may not be sufficient\nto establish the contract. All evaluation systems receive this same material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"output\": [\n    -0.09472084045410156,\n    -0.30071359872817993,\n    -0.18633419275283813,\n    0.1702047884464264\n  ],\n  \"reference\": [\n    -0.09472084045410156,\n    -0.30071359872817993,\n    -0.18633419275283813,\n    0.1702047884464264\n  ],\n  \"relative_error\": 0.0,\n  \"tolerance\": 0.05,\n  \"passed\": true\n}\n",
+        "entry": "case_e01",
         "exists": true,
         "path": "problem.txt"
       },
@@ -381,17 +374,17 @@
     },
     {
       "args": {
-        "entry": "case_e07"
+        "entry": "case_e01"
       },
-      "created_at": "2026-09-24T06:38:03Z",
+      "created_at": "2026-09-24T06:10:16Z",
       "id": "t3",
       "output": {
-        "entry": "case_e07",
+        "entry": "case_e01",
         "files": [
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 2664
+            "size_bytes": 3174
           },
           {
             "kind": "metadata",
@@ -401,7 +394,7 @@
           {
             "kind": "problem",
             "path": "problem.txt",
-            "size_bytes": 2548
+            "size_bytes": 1659
           }
         ]
       },
@@ -410,14 +403,14 @@
     },
     {
       "args": {
-        "entry": "case_e07",
+        "entry": "case_e01",
         "path": "meta.json"
       },
-      "created_at": "2026-09-24T06:38:03Z",
+      "created_at": "2026-09-24T06:10:16Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_e07\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
-        "entry": "case_e07",
+        "content": "{\n  \"name\": \"case_e01\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_e01",
         "kind": "metadata",
         "path": "meta.json",
         "size_chars": 69,
@@ -428,17 +421,17 @@
     },
     {
       "args": {
-        "rationale": "The slot mapping is derived from that view's anchors independently, so view 0 and view 1 may use different permutations; the contract requires one shared (p,s) over both views and all rows. The initial probe picks per-view transforms and thus can pass even when no shared transform exists.",
+        "rationale": "The contract computes beta and predictions in float64 over the stored float32 inputs; the kernel accumulates in float32 and uses catastrophic-cancellation prone E[x\u00b2]-m\u00b2 formulas with x0\u224832, so E[x0\u00b2]\u22481024 while variance\u22480.004, losing ~10 bits. However the final tolerance is 0.05 relative, which may still hold.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "The same p and s must be used for every view and every row... view-dependent transforms are outside this equivalence. E is a min over shared transforms only, numerator includes BOTH views and ALL eight rows."
+            "summary": "The implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05, with target arithmetic evaluated in float64 or more accurately over the make_inputs() float32 values."
           }
         ],
-        "statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows."
+        "statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64."
       },
-      "created_at": "2026-09-24T06:38:09Z",
+      "created_at": "2026-09-24T06:10:28Z",
       "id": "t5",
       "output": {
         "error": {
@@ -456,36 +449,36 @@
     },
     {
       "args": {
-        "rationale": "slot is computed from each view's own anchors, so view 0 and view 1 may end up with different column mappings; the contract requires one shared (p,s) over both views. The initial probe picks per-view transforms independently, so it can pass even when no shared transform exists. Also anchor ties in magnitude could collide slots within a view.",
+        "rationale": "The kernel accumulates in float32 with cancellation-prone E[x\u00b2]-m\u00b2 formulas (E[x0\u00b2]\u22481024 while variance\u22480.004, ~10 bits lost); only the 0.05 relative tolerance on final predictions can decide compliance.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "The same p and s must be used for every view and every row... view-dependent transforms are outside this equivalence. E is a min over shared transforms only, numerator includes BOTH views and ALL eight rows."
+            "summary": "The implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05, with prediction arithmetic evaluated in float64 or more accurately over the make_inputs() float32 values."
           }
         ],
-        "scope_rationale": "Contract requires one shared signed permutation across both views and all rows; a view-dependent transform violates this and E>0.05 would fail the fixed workload.",
-        "statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows."
+        "scope_rationale": "Contract requires ||output - prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the fixed make_inputs() workload, with prediction computed in float64.",
+        "statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64."
       },
-      "created_at": "2026-09-24T06:38:12Z",
+      "created_at": "2026-09-24T06:10:32Z",
       "id": "t6",
       "output": {
-        "created_at": "2026-09-24T06:38:12Z",
+        "created_at": "2026-09-24T06:10:32Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "solo",
-        "rationale": "slot is computed from each view's own anchors, so view 0 and view 1 may end up with different column mappings; the contract requires one shared (p,s) over both views. The initial probe picks per-view transforms independently, so it can pass even when no shared transform exists. Also anchor ties in magnitude could collide slots within a view.",
+        "rationale": "The kernel accumulates in float32 with cancellation-prone E[x\u00b2]-m\u00b2 formulas (E[x0\u00b2]\u22481024 while variance\u22480.004, ~10 bits lost); only the 0.05 relative tolerance on final predictions can decide compliance.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "The same p and s must be used for every view and every row... view-dependent transforms are outside this equivalence. E is a min over shared transforms only, numerator includes BOTH views and ALL eight rows."
+            "summary": "The implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05, with prediction arithmetic evaluated in float64 or more accurately over the make_inputs() float32 values."
           }
         ],
-        "scope_rationale": "Contract requires one shared signed permutation across both views and all rows; a view-dependent transform violates this and E>0.05 would fail the fixed workload.",
-        "statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows.",
+        "scope_rationale": "Contract requires ||output - prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the fixed make_inputs() workload, with prediction computed in float64.",
+        "statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64.",
         "status": "open",
-        "updated_at": "2026-09-24T06:38:12Z"
+        "updated_at": "2026-09-24T06:10:32Z"
       },
       "status": "ok",
       "tool": "record_claim"
@@ -493,9 +486,10 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "import itertools, json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e07\")\nimport kernel\n\nfeatures, anchors = kernel.make_inputs()\nf0 = features.clone(); a0 = anchors.clone()\noutput = kernel.run(features, anchors)\n\nx = features.cpu().numpy().astype(np.float64)\ny = output.detach().cpu().numpy().astype(np.float64)\nden = max(np.linalg.norm(x), 1e-12)\nbest = (float(\"inf\"), None)\nfor p in itertools.permutations(range(4)):\n    for s in itertools.product((-1,1), repeat=4):\n        expected = x[:, :, list(p)] * np.asarray(s)\n        e = float(np.linalg.norm(y - expected) / den)\n        if e < best[0]:\n            best = (e, {\"permutation\": list(p), \"signs\": list(s)})\nprint(json.dumps({\n  \"metric\": \"contract E (shared signed permutation, both views, all rows, float64)\",\n  \"E\": best[0],\n  \"best_transform\": best[1],\n  \"tolerance\": 0.05,\n  \"finite\": bool(np.isfinite(y).all()),\n  \"dtype\": str(output.dtype),\n  \"shape\": list(output.shape),\n  \"inputs_unmodified\": bool(torch.equal(features, f0) and torch.equal(anchors, a0)),\n  \"passes_contract\": bool(best[0] <= 0.05 and np.isfinite(y).all())\n}))"
+        "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e01\")\nimport kernel\nx, y, q = kernel.make_inputs()\nout = kernel.run(x, y, q)\nX = x.cpu().numpy().astype(np.float64)\nY = y.cpu().numpy().astype(np.float64)\nQ = q.cpu().numpy().astype(np.float64)\nmu_x = X.mean(axis=0); mu_y = Y.mean()\nXc = X - mu_x; yc = Y - mu_y\nlam = 1.0/1024\nA = Xc.T@Xc/32 + lam*np.eye(2)\nbeta = np.linalg.solve(A, Xc.T@yc/32)\npred = mu_y + (Q - mu_x)@beta\no = out.cpu().numpy().astype(np.float64)\nerr = np.linalg.norm(o-pred)/max(np.linalg.norm(pred),0.1)\nprint(json.dumps({\"metric\":\"relative_l2_vs_float64_prediction\",\"output\":o.tolist(),\"prediction\":pred.tolist(),\"beta\":beta.tolist(),\"relative_error\":float(err),\"tolerance\":0.05,\"finite\":bool(np.all(np.isfinite(o))),\"shape\":list(out.shape),\"passed\":bool(err<=0.05)}))",
+        "expected_signal": "relative_error <= 0.05"
       },
-      "created_at": "2026-09-24T06:38:22Z",
+      "created_at": "2026-09-24T06:10:43Z",
       "id": "t7",
       "output": {
         "artifacts": [
@@ -503,13 +497,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t7_probe.py",
-            "sha256": "5a8893418d65187be037940f0f7b3378e7ca640a59066ece0ab3d183a8a79a4a"
+            "sha256": "f0bfaff4a2f5d199524a2c1a5800ff01c77ba0c60d4b08263ab5ed0b1418b1b9"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t7_stdout.txt",
-            "sha256": "b1d2dec5a715576be074ae26e212c191388ef118a385e13afb29e82ed32a698f"
+            "sha256": "9aa848baeb10f697cd5b7ca8870e23bdb50ec9a38379f196bc3af129878b16d0"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -521,13 +515,13 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t7_json_result.json",
-            "sha256": "b99a28da121e29f62b5fdf6175615019a523678aa4149ac0f4ececec84a1b9d5"
+            "sha256": "ca53a59b19b99223153c9adf51d227f8dc45cf2ad1d868869a9f099e9a682c52"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows.",
-        "cwd": "/root/evidence_cases/case_e07",
-        "duration_s": 4.77397,
+        "claim_statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64.",
+        "cwd": "/root/evidence_cases/case_e01",
+        "duration_s": 6.649395,
         "event_id": "t7",
         "evidence_draft": {
           "claim_id": "c1",
@@ -537,13 +531,13 @@
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "5a8893418d65187be037940f0f7b3378e7ca640a59066ece0ab3d183a8a79a4a"
+                "sha256": "f0bfaff4a2f5d199524a2c1a5800ff01c77ba0c60d4b08263ab5ed0b1418b1b9"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "b1d2dec5a715576be074ae26e212c191388ef118a385e13afb29e82ed32a698f"
+                "sha256": "9aa848baeb10f697cd5b7ca8870e23bdb50ec9a38379f196bc3af129878b16d0"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -555,43 +549,41 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "b99a28da121e29f62b5fdf6175615019a523678aa4149ac0f4ececec84a1b9d5"
+                "sha256": "ca53a59b19b99223153c9adf51d227f8dc45cf2ad1d868869a9f099e9a682c52"
               }
             ],
-            "duration_s": 4.77397,
+            "duration_s": 6.649395,
             "exit_code": 0,
-            "expected_signal": null,
+            "expected_signal": "relative_error <= 0.05",
             "json_parse_error": null,
             "json_result": {
-              "E": 0.0,
-              "best_transform": {
-                "permutation": [
-                  0,
-                  2,
-                  1,
-                  3
-                ],
-                "signs": [
-                  1,
-                  1,
-                  -1,
-                  -1
-                ]
-              },
-              "dtype": "torch.float32",
+              "beta": [
+                0.6214937239107042,
+                -0.9744126996365189
+              ],
               "finite": true,
-              "inputs_unmodified": true,
-              "metric": "contract E (shared signed permutation, both views, all rows, float64)",
-              "passes_contract": true,
+              "metric": "relative_l2_vs_float64_prediction",
+              "output": [
+                -0.09472084045410156,
+                -0.30071359872817993,
+                -0.18633419275283813,
+                0.1702047884464264
+              ],
+              "passed": true,
+              "prediction": [
+                -0.09472288505871636,
+                -0.3012943469888915,
+                -0.18583023043004424,
+                0.16988139132100616
+              ],
+              "relative_error": 0.0020652327553574673,
               "shape": [
-                2,
-                8,
                 4
               ],
               "tolerance": 0.05
             },
             "stderr": "",
-            "stdout": "{\"metric\": \"contract E (shared signed permutation, both views, all rows, float64)\", \"E\": 0.0, \"best_transform\": {\"permutation\": [0, 2, 1, 3], \"signs\": [1, 1, -1, -1]}, \"tolerance\": 0.05, \"finite\": true, \"dtype\": \"torch.float32\", \"shape\": [2, 8, 4], \"inputs_unmodified\": true, \"passes_contract\": true}\n",
+            "stdout": "{\"metric\": \"relative_l2_vs_float64_prediction\", \"output\": [-0.09472084045410156, -0.30071359872817993, -0.18633419275283813, 0.1702047884464264], \"prediction\": [-0.09472288505871636, -0.3012943469888915, -0.18583023043004424, 0.16988139132100616], \"beta\": [0.6214937239107042, -0.9744126996365189], \"relative_error\": 0.0020652327553574673, \"tolerance\": 0.05, \"finite\": true, \"shape\": [4], \"passed\": true}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -601,32 +593,30 @@
           "tool_event_id": "t7"
         },
         "exit_code": 0,
-        "expected_signal": null,
+        "expected_signal": "relative_error <= 0.05",
         "json_parse_error": null,
         "json_result": {
-          "E": 0.0,
-          "best_transform": {
-            "permutation": [
-              0,
-              2,
-              1,
-              3
-            ],
-            "signs": [
-              1,
-              1,
-              -1,
-              -1
-            ]
-          },
-          "dtype": "torch.float32",
+          "beta": [
+            0.6214937239107042,
+            -0.9744126996365189
+          ],
           "finite": true,
-          "inputs_unmodified": true,
-          "metric": "contract E (shared signed permutation, both views, all rows, float64)",
-          "passes_contract": true,
+          "metric": "relative_l2_vs_float64_prediction",
+          "output": [
+            -0.09472084045410156,
+            -0.30071359872817993,
+            -0.18633419275283813,
+            0.1702047884464264
+          ],
+          "passed": true,
+          "prediction": [
+            -0.09472288505871636,
+            -0.3012943469888915,
+            -0.18583023043004424,
+            0.16988139132100616
+          ],
+          "relative_error": 0.0020652327553574673,
           "shape": [
-            2,
-            8,
             4
           ],
           "tolerance": 0.05
@@ -639,7 +629,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "{\"metric\": \"contract E (shared signed permutation, both views, all rows, float64)\", \"E\": 0.0, \"best_transform\": {\"permutation\": [0, 2, 1, 3], \"signs\": [1, 1, -1, -1]}, \"tolerance\": 0.05, \"finite\": true, \"dtype\": \"torch.float32\", \"shape\": [2, 8, 4], \"inputs_unmodified\": true, \"passes_contract\": true}\n",
+        "stdout": "{\"metric\": \"relative_l2_vs_float64_prediction\", \"output\": [-0.09472084045410156, -0.30071359872817993, -0.18633419275283813, 0.1702047884464264], \"prediction\": [-0.09472288505871636, -0.3012943469888915, -0.18583023043004424, 0.16988139132100616], \"beta\": [0.6214937239107042, -0.9744126996365189], \"relative_error\": 0.0020652327553574673, \"tolerance\": 0.05, \"finite\": true, \"shape\": [4], \"passed\": true}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -650,54 +640,50 @@
     {
       "args": {
         "data": {
-          "E": 0.0,
-          "best_transform": {
-            "permutation": [
-              0,
-              2,
-              1,
-              3
-            ],
-            "signs": [
-              1,
-              1,
-              -1,
-              -1
-            ]
-          },
           "finite": true,
-          "inputs_unmodified": true,
-          "passes_contract": true,
+          "output": [
+            -0.09472084045410156,
+            -0.30071359872817993,
+            -0.18633419275283813,
+            0.1702047884464264
+          ],
+          "passed": true,
+          "prediction": [
+            -0.09472288505871636,
+            -0.3012943469888915,
+            -0.18583023043004424,
+            0.16988139132100616
+          ],
+          "relative_error": 0.0020652327553574673,
           "tolerance": 0.05
         },
         "event_id": "t7",
-        "status": "rebutted",
-        "summary": "Shared-transform contract error E computed in float64 over all 384 shared (p,s) transforms on the fixed make_inputs workload: E = 0.0 (best p=[0,2,1,3], s=[1,1,-1,-1]), far below the 0.05 tolerance. Output is finite float32 of shape (2,8,4) and inputs are unmodified. One shared transform fits both views and all rows, so the view-dependence concern is rebutted.",
-        "supports": "rebutted"
+        "status": "confirmed",
+        "summary": "On the contract's fixed make_inputs() workload, kernel output vs float64 ridge prediction gives relative error 0.00207 (norm 0.1 clamp), finite, shape (4, float32), far below the 0.05 tolerance.",
+        "supports": "confirmed"
       },
-      "created_at": "2026-09-24T06:38:26Z",
+      "created_at": "2026-09-24T06:11:08Z",
       "id": "t8",
       "output": {
         "claim": {
-          "created_at": "2026-09-24T06:38:12Z",
+          "created_at": "2026-09-24T06:10:32Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-24T06:38:26Z",
+              "created_at": "2026-09-24T06:11:08Z",
               "data": {
-                "E": 0.0,
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
                     "path": "probes/t7_probe.py",
-                    "sha256": "5a8893418d65187be037940f0f7b3378e7ca640a59066ece0ab3d183a8a79a4a"
+                    "sha256": "f0bfaff4a2f5d199524a2c1a5800ff01c77ba0c60d4b08263ab5ed0b1418b1b9"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t7_stdout.txt",
-                    "sha256": "b1d2dec5a715576be074ae26e212c191388ef118a385e13afb29e82ed32a698f"
+                    "sha256": "9aa848baeb10f697cd5b7ca8870e23bdb50ec9a38379f196bc3af129878b16d0"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -709,103 +695,98 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t7_json_result.json",
-                    "sha256": "b99a28da121e29f62b5fdf6175615019a523678aa4149ac0f4ececec84a1b9d5"
+                    "sha256": "ca53a59b19b99223153c9adf51d227f8dc45cf2ad1d868869a9f099e9a682c52"
                   }
                 ],
-                "best_transform": {
-                  "permutation": [
-                    0,
-                    2,
-                    1,
-                    3
-                  ],
-                  "signs": [
-                    1,
-                    1,
-                    -1,
-                    -1
-                  ]
-                },
-                "duration_s": 4.77397,
+                "duration_s": 6.649395,
                 "exit_code": 0,
-                "expected_signal": null,
+                "expected_signal": "relative_error <= 0.05",
                 "finite": true,
-                "inputs_unmodified": true,
                 "json_parse_error": null,
                 "json_result": {
-                  "E": 0.0,
-                  "best_transform": {
-                    "permutation": [
-                      0,
-                      2,
-                      1,
-                      3
-                    ],
-                    "signs": [
-                      1,
-                      1,
-                      -1,
-                      -1
-                    ]
-                  },
-                  "dtype": "torch.float32",
+                  "beta": [
+                    0.6214937239107042,
+                    -0.9744126996365189
+                  ],
                   "finite": true,
-                  "inputs_unmodified": true,
-                  "metric": "contract E (shared signed permutation, both views, all rows, float64)",
-                  "passes_contract": true,
+                  "metric": "relative_l2_vs_float64_prediction",
+                  "output": [
+                    -0.09472084045410156,
+                    -0.30071359872817993,
+                    -0.18633419275283813,
+                    0.1702047884464264
+                  ],
+                  "passed": true,
+                  "prediction": [
+                    -0.09472288505871636,
+                    -0.3012943469888915,
+                    -0.18583023043004424,
+                    0.16988139132100616
+                  ],
+                  "relative_error": 0.0020652327553574673,
                   "shape": [
-                    2,
-                    8,
                     4
                   ],
                   "tolerance": 0.05
                 },
-                "passes_contract": true,
+                "output": [
+                  -0.09472084045410156,
+                  -0.30071359872817993,
+                  -0.18633419275283813,
+                  0.1702047884464264
+                ],
+                "passed": true,
+                "prediction": [
+                  -0.09472288505871636,
+                  -0.3012943469888915,
+                  -0.18583023043004424,
+                  0.16988139132100616
+                ],
+                "relative_error": 0.0020652327553574673,
                 "stderr": "",
-                "stdout": "{\"metric\": \"contract E (shared signed permutation, both views, all rows, float64)\", \"E\": 0.0, \"best_transform\": {\"permutation\": [0, 2, 1, 3], \"signs\": [1, 1, -1, -1]}, \"tolerance\": 0.05, \"finite\": true, \"dtype\": \"torch.float32\", \"shape\": [2, 8, 4], \"inputs_unmodified\": true, \"passes_contract\": true}\n",
+                "stdout": "{\"metric\": \"relative_l2_vs_float64_prediction\", \"output\": [-0.09472084045410156, -0.30071359872817993, -0.18633419275283813, 0.1702047884464264], \"prediction\": [-0.09472288505871636, -0.3012943469888915, -0.18583023043004424, 0.16988139132100616], \"beta\": [0.6214937239107042, -0.9744126996365189], \"relative_error\": 0.0020652327553574673, \"tolerance\": 0.05, \"finite\": true, \"shape\": [4], \"passed\": true}\n",
                 "timed_out": false,
                 "timeout_s": 60,
                 "tolerance": 0.05
               },
               "id": "c1.e1",
               "kind": "runtime_probe",
-              "summary": "Shared-transform contract error E computed in float64 over all 384 shared (p,s) transforms on the fixed make_inputs workload: E = 0.0 (best p=[0,2,1,3], s=[1,1,-1,-1]), far below the 0.05 tolerance. Output is finite float32 of shape (2,8,4) and inputs are unmodified. One shared transform fits both views and all rows, so the view-dependence concern is rebutted.",
-              "supports": "rebutted",
+              "summary": "On the contract's fixed make_inputs() workload, kernel output vs float64 ridge prediction gives relative error 0.00207 (norm 0.1 clamp), finite, shape (4, float32), far below the 0.05 tolerance.",
+              "supports": "confirmed",
               "tool_event_id": "t7"
             }
           ],
           "id": "c1",
           "raised_by": "solo",
-          "rationale": "slot is computed from each view's own anchors, so view 0 and view 1 may end up with different column mappings; the contract requires one shared (p,s) over both views. The initial probe picks per-view transforms independently, so it can pass even when no shared transform exists. Also anchor ties in magnitude could collide slots within a view.",
+          "rationale": "The kernel accumulates in float32 with cancellation-prone E[x\u00b2]-m\u00b2 formulas (E[x0\u00b2]\u22481024 while variance\u22480.004, ~10 bits lost); only the 0.05 relative tolerance on final predictions can decide compliance.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "The same p and s must be used for every view and every row... view-dependent transforms are outside this equivalence. E is a min over shared transforms only, numerator includes BOTH views and ALL eight rows."
+              "summary": "The implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05, with prediction arithmetic evaluated in float64 or more accurately over the make_inputs() float32 values."
             }
           ],
-          "scope_rationale": "Contract requires one shared signed permutation across both views and all rows; a view-dependent transform violates this and E>0.05 would fail the fixed workload.",
-          "statement": "The kernel's output may not be expressible by a single shared signed permutation across both views, violating the contract's requirement that one p,s fit all views and rows.",
-          "status": "rebutted",
-          "updated_at": "2026-09-24T06:38:26Z"
+          "scope_rationale": "Contract requires ||output - prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the fixed make_inputs() workload, with prediction computed in float64.",
+          "statement": "run(X,y,Q) output satisfies ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 for the contract's fixed make_inputs() workload, with prediction computed in float64.",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T06:11:08Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-24T06:38:26Z",
+          "created_at": "2026-09-24T06:11:08Z",
           "data": {
-            "E": 0.0,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "5a8893418d65187be037940f0f7b3378e7ca640a59066ece0ab3d183a8a79a4a"
+                "sha256": "f0bfaff4a2f5d199524a2c1a5800ff01c77ba0c60d4b08263ab5ed0b1418b1b9"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "b1d2dec5a715576be074ae26e212c191388ef118a385e13afb29e82ed32a698f"
+                "sha256": "9aa848baeb10f697cd5b7ca8870e23bdb50ec9a38379f196bc3af129878b16d0"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -817,68 +798,64 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "b99a28da121e29f62b5fdf6175615019a523678aa4149ac0f4ececec84a1b9d5"
+                "sha256": "ca53a59b19b99223153c9adf51d227f8dc45cf2ad1d868869a9f099e9a682c52"
               }
             ],
-            "best_transform": {
-              "permutation": [
-                0,
-                2,
-                1,
-                3
-              ],
-              "signs": [
-                1,
-                1,
-                -1,
-                -1
-              ]
-            },
-            "duration_s": 4.77397,
+            "duration_s": 6.649395,
             "exit_code": 0,
-            "expected_signal": null,
+            "expected_signal": "relative_error <= 0.05",
             "finite": true,
-            "inputs_unmodified": true,
             "json_parse_error": null,
             "json_result": {
-              "E": 0.0,
-              "best_transform": {
-                "permutation": [
-                  0,
-                  2,
-                  1,
-                  3
-                ],
-                "signs": [
-                  1,
-                  1,
-                  -1,
-                  -1
-                ]
-              },
-              "dtype": "torch.float32",
+              "beta": [
+                0.6214937239107042,
+                -0.9744126996365189
+              ],
               "finite": true,
-              "inputs_unmodified": true,
-              "metric": "contract E (shared signed permutation, both views, all rows, float64)",
-              "passes_contract": true,
+              "metric": "relative_l2_vs_float64_prediction",
+              "output": [
+                -0.09472084045410156,
+                -0.30071359872817993,
+                -0.18633419275283813,
+                0.1702047884464264
+              ],
+              "passed": true,
+              "prediction": [
+                -0.09472288505871636,
+                -0.3012943469888915,
+                -0.18583023043004424,
+                0.16988139132100616
+              ],
+              "relative_error": 0.0020652327553574673,
               "shape": [
-                2,
-                8,
                 4
               ],
               "tolerance": 0.05
             },
-            "passes_contract": true,
+            "output": [
+              -0.09472084045410156,
+              -0.30071359872817993,
+              -0.18633419275283813,
+              0.1702047884464264
+            ],
+            "passed": true,
+            "prediction": [
+              -0.09472288505871636,
+              -0.3012943469888915,
+              -0.18583023043004424,
+              0.16988139132100616
+            ],
+            "relative_error": 0.0020652327553574673,
             "stderr": "",
-            "stdout": "{\"metric\": \"contract E (shared signed permutation, both views, all rows, float64)\", \"E\": 0.0, \"best_transform\": {\"permutation\": [0, 2, 1, 3], \"signs\": [1, 1, -1, -1]}, \"tolerance\": 0.05, \"finite\": true, \"dtype\": \"torch.float32\", \"shape\": [2, 8, 4], \"inputs_unmodified\": true, \"passes_contract\": true}\n",
+            "stdout": "{\"metric\": \"relative_l2_vs_float64_prediction\", \"output\": [-0.09472084045410156, -0.30071359872817993, -0.18633419275283813, 0.1702047884464264], \"prediction\": [-0.09472288505871636, -0.3012943469888915, -0.18583023043004424, 0.16988139132100616], \"beta\": [0.6214937239107042, -0.9744126996365189], \"relative_error\": 0.0020652327553574673, \"tolerance\": 0.05, \"finite\": true, \"shape\": [4], \"passed\": true}\n",
             "timed_out": false,
             "timeout_s": 60,
             "tolerance": 0.05
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Shared-transform contract error E computed in float64 over all 384 shared (p,s) transforms on the fixed make_inputs workload: E = 0.0 (best p=[0,2,1,3], s=[1,1,-1,-1]), far below the 0.05 tolerance. Output is finite float32 of shape (2,8,4) and inputs are unmodified. One shared transform fits both views and all rows, so the view-dependence concern is rebutted.",
-          "supports": "rebutted",
+          "summary": "On the contract's fixed make_inputs() workload, kernel output vs float64 ridge prediction gives relative error 0.00207 (norm 0.1 clamp), finite, shape (4, float32), far below the 0.05 tolerance.",
+          "supports": "confirmed",
           "tool_event_id": "t7"
         }
       },
@@ -891,18 +868,18 @@
         "decisive_claims": [
           "c1"
         ],
-        "reason": "Ran the contract's exact metric E (min over all 384 shared signed permutations, float64, both views and all eight rows) on the fixed make_inputs() workload via probe t7: E = 0.0 with best shared transform p=[0,2,1,3], s=[1,1,-1,-1], far below the 0.05 tolerance. Output was finite float32 of shape (2,8,4) and neither input was modified. The hypothesized failure (view-dependent transform from per-view anchors) was rebutted by this decisive shared-transform probe; the kernel satisfies the fixed-workload contract.",
+        "reason": "Ran the contract's fixed make_inputs() workload on the real GPU (tool event t7, run_claim_probe). Computed the contract's float64 ridge reference (beta = [0.6215, -0.9744], prediction over Q) and compared the kernel output: relative L2 error 0.00207 vs the 0.05 tolerance with the 0.1 norm clamp; output was a finite float32 vector of shape (4,). The only confirmed claim (c1, in_scope, evidenced by t7) is that the kernel satisfies the contract's acceptance criterion. The kernel's float32 E[x^2]-m^2 accumulation does introduce cancellation, but the resulting error is well within the contract's tolerance, and the contract explicitly imposes no thresholds on intermediates. No in-scope failures found; other inputs are excluded by the contract.",
         "verdict": "trust"
       },
-      "created_at": "2026-09-24T06:38:31Z",
+      "created_at": "2026-09-24T06:11:13Z",
       "id": "t9",
       "output": {
         "confidence": 0.97,
-        "created_at": "2026-09-24T06:38:31Z",
+        "created_at": "2026-09-24T06:11:13Z",
         "decisive_claims": [
           "c1"
         ],
-        "reason": "Ran the contract's exact metric E (min over all 384 shared signed permutations, float64, both views and all eight rows) on the fixed make_inputs() workload via probe t7: E = 0.0 with best shared transform p=[0,2,1,3], s=[1,1,-1,-1], far below the 0.05 tolerance. Output was finite float32 of shape (2,8,4) and neither input was modified. The hypothesized failure (view-dependent transform from per-view anchors) was rebutted by this decisive shared-transform probe; the kernel satisfies the fixed-workload contract.",
+        "reason": "Ran the contract's fixed make_inputs() workload on the real GPU (tool event t7, run_claim_probe). Computed the contract's float64 ridge reference (beta = [0.6215, -0.9744], prediction over Q) and compared the kernel output: relative L2 error 0.00207 vs the 0.05 tolerance with the 0.1 norm clamp; output was a finite float32 vector of shape (4,). The only confirmed claim (c1, in_scope, evidenced by t7) is that the kernel satisfies the contract's acceptance criterion. The kernel's float32 E[x^2]-m^2 accumulation does introduce cancellation, but the resulting error is well within the contract's tolerance, and the contract explicitly imposes no thresholds on intermediates. No in-scope failures found; other inputs are excluded by the contract.",
         "verdict": "trust"
       },
       "status": "ok",
@@ -911,11 +888,11 @@
   ],
   "verdict": {
     "confidence": 0.97,
-    "created_at": "2026-09-24T06:38:31Z",
+    "created_at": "2026-09-24T06:11:13Z",
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the contract's exact metric E (min over all 384 shared signed permutations, float64, both views and all eight rows) on the fixed make_inputs() workload via probe t7: E = 0.0 with best shared transform p=[0,2,1,3], s=[1,1,-1,-1], far below the 0.05 tolerance. Output was finite float32 of shape (2,8,4) and neither input was modified. The hypothesized failure (view-dependent transform from per-view anchors) was rebutted by this decisive shared-transform probe; the kernel satisfies the fixed-workload contract.",
+    "reason": "Ran the contract's fixed make_inputs() workload on the real GPU (tool event t7, run_claim_probe). Computed the contract's float64 ridge reference (beta = [0.6215, -0.9744], prediction over Q) and compared the kernel output: relative L2 error 0.00207 vs the 0.05 tolerance with the 0.1 norm clamp; output was a finite float32 vector of shape (4,). The only confirmed claim (c1, in_scope, evidenced by t7) is that the kernel satisfies the contract's acceptance criterion. The kernel's float32 E[x^2]-m^2 accumulation does introduce cancellation, but the resulting error is well within the contract's tolerance, and the contract explicitly imposes no thresholds on intermediates. No in-scope failures found; other inputs are excluded by the contract.",
     "verdict": "trust"
   }
 }

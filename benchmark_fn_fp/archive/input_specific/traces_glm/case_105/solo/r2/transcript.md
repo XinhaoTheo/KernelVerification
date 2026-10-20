@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_m`
+- Entry: `case_g`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 51.38s across 5 calls | tokens: in=56033 out=1552 total=57585
+- LLM time: 26.347s across 5 calls | tokens: in=54040 out=1544 total=55584
 - Stop reason: `verdict_recorded`
-- Verdict: `trust`
-- Confidence: 0.95
+- Verdict: `reject`
+- Confidence: 0.99
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_m"
+    "entry": "case_g"
   }
   Output summary:
   {
-    "entry": "case_m"
+    "entry": "case_g"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_m"
+    "entry": "case_g"
   }
   Output summary:
   {
-    "entry": "case_m"
+    "entry": "case_g"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_m"
+    "entry": "case_g"
   }
   Output summary:
   {
-    "entry": "case_m"
+    "entry": "case_g"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_m",
+    "entry": "case_g",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_m"
+    "entry": "case_g"
   }
 
-### Turn 2 - `solo` (5.546476248999994s, in=7569 out=420)
+### Turn 2 - `solo` (7.715499695999995s, in=7797 out=506)
 
 Message:
 
 ```text
-The workload is deliberately near-cancelling (result ≈ 0.003), and the kernel uses float32 Horner, which can accumulate rounding error far above the tolerance relative to the tiny reference. I'll record that claim and run the actual kernel.
+The kernel does a naive sequential float32 row-sum over columns with huge cancelling terms (±~33M) and tiny 0.25–0.75 terms. In real arithmetic the large terms cancel exactly, leaving a reference of only ~16–48, so float32 rounding error could easily exceed the E ≤ 0.1 contract. Let me record the claim and run the actual kernel.
 ```
 
 Tool calls:
@@ -73,15 +73,15 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The input generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), so the relative error denominator is tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error ~1e-5, giving relative error >> 2e-4.",
+    "rationale": "Input has w (up to 32*2^20 \u2248 3.3e7) and exact -w columns plus tiny 0.25\u20130.75 terms; real reference is small (~16\u201348 per row) while fp32 running sums at magnitude ~3e7 have rounding steps of ~4, so accumulated error may exceed 10% of the reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Relative L2 error vs float64 reference must be <= 0.0002, with denominator max(||reference||, 0.001*sqrt(8)); kernel uses float32 Horner with separate rounding."
+        "summary": "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008); Contract: every output must be finite and E <= 0.1 on the specified fully specified workload."
       }
     ],
-    "statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs()."
+    "statement": "The kernel's sequential float32 summation of the specified (64,128) workload produces E > 0.1 relative to a float64 reference, violating the contract."
   }
   Output summary:
   {
@@ -89,12 +89,12 @@ Tool calls:
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (28.486188645s, in=8251 out=273)
+### Turn 3 - `solo` (4.01243435100001s, in=8564 out=325)
 
 Message:
 
 ```text
-The previous claim call failed for missing scope_rationale. I'll re-record the claim with the scope rationale and then run the kernel against a float64 reference.
+The previous claim call failed for a missing scope_rationale. I'll re-record it and then run the actual kernel on the specified workload.
 ```
 
 Tool calls:
@@ -102,38 +102,38 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.",
+    "rationale": "Input has w (up to 32*2^20 \u2248 3.3e7) and exact -w columns plus tiny 0.25\u20130.75 terms; real reference is small (~16\u201348 per row) while fp32 running sums at magnitude ~3e7 have rounding steps of ~4, so accumulated error may exceed 10% of the reference norm.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops."
+        "summary": "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008); Contract: every output must be finite and E <= 0.1 on the specified fully specified workload (float32 (64,128) input, public seed and permutation)."
       }
     ],
-    "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to flo
-  ...[truncated 185 chars]
+    "scope_rationale": "The contract requires E <= 0.1 on exactly this specified workload (seed 730119, PERMUTATION given, (64,128) float32 input); if the kernel's fp32 sequential summatio
+  ...[truncated 228 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.",
+    "rationale": "Input has w (up to 32*2^20 \u2248 3.3e7) and exact -w columns plus tiny 0.25\u20130.75 terms; real reference is small (~16\u201348 per row) while fp32 running sums at magnitude ~3e7 have rounding steps of ~4, so accumulated error may exceed 10% of the reference norm.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops."
+        "summary": "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008); Contract: every output must be finite and E <= 0.1 on the specified fully specified workload (float32 (64,128) input, public seed and permutation)."
       }
     ],
-    "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to float32; near-cancellation makes this tolerance hard.",
-    "statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
+    "scope_rationale": "The contract requires E <= 0.1 on exactly this specified workload (seed 730119, PERMUTATION given, (64,128) float32 input); if the kernel's fp32 sequential summation yields E > 0.1, it directly violates this requirement.",
+    "statement": "The kernel's sequential float32 summation of the specified (64,128) workload produces E > 0.1 relative to a float64 reference, violating the contract.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (5.239173190999992s, in=9532 out=305)
+### Turn 4 - `solo` (6.381522407999995s, in=10025 out=248)
 
 Message:
 
 ```text
-I'll run the kernel on the actual workload and compute the contract's exact metric.
+I'll run the kernel on the exact specified workload and compare against a float64 reference.
 ```
 
 Tool calls:
@@ -142,8 +142,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_m\")\nimport numpy as np, torch\nfrom kernel import make_inputs, run\n\ncoeffs, points = make_inputs()\nout = run(coeffs, points)\ntorch.cuda.synchronize()\nout = out.detach().cpu().numpy().astype(np.float64)\nc = coeffs.cpu().numpy().astype(np.float64)\np = points.cpu().numpy().astype(np.float64)\nref = np.array([np.sum(c[i] * p[i]**np.arange(49)) for i in range(8)])\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(8))\nrel = np.linalg.norm(out - ref) / denom\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 reference, contract denominator\",\n  \"output\": out.tolist(), \"reference\": ref.tolist(),\n  \"ref_norm\": float(np.linalg.norm(ref)), \"denominator\": float(denom),\
-  ...[truncated 222 chars]
+    "code": "\nimport json, sys, torch\nsys.path.insert(0, \"/root/numerical_cases/case_g\")\nimport kernel\n\nvalues, = kernel.make_inputs(\"cuda\")\nout = kernel.run(values)\ntorch.cuda.synchronize()\nref = values.to(torch.float64).sum(dim=1)\nden = max(float(ref.norm()), 0.008)\nE = float((out.to(torch.float64) - ref).norm()) / den\nfinite = bool(torch.isfinite(out).all())\nprint(json.dumps({\"metric\": \"relative L2 error E vs float64 reference\", \"E\": E, \"contract_max\": 0.1,\n                  \"finite\": finite, \"ref_norm\": float(ref.norm()),\n                  \"out_norm\": float(out.to(torch.float64).norm()),\n                  \"max_abs_err\": float((out.to(torch.float64)-ref).abs().max()),\n                  \"ref_min\": float(ref.min()), \"ref_max\": fl
+  ...[truncated 54 chars]
   Output summary:
   {
     "artifacts": [
@@ -151,13 +151,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "e06ceed72dbf93e15067ce68d4acc133c5ae13f4a76a07fdd147f851ea0c322b"
+        "sha256": "92a29f8d94a0eb903bee9c4f24874565be399ee0b7529bafe20df1fa1edfb91e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "6874fac21defd60d2e2ee88fa8825597672c97f7c29924e2004ccc74ddd006d6"
+        "sha256": "949ac17138fc3c663ea29b0b339403ac1a53d425d3740ad4bea96e1c31827aa6"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -169,24 +169,22 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t7_json_result.json",
-        "sha256": "83ab84f508baed1932be30ee6ddc8009649852770c22d5c11ec60f21b20f90b0"
+        "sha256": "f779874ce05ee21215651ac211727d97f8210149283d3018e1b88d119abe963e"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
-    "duration_s": 5.8473,
+    "claim_statement": "The kernel's sequential float32 summation of the specified (64,128) workload produces E > 0.1 relative to a float64 reference, violating the contract.",
+    "duration_s": 5.396349,
     "event_id": "t7",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data
-  ...[truncated 4623 chars]
+    "evidence_dr
+  ...[truncated 2766 chars]
 
-### Turn 5 - `solo` (5.427423695000016s, in=12860 out=279)
+### Turn 5 - `solo` (4.041309830000003s, in=12136 out=233)
 
 Message:
 
 ```text
-The probe ran the kernel on the fixed workload and computed the contract's exact metric: relative L2 error 3.37e-5, well below the 2e-4 tolerance, with finite output of shape (8,). My hypothesis of excessive float32 Horner rounding is rebutted.
+The probe confirms E ≈ 0.90, far above the 0.1 contract limit. I'll finalize the evidence and record the verdict.
 ```
 
 Tool calls:
@@ -195,34 +193,33 @@ Tool calls:
   Args:
   {
     "data": {
-      "abs_err": 1.997119552737297e-06,
-      "denominator": 0.05921132733264433,
-      "metric": "relative L2 error vs float64 reference, contract denominator",
-      "passes": true,
-      "relative_error": 3.372867393290552e-05,
-      "tolerance": 0.0002
+      "E": 0.9001987201108703,
+      "contract_max": 0.1,
+      "finite": true,
+      "max_abs_err": 35.75,
+      "ref_norm": 257.13274781715376
     },
     "event_id": "t7",
-    "status": "rebutted",
-    "summary": "Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.",
-    "supports": "rebutted"
+    "status": "confirmed",
+    "summary": "Running the supplied Triton kernel on the exact specified workload (seed 730119, (64,128) fp32 input) and comparing against a float64 reference: E = 0.9002, far above the contract limit of 0.1 (max abs err 35.75 vs reference row norms ~28.5\u201335.75). Outputs are finite, so the failure is purely numerical.",
+    "supports": "confirmed"
   }
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "rebutted",
+    "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.",
-    "supports": "rebutted",
+    "summary": "Running the supplied Triton kernel on the exact specified workload (seed 730119, (64,128) fp32 input) and comparing against a float64 reference: E = 0.9002, far above the contract limit of 0.1 (max abs err 35.75 vs reference row norms ~28.5\u201335.75). Outputs are finite, so the failure is purely numerical.",
+    "supports": "confirmed",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (6.680375386999998s, in=17821 out=275)
+### Turn 6 - `solo` (4.196377132999999s, in=15518 out=232)
 
 Message:
 
 ```text
-The kernel was run on the exact fixed workload; relative L2 error 3.37e-5 is well within the 2e-4 tolerance, output finite of shape (8,). No further claims would change the verdict. Recording the verdict.
+The single decisive claim is confirmed with an in-scope, contract-backed probe. Recording the verdict.
 ```
 
 Tool calls:
@@ -230,21 +227,21 @@ Tool calls:
 - `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
-    "verdict": "trust"
+    "reason": "Ran the supplied Triton kernel on the exact specified workload (kernel.make_inputs, seed 730119, (64,128) fp32, public permutation) on the GPU and compared to a float64 reference (tool event t7, evidence c1.e1). Result: all outputs finite but E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.9002, far above the contract limit of 0.1 (max abs error 35.75 against reference row values ~28.5\u201335.75). The contract explicitly requires E <= 0.1 on this fully specified input; the kernel's sequential float32 accumulation of large cancelling terms (~\u00b133.5e6) destroys accuracy. Reject.",
+    "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
-    "verdict": "trust"
+    "reason": "Ran the supplied Triton kernel on the exact specified workload (kernel.make_inputs, seed 730119, (64,128) fp32, public permutation) on the GPU and compared to a float64 reference (tool event t7, evidence c1.e1). Result: all outputs finite but E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.9002, far above the contract limit of 0.1 (max abs error 35.75 against reference row values ~28.5\u201335.75). The contract explicitly requires E <= 0.1 on this fully specified input; the kernel's sequential float32 accumulation of large cancelling terms (~\u00b133.5e6) destroys accuracy. Reject.",
+    "verdict": "reject"
   }
 
 ## Description Model
@@ -253,46 +250,46 @@ No description model recorded.
 
 ## Claims
 
-### c1 - `rebutted`
+### c1 - `confirmed`
 
-Statement: The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().
+Statement: The kernel's sequential float32 summation of the specified (64,128) workload produces E > 0.1 relative to a float64 reference, violating the contract.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to float32; near-cancellation makes this tolerance hard.
+Scope rationale: The contract requires E <= 0.1 on exactly this specified workload (seed 730119, PERMUTATION given, (64,128) float32 input); if the kernel's fp32 sequential summation yields E > 0.1, it directly violates this requirement.
 
 Scope evidence:
-- `problem.txt`: Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops.
+- `problem.txt`: Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008); Contract: every output must be finite and E <= 0.1 on the specified fully specified workload (float32 (64,128) input, public seed and permutation).
 
-Rationale: The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value ≈ 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.
+Rationale: Input has w (up to 32*2^20 ≈ 3.3e7) and exact -w columns plus tiny 0.25–0.75 terms; real reference is small (~16–48 per row) while fp32 running sums at magnitude ~3e7 have rounding steps of ~4, so accumulated error may exceed 10% of the reference norm.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Running the supplied Triton kernel on the exact specified workload (seed 730119, (64,128) fp32 input) and comparing against a float64 reference: E = 0.9002, far above the contract limit of 0.1 (max abs err 35.75 vs reference row norms ~28.5–35.75). Outputs are finite, so the failure is purely numerical.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_m"
+  "entry": "case_g"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_m"
+  "entry": "case_g"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_m"
+  "entry": "case_g"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_m"
+  "entry": "case_g"
 }
 
 ### t5 - record_claim - error
@@ -306,16 +303,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.",
+  "rationale": "Input has w (up to 32*2^20 \u2248 3.3e7) and exact -w columns plus tiny 0.25\u20130.75 terms; real reference is small (~16\u201348 per row) while fp32 running sums at magnitude ~3e7 have rounding steps of ~4, so accumulated error may exceed 10% of the reference norm.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops."
+      "summary": "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008); Contract: every output must be finite and E <= 0.1 on the specified fully specified workload (float32 (64,128) input, public seed and permutation)."
     }
   ],
-  "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to float32; near-cancellation makes this tolerance hard.",
-  "statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
+  "scope_rationale": "The contract requires E <= 0.1 on exactly this specified workload (seed 730119, PERMUTATION given, (64,128) float32 input); if the kernel's fp32 sequential summation yields E > 0.1, it directly violates this requirement.",
+  "statement": "The kernel's sequential float32 summation of the specified (64,128) workload produces E > 0.1 relative to a float64 reference, violating the contract.",
   "status": "open"
 }
 
@@ -327,13 +324,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "e06ceed72dbf93e15067ce68d4acc133c5ae13f4a76a07fdd147f851ea0c322b"
+      "sha256": "92a29f8d94a0eb903bee9c4f24874565be399ee0b7529bafe20df1fa1edfb91e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "6874fac21defd60d2e2ee88fa8825597672c97f7c29924e2004ccc74ddd006d6"
+      "sha256": "949ac17138fc3c663ea29b0b339403ac1a53d425d3740ad4bea96e1c31827aa6"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -345,12 +342,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t7_json_result.json",
-      "sha256": "83ab84f508baed1932be30ee6ddc8009649852770c22d5c11ec60f21b20f90b0"
+      "sha256": "f779874ce05ee21215651ac211727d97f8210149283d3018e1b88d119abe963e"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
-  "duration_s": 5.8473,
+  "claim_statement": "The kernel's sequential float32 summation of the specified (64,128) workload produces E > 0.1 relative to a float64 reference, violating the contract.",
+  "duration_s": 5.396349,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -360,54 +357,52 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "e06ceed72dbf93e15067ce68d4acc133c5ae13f4a76a07fdd147f851ea0c322b"
+          "sha256": "92a29f8d94a0eb903bee9c4f24874565be399ee0b7529bafe20df1fa1edfb91e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "6874fac21defd60d2e2ee88fa8825597672c97f7c29924e2004ccc74ddd006d6"
+          "sha256": "949ac17138fc3c663ea29b0b339403ac1a53d425d3740ad4bea96e1c31827aa6"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "descript
-...[truncated 3823 chars]
+ 
+...[truncated 1966 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "rebutted",
+  "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.",
-  "supports": "rebutted",
+  "summary": "Running the supplied Triton kernel on the exact specified workload (seed 730119, (64,128) fp32 input) and comparing against a float64 reference: E = 0.9002, far above the contract limit of 0.1 (max abs err 35.75 vs reference row norms ~28.5\u201335.75). Outputs are finite, so the failure is purely numerical.",
+  "supports": "confirmed",
   "tool_event_id": "t7"
 }
 
 ### t9 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.99,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
-  "verdict": "trust"
+  "reason": "Ran the supplied Triton kernel on the exact specified workload (kernel.make_inputs, seed 730119, (64,128) fp32, public permutation) on the GPU and compared to a float64 reference (tool event t7, evidence c1.e1). Result: all outputs finite but E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.9002, far above the contract limit of 0.1 (max abs error 35.75 against reference row values ~28.5\u201335.75). The contract explicitly requires E <= 0.1 on this fully specified input; the kernel's sequential float32 accumulation of large cancelling terms (~\u00b133.5e6) destroys accuracy. Reject.",
+  "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-24T00:17:19Z",
+  "confidence": 0.99,
+  "created_at": "2026-09-23T21:36:11Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
-  "verdict": "trust"
+  "reason": "Ran the supplied Triton kernel on the exact specified workload (kernel.make_inputs, seed 730119, (64,128) fp32, public permutation) on the GPU and compared to a float64 reference (tool event t7, evidence c1.e1). Result: all outputs finite but E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.9002, far above the contract limit of 0.1 (max abs error 35.75 against reference row values ~28.5\u201335.75). The contract explicitly requires E <= 0.1 on this fully specified input; the kernel's sequential float32 accumulation of large cancelling terms (~\u00b133.5e6) destroys accuracy. Reject.",
+  "verdict": "reject"
 }

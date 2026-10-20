@@ -151,6 +151,49 @@ def test_case_index_ranges_exclude_archive_gap_when_new_cases_are_added(index, t
     assert registry.read_bytes() == before
 
 
+def test_case_index_shows_contiguous_current_ids_without_historical_number_column(index, tmp_path, monkeypatch):
+    import json
+    import index_cases
+
+    benchmark = tmp_path / "benchmark_fn_fp"
+    details = {}
+    for number in range(1, 169):
+        case = f"case_{number:02}"
+        archived = number > 96
+        archive = "archive/input_specific" if number <= 144 else "archive/numerical_pilot"
+        detail = {
+            "dataset": "benchmark_fn_fp" if number <= 32 else "real_kernel_challenges",
+            "public_dir": f"{archive + '/' if archived else ''}triton_eval_cases/{case}",
+            "previous_id": f"historical_{number}",
+        }
+        if archived:
+            detail.update(status="archived", archive_root=archive)
+        details[case] = detail
+        public = benchmark / detail["public_dir"]
+        public.mkdir(parents=True)
+        (public / "kernel.py").write_text("# frozen")
+    registry = benchmark / "case_map.json"
+    registry.write_text(json.dumps({
+        "case_details": details, "next_case_number": 169, "next_active_case_number": 97,
+    }))
+    before = registry.read_bytes()
+    monkeypatch.setattr(index_cases, "ROOT", benchmark)
+
+    index_cases.main()
+
+    text = (benchmark / "CASE_INDEX.md").read_text()
+    assert "当前 96 题；另有 72 题已归档" in text
+    assert "当前编号：`case_01`–`case_96`。" in text
+    assert "| `case_33`–`case_96` | 64 |" in text
+    assert "下一当前编号为 `case_97`" in text
+    assert "| 编号 | 状态 | 题库 / 来源机制 |" in text
+    assert "| 旧编号 |" not in text and "historical_" not in text
+    assert "`case_97`–`case_144` | 48 |" in text
+    assert "`case_145`–`case_168` | 24 |" in text
+    assert "2026-10-19 重排" not in text
+    assert registry.read_bytes() == before
+
+
 def test_selects_first_valid_attempt_even_if_wrong_and_later_one_correct(index):
     wrong = row(trial="earlier", outcome="wrong_verdict")
     correct = row(trial="later")

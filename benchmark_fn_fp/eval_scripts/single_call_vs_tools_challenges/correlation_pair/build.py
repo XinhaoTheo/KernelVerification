@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "sin
 PRIVATE = Path("private_data") / "correlation_pair"
 BUDGET = 0.1
 M, K = 64, 128
-CASE_IDS = ("case_93", "case_94")
+CASE_IDS = ("case_99", "case_100")
 
 GENERATOR = '''
 def make_inputs(device="cuda"):
@@ -166,7 +166,7 @@ def main():
     key = {"budget":BUDGET,"numpy_version":np.__version__,
            "validation":"CPU emulation only; Triton GPU not run; no LLM evaluated", "cases":{}}
     # Opaque case ordering, with no label in any visible artifact.
-    for name,p,metrics in [("case_93",reinforce,bad),("case_94",cancel,good)]:
+    for name,p,metrics in [("case_99",reinforce,bad),("case_100",cancel,good)]:
         folder=public/name
         folder.mkdir(parents=True,exist_ok=False)
         code=KERNEL+f"\nSEED = {seed}\nPERMUTATION = {p.tolist()!r}\n"+GENERATOR

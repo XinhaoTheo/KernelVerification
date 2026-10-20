@@ -13,18 +13,18 @@ benchmark_fn_fp/
 │   └── migration_*.json
 ├── traces_opus5/     claude-opus-5; existing historical paths retained
 └── archive/
-    ├── input_specific/traces_glm/     299 trials, case_91–case_138
-    ├── input_specific/traces_opus5/   11 trials, case_91–case_138
-    └── numerical_pilot/traces_glm/    72 trials, case_139–case_162
+    ├── input_specific/traces_glm/     299 trials, case_97–case_144
+    ├── input_specific/traces_opus5/   11 trials, case_97–case_144
+    └── numerical_pilot/traces_glm/    72 trials, case_145–case_168
 ```
 
-All GLM runs use `<case>/<arm>/rN/`, with `r1`, `r2`, and so on numbering attempts within each case/arm, including failed or incomplete attempts. The same number across arms does not imply the same model, budget or experimental configuration. `trace_meta.json` retains the former label in `original_trial`, the former location in `original_trace_path`, and historical selection order in `selection_sort_key`. Provider and exact API model remain provenance fields alongside dataset, case, arm and current trial. They do not create separate directories or sections in the GLM index. Cases93/94 now belong to `single_call_vs_tools_challenges`; their original `correlation_pair` source field remains in metadata.
+All GLM runs use `<case>/<arm>/rN/`, with `r1`, `r2`, and so on numbering attempts within each case/arm, including failed or incomplete attempts. The same number across arms does not imply the same model, budget or experimental configuration. `trace_meta.json` retains the former label in `original_trial`, the former location in `original_trace_path`, and historical selection order in `selection_sort_key`. Provider and exact API model remain provenance fields alongside dataset, case, arm and current trial. They do not create separate directories or sections in the GLM index. Cases99/100 now belong to `single_call_vs_tools_challenges`; their original `correlation_pair` source field remains in metadata.
 
-The 2026-09-23 migration combined 12 main GLM runs and 8 case_93/case_94 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. The later [correlation-pair cleanup](traces_opus5/migration_20260930_correlation_cleanup.json) relocated its nine Opus attempts to the case directories now stored at `archive/input_specific/traces_opus5/case_93/` and `case_94/` and removed eight duplicate GLM source archives after verification. The canonical model trees now hold the pair's records once each; [its consolidated audit](archive/input_specific/single_call_vs_tools_challenges/README.md#correlation-audit) preserves the separate Opus, GLM 32K and GLM 64K findings.
+The 2026-09-23 migration combined 12 main GLM runs and 8 case_99/case_100 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. The later [correlation-pair cleanup](traces_opus5/migration_20260930_correlation_cleanup.json) relocated its nine Opus attempts to the case directories now stored at `archive/input_specific/traces_opus5/case_99/` and `case_100/` and removed eight duplicate GLM source archives after verification. The canonical model trees now hold the pair's records once each; [its consolidated audit](archive/input_specific/single_call_vs_tools_challenges/README.md#correlation-audit) preserves the separate Opus, GLM 32K and GLM 64K findings.
 
 The later `rN` normalization changes directory names and metadata identity/provenance fields, while preserving raw requests, responses, transcripts and probe payloads. Its [migration manifest](traces_glm/migration_20260930_trial_names.json) retains the original metadata bytes and path mapping. Earlier migration manifests remain unchanged; the subsequent correlation-pair cleanup separately records source-archive relocation and deduplication.
 
-Start with [the GLM index](traces_glm/INDEX.md): it covers all 90 active cases and three arms, with 392 recorded GLM trials. Each case/arm links to its earliest completed judgment, including wrong answers and valid abstentions. Running, failed and missing slots remain visible.
+Start with [the GLM index](traces_glm/INDEX.md): it covers all 96 active cases and three arms, with 416 recorded GLM trials. Each case/arm links to its earliest completed judgment, including wrong answers and valid abstentions. Running, failed and missing slots remain visible.
 The [2026-09-30 completion report](traces_glm/COMPLETION_20260930.md)
 records the historical 104-case/312-slot completion, including 24 now-retired
 pilot cases. Their 72 GLM trials are preserved in
@@ -32,7 +32,7 @@ pilot cases. Their 72 GLM trials are preserved in
 coverage and scoring; expansion and reruns have stopped. In general, the
 presence of a reserved directory does not mean that its experiment is complete.
 
-Cases 91–138 (previously 34–81) and their GLM and Opus records now live in [archive/input_specific](archive/input_specific/README.md). These studies selected data, parameters or input domains to change labels for the same computation. They are excluded from current coverage and scoring. Current public cases are 01–90: originals 01–32 and [kernel challenges](real_kernel_challenges/README.md) 33–90. Directory IDs were compacted on October 19, 2026. Raw records and historical verdicts are preserved; case_map.json records every old ID.
+Archived cases and their original GLM and Opus records live under [archive/input_specific](archive/input_specific/README.md) and [archive/numerical_pilot](archive/numerical_pilot/README.md). They are excluded from current coverage and scoring. Current public cases are 01–96: originals 01–32 and [kernel challenges](real_kernel_challenges/README.md) 33–96. Human reports and directory links use current IDs. The registry maps preserved historical records to those IDs.
 
 ## A tool-enabled run
 

@@ -1,22 +1,18 @@
-import sys, json, torch, numpy as np
-sys.path.insert(0, "/root/evidence_cases/case_e09")
-import kernel
+import sys, json
+sys.path.insert(0, "/root/evidence_cases/case_e03")
+import numpy as np, torch
+from kernel import make_inputs_numpy, make_inputs, run_sequence
 
-w, v, G = kernel.make_inputs()
-w64 = w.double().clone(); v64 = v.double().clone(); G64 = G.double().clone()
-hist = kernel.run_sequence(w, v, G)  # retained views, observed after full sequence
-# float64 target history w[1..6]
-targets = []
-for t in range(6):
-    v64 = 0.75 * v64 + 0.25 * G64[t]
-    w64 = w64 - 0.03125 * v64
-    targets.append(w64.clone())
-H_target = torch.stack(targets)
-H = torch.stack([h.double() for h in hist])
-err = float(torch.linalg.norm(H - H_target) / max(torch.linalg.norm(H_target), 0.1))
-rows_equal_w6 = [bool(torch.equal(h.double(), H[5].double())) for h in hist]
-print(json.dumps({"history_relative_error": err, "tolerance": 0.025,
-                  "exceeds_tolerance": err > 0.025,
-                  "all_rows_equal_final_w6": all(rows_equal_w6),
-                  "rows_equal_w6": rows_equal_w6,
-                  "H_target_fro": float(torch.linalg.norm(H_target))}))
+initial, delta, P = make_inputs_numpy()
+gpu = make_inputs(device="cuda")
+
+ref = initial.astype(np.float64).copy()
+for op in (0, 1, 2):
+    ref = ref[P[op]].copy() if op < 2 else ref + delta.astype(np.float64)
+actual = run_sequence(*gpu, (0, 1, 2)).detach().cpu().numpy()
+err = float(np.max(np.abs(actual.astype(np.float64) - ref)))
+order = P[1][P[0]]
+inv = bool(np.array_equal(order[order], np.arange(8)))
+print(json.dumps({"word": [0, 1, 2], "max_abs_error": err, "tolerance": 1e-5,
+                  "fails": err > 1e-5, "P0": P[0].tolist(), "P1": P[1].tolist(),
+                  "order_after_01": order.tolist(), "order_is_involution": inv}))

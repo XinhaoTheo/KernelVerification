@@ -1,4 +1,4 @@
-"""Separate case_129–case_132 cohort; reuse the same trace validity and pairing rules."""
+"""Separate case_135–case_138 cohort; reuse the same trace validity and pairing rules."""
 import sys
 from pathlib import Path
 
@@ -12,5 +12,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Also export JSON under private_data/reports/")
     args = parser.parse_args()
-    renderer.main(export_json=args.json, version="v3", cases=tuple(f"case_{i + 118:02d}" for i in range(11, 15)),
+    renderer.main(export_json=args.json, version="v3", cases=tuple(f"case_{i + 124:02d}" for i in range(11, 15)),
                   trials=("ea_methods_v3_r1", "ea_methods_v3_r2"))

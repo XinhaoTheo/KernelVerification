@@ -1,0 +1,753 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_x",
+    "has_error": null,
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _logdet_kernel(Matrix, Output, N: tl.constexpr):\n    rows = tl.arange(0, N)\n    columns = tl.arange(0, N)\n    matrix = tl.load(Matrix + rows[:, None] * N + columns[None, :]).to(tl.float32)\n    output = tl.full((), 0.0, tl.float32)\n    for k in tl.static_range(0, N):\n        pivot = tl.sum(tl.sum(tl.where((rows[:, None] == k) &\n                                      (columns[None, :] == k), matrix, 0.0), 0), 0)\n        column = tl.sum(tl.where(columns[None, :] == k, matrix, 0.0), 1)\n        pivot_row = tl.sum(tl.where(rows[:, None] == k, matrix, 0.0), 0)\n        multiplier = tl.div_rn(column, pivot)\n        product = multiplier[:, None] * pivot_row[None, :]\n        updated = matrix - product\n        matrix = tl.where((rows[:, None] > k) & (columns[None, :] > k),\n                          updated, matrix)\n        output = output + tl.log(pivot)\n    tl.store(Output, output)\n\n\ndef run(matrix):\n    output = torch.empty((1,), device=matrix.device, dtype=torch.float32)\n    _logdet_kernel[(1,)](matrix, output, N=8, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(98262))\n    factor = rng.integers(-8, 9, (8, 7), dtype=np.int64)\n    gram = np.sum(factor[:, None, :] * factor[None, :, :], axis=2, dtype=np.int64)\n    matrix = (gram.astype(np.float64) + (1.0 / 1024.0) * np.eye(8)).astype(np.float32)\n    return (matrix,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "passed": null,
+    "problem_text": "Compute the natural logarithm of the determinant of one SPD matrix.\n\nThe entire workload is the float32 matrix of shape (8, 8) returned by\nmake_inputs() in kernel.py. The mathematical reference is log(det(A)) for\nthe actual stored float32 entries of A, evaluated in float64. A is positive\ndefinite. The integer Gram construction and diagonal regularizer are only\nthe input generator; use the supplied entries, not an idealized matrix.\n\nReturn a finite float32 vector of shape (1,). The numerical error is\n  ||output-reference||_2 / max(||reference||_2, 1.0).\nThis error must be <= 0.0001. The requirement concerns this fixed workload;\narbitrary alternative matrices and seeds are outside its scope.\n\nThe implementation uses elimination without pivoting and accumulates the\nlogarithms of its diagonal pivots. FP multiply/add fusion is disabled, and\ndivision of the multipliers uses round-to-nearest float32 division.\n",
+    "rounds": null,
+    "session_dir": "/root/numerical_cases/case_x",
+    "status": "unverified",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-24T01:09:49Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:10:03Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f48b706b017b60c9d822a9c0acf795312e88327e6187c5e6846475e513983392"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "9bfb0a77967df467ad267f3b2cc9c9c75e4203b85e3b3690e87d65c0292ab175"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "5bbda32bd7bd0f5caf8b66044a2168bc621e5723db5af10035ad56e5a8bb3ff3"
+              }
+            ],
+            "duration_s": 5.127086,
+            "exit_code": 0,
+            "expected_signal": "rel_l2_err relative to 1e-4 bound",
+            "json_parse_error": null,
+            "json_result": {
+              "finite": true,
+              "output": [
+                25.792875289916992
+              ],
+              "pass": false,
+              "reference": 25.811250835476812,
+              "rel_l2_err": 0.0007119199947707914
+            },
+            "output": 25.792875289916992,
+            "pass": false,
+            "reference": 25.811250835476812,
+            "rel_l2_err": 0.0007119199947707914,
+            "stderr": "",
+            "stdout": "{\"output\": [25.792875289916992], \"reference\": 25.811250835476812, \"rel_l2_err\": 0.0007119199947707914, \"pass\": false, \"finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output 25.792875 vs float64 reference 25.811251 on the exact fixed workload from make_inputs(); relative L2 error 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. Output is finite and float32 shape (1,), so the failure is purely the error bound.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Gaussian elimination in fp32 with a log-sum over 8 pivots could plausibly exceed the 1e-4 relative error bound; this is the core contract requirement.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs(), with reference = log(det(A)) in float64 of the stored float32 entries."
+        }
+      ],
+      "scope_rationale": "The contract requires the returned float32 log-det value to be within relative L2 error <= 1e-4 of the float64 reference for the exact fixed matrix from make_inputs(); any larger error is a contract violation.",
+      "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs().",
+      "status": "confirmed",
+      "updated_at": "2026-09-24T01:10:03Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_x",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_x"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_x"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_x"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_x",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 3.5267725019999716,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll test the kernel's output against a float64 log-det reference on the exact fixed workload.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The contract requires relative error <= 1e-4 on this fixed workload; Gaussian elimination in fp32 with log-sum could plausibly exceed it.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs()."
+              }
+            ],
+            "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs()."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.527,
+        "input_tokens": 7392,
+        "output_tokens": 186
+      }
+    },
+    {
+      "duration_s": 3.168168202000004,
+      "role": "solo",
+      "round": 3,
+      "text": "The previous record_claim failed because scope_rationale was missing. I'll re-send it correctly, then run the probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Gaussian elimination in fp32 with a log-sum over 8 pivots could plausibly exceed the 1e-4 relative error bound; this is the core contract requirement.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs(), with reference = log(det(A)) in float64 of the stored float32 entries."
+              }
+            ],
+            "scope_rationale": "The contract requires the returned float32 log-det value to be within relative L2 error <= 1e-4 of the float64 reference for the exact fixed matrix from make_inputs(); any larger error is a contract violation.",
+            "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs()."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.168,
+        "input_tokens": 7966,
+        "output_tokens": 245
+      }
+    },
+    {
+      "duration_s": 3.8776054209999984,
+      "role": "solo",
+      "round": 4,
+      "text": "I'll run the probe on the fixed workload comparing kernel output to a float64 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport numpy as np, torch, sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_x\")\nimport kernel\n\nm, = kernel.make_inputs(device=\"cuda\")\nout = kernel.run(m).cpu().numpy()\n# reference in float64 of stored fp32 entries\nA = m.cpu().numpy().astype(np.float64)\nref = np.float64(np.linalg.slogdet(A)[1])\nerr = float(np.linalg.norm(out - np.array([ref])) / max(np.linalg.norm(np.array([ref])), 1.0))\nprint(json.dumps({\"output\": out.tolist(), \"reference\": float(ref), \"rel_l2_err\": err, \"pass\": err <= 1e-4, \"finite\": bool(np.isfinite(out).all())}))\n",
+            "expected_signal": "rel_l2_err relative to 1e-4 bound"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.878,
+        "input_tokens": 9147,
+        "output_tokens": 218
+      }
+    },
+    {
+      "duration_s": 4.7462241690000155,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe shows the kernel's output deviates by ~7.1e-4 relative error, well above the 1e-4 bound. I'll record this as confirmed and issue the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "output": 25.792875289916992,
+              "pass": false,
+              "reference": 25.811250835476812,
+              "rel_l2_err": 0.0007119199947707914
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "Kernel output 25.792875 vs float64 reference 25.811251 on the exact fixed workload from make_inputs(); relative L2 error 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. Output is finite and float32 shape (1,), so the failure is purely the error bound.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.746,
+        "input_tokens": 11067,
+        "output_tokens": 267
+      }
+    },
+    {
+      "duration_s": 6.838031139000009,
+      "role": "solo",
+      "round": 6,
+      "text": "The single in-scope claim is confirmed by a decisive runtime probe: on the exact fixed workload from `make_inputs()`, the kernel outputs 25.792875 while the float64 reference is 25.811251, a relative L2 error of 7.12e-4 \u2014 about 7\u00d7 the contract bound of 1e-4. The output is finite, float32, shape (1,), so the only failure is the error bound itself. This is a clean reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t7 ran kernel.run on the exact fixed workload from make_inputs() (seed 98262 Gram + 1/1024 regularizer) and compared to the contract-mandated float64 log-det reference of the stored float32 entries. Output = 25.792875289916992, reference = 25.811250835476812, relative L2 error = 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. The output is finite and of correct shape/dtype, and float32 representation of the reference alone would introduce only ~1e-6 error, so this is a genuine accuracy failure of the elimination-based log-det computation, not a metric artifact. Claim c1 is in_scope with contract scope evidence (problem.txt error-bound requirement).",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.838,
+        "input_tokens": 14221,
+        "output_tokens": 447
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_x"
+      },
+      "created_at": "2026-09-24T01:09:42Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_x",
+        "has_error": null,
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _logdet_kernel(Matrix, Output, N: tl.constexpr):\n    rows = tl.arange(0, N)\n    columns = tl.arange(0, N)\n    matrix = tl.load(Matrix + rows[:, None] * N + columns[None, :]).to(tl.float32)\n    output = tl.full((), 0.0, tl.float32)\n    for k in tl.static_range(0, N):\n        pivot = tl.sum(tl.sum(tl.where((rows[:, None] == k) &\n                                      (columns[None, :] == k), matrix, 0.0), 0), 0)\n        column = tl.sum(tl.where(columns[None, :] == k, matrix, 0.0), 1)\n        pivot_row = tl.sum(tl.where(rows[:, None] == k, matrix, 0.0), 0)\n        multiplier = tl.div_rn(column, pivot)\n        product = multiplier[:, None] * pivot_row[None, :]\n        updated = matrix - product\n        matrix = tl.where((rows[:, None] > k) & (columns[None, :] > k),\n                          updated, matrix)\n        output = output + tl.log(pivot)\n    tl.store(Output, output)\n\n\ndef run(matrix):\n    output = torch.empty((1,), device=matrix.device, dtype=torch.float32)\n    _logdet_kernel[(1,)](matrix, output, N=8, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(98262))\n    factor = rng.integers(-8, 9, (8, 7), dtype=np.int64)\n    gram = np.sum(factor[:, None, :] * factor[None, :, :], axis=2, dtype=np.int64)\n    matrix = (gram.astype(np.float64) + (1.0 / 1024.0) * np.eye(8)).astype(np.float32)\n    return (matrix,)\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "passed": null,
+        "problem_text": "Compute the natural logarithm of the determinant of one SPD matrix.\n\nThe entire workload is the float32 matrix of shape (8, 8) returned by\nmake_inputs() in kernel.py. The mathematical reference is log(det(A)) for\nthe actual stored float32 entries of A, evaluated in float64. A is positive\ndefinite. The integer Gram construction and diagonal regularizer are only\nthe input generator; use the supplied entries, not an idealized matrix.\n\nReturn a finite float32 vector of shape (1,). The numerical error is\n  ||output-reference||_2 / max(||reference||_2, 1.0).\nThis error must be <= 0.0001. The requirement concerns this fixed workload;\narbitrary alternative matrices and seeds are outside its scope.\n\nThe implementation uses elimination without pivoting and accumulates the\nlogarithms of its diagonal pivots. FP multiply/add fusion is disabled, and\ndivision of the multipliers uses round-to-nearest float32 division.\n",
+        "rounds": null,
+        "session_dir": "/root/numerical_cases/case_x",
+        "status": "unverified",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_x"
+      },
+      "created_at": "2026-09-24T01:09:42Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the natural logarithm of the determinant of one SPD matrix.\n\nThe entire workload is the float32 matrix of shape (8, 8) returned by\nmake_inputs() in kernel.py. The mathematical reference is log(det(A)) for\nthe actual stored float32 entries of A, evaluated in float64. A is positive\ndefinite. The integer Gram construction and diagonal regularizer are only\nthe input generator; use the supplied entries, not an idealized matrix.\n\nReturn a finite float32 vector of shape (1,). The numerical error is\n  ||output-reference||_2 / max(||reference||_2, 1.0).\nThis error must be <= 0.0001. The requirement concerns this fixed workload;\narbitrary alternative matrices and seeds are outside its scope.\n\nThe implementation uses elimination without pivoting and accumulates the\nlogarithms of its diagonal pivots. FP multiply/add fusion is disabled, and\ndivision of the multipliers uses round-to-nearest float32 division.\n",
+        "entry": "case_x",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_x"
+      },
+      "created_at": "2026-09-24T01:09:42Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_x",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1619
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 67
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 916
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_x",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-24T01:09:42Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_x\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_x",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 67,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The contract requires relative error <= 1e-4 on this fixed workload; Gaussian elimination in fp32 with log-sum could plausibly exceed it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs()."
+          }
+        ],
+        "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs()."
+      },
+      "created_at": "2026-09-24T01:09:46Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t5",
+        "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Gaussian elimination in fp32 with a log-sum over 8 pivots could plausibly exceed the 1e-4 relative error bound; this is the core contract requirement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs(), with reference = log(det(A)) in float64 of the stored float32 entries."
+          }
+        ],
+        "scope_rationale": "The contract requires the returned float32 log-det value to be within relative L2 error <= 1e-4 of the float64 reference for the exact fixed matrix from make_inputs(); any larger error is a contract violation.",
+        "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs()."
+      },
+      "created_at": "2026-09-24T01:09:49Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-24T01:09:49Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Gaussian elimination in fp32 with a log-sum over 8 pivots could plausibly exceed the 1e-4 relative error bound; this is the core contract requirement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs(), with reference = log(det(A)) in float64 of the stored float32 entries."
+          }
+        ],
+        "scope_rationale": "The contract requires the returned float32 log-det value to be within relative L2 error <= 1e-4 of the float64 reference for the exact fixed matrix from make_inputs(); any larger error is a contract violation.",
+        "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs().",
+        "status": "open",
+        "updated_at": "2026-09-24T01:09:49Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport numpy as np, torch, sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_x\")\nimport kernel\n\nm, = kernel.make_inputs(device=\"cuda\")\nout = kernel.run(m).cpu().numpy()\n# reference in float64 of stored fp32 entries\nA = m.cpu().numpy().astype(np.float64)\nref = np.float64(np.linalg.slogdet(A)[1])\nerr = float(np.linalg.norm(out - np.array([ref])) / max(np.linalg.norm(np.array([ref])), 1.0))\nprint(json.dumps({\"output\": out.tolist(), \"reference\": float(ref), \"rel_l2_err\": err, \"pass\": err <= 1e-4, \"finite\": bool(np.isfinite(out).all())}))\n",
+        "expected_signal": "rel_l2_err relative to 1e-4 bound"
+      },
+      "created_at": "2026-09-24T01:09:58Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "f48b706b017b60c9d822a9c0acf795312e88327e6187c5e6846475e513983392"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "9bfb0a77967df467ad267f3b2cc9c9c75e4203b85e3b3690e87d65c0292ab175"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "5bbda32bd7bd0f5caf8b66044a2168bc621e5723db5af10035ad56e5a8bb3ff3"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs().",
+        "cwd": "/root/numerical_cases/case_x",
+        "duration_s": 5.127086,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f48b706b017b60c9d822a9c0acf795312e88327e6187c5e6846475e513983392"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "9bfb0a77967df467ad267f3b2cc9c9c75e4203b85e3b3690e87d65c0292ab175"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "5bbda32bd7bd0f5caf8b66044a2168bc621e5723db5af10035ad56e5a8bb3ff3"
+              }
+            ],
+            "duration_s": 5.127086,
+            "exit_code": 0,
+            "expected_signal": "rel_l2_err relative to 1e-4 bound",
+            "json_parse_error": null,
+            "json_result": {
+              "finite": true,
+              "output": [
+                25.792875289916992
+              ],
+              "pass": false,
+              "reference": 25.811250835476812,
+              "rel_l2_err": 0.0007119199947707914
+            },
+            "stderr": "",
+            "stdout": "{\"output\": [25.792875289916992], \"reference\": 25.811250835476812, \"rel_l2_err\": 0.0007119199947707914, \"pass\": false, \"finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "rel_l2_err relative to 1e-4 bound",
+        "json_parse_error": null,
+        "json_result": {
+          "finite": true,
+          "output": [
+            25.792875289916992
+          ],
+          "pass": false,
+          "reference": 25.811250835476812,
+          "rel_l2_err": 0.0007119199947707914
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"output\": [25.792875289916992], \"reference\": 25.811250835476812, \"rel_l2_err\": 0.0007119199947707914, \"pass\": false, \"finite\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "output": 25.792875289916992,
+          "pass": false,
+          "reference": 25.811250835476812,
+          "rel_l2_err": 0.0007119199947707914
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "Kernel output 25.792875 vs float64 reference 25.811251 on the exact fixed workload from make_inputs(); relative L2 error 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. Output is finite and float32 shape (1,), so the failure is purely the error bound.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-24T01:10:03Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-24T01:09:49Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-24T01:10:03Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "f48b706b017b60c9d822a9c0acf795312e88327e6187c5e6846475e513983392"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "9bfb0a77967df467ad267f3b2cc9c9c75e4203b85e3b3690e87d65c0292ab175"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "5bbda32bd7bd0f5caf8b66044a2168bc621e5723db5af10035ad56e5a8bb3ff3"
+                  }
+                ],
+                "duration_s": 5.127086,
+                "exit_code": 0,
+                "expected_signal": "rel_l2_err relative to 1e-4 bound",
+                "json_parse_error": null,
+                "json_result": {
+                  "finite": true,
+                  "output": [
+                    25.792875289916992
+                  ],
+                  "pass": false,
+                  "reference": 25.811250835476812,
+                  "rel_l2_err": 0.0007119199947707914
+                },
+                "output": 25.792875289916992,
+                "pass": false,
+                "reference": 25.811250835476812,
+                "rel_l2_err": 0.0007119199947707914,
+                "stderr": "",
+                "stdout": "{\"output\": [25.792875289916992], \"reference\": 25.811250835476812, \"rel_l2_err\": 0.0007119199947707914, \"pass\": false, \"finite\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel output 25.792875 vs float64 reference 25.811251 on the exact fixed workload from make_inputs(); relative L2 error 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. Output is finite and float32 shape (1,), so the failure is purely the error bound.",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Gaussian elimination in fp32 with a log-sum over 8 pivots could plausibly exceed the 1e-4 relative error bound; this is the core contract requirement.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs(), with reference = log(det(A)) in float64 of the stored float32 entries."
+            }
+          ],
+          "scope_rationale": "The contract requires the returned float32 log-det value to be within relative L2 error <= 1e-4 of the float64 reference for the exact fixed matrix from make_inputs(); any larger error is a contract violation.",
+          "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs().",
+          "status": "confirmed",
+          "updated_at": "2026-09-24T01:10:03Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-24T01:10:03Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f48b706b017b60c9d822a9c0acf795312e88327e6187c5e6846475e513983392"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "9bfb0a77967df467ad267f3b2cc9c9c75e4203b85e3b3690e87d65c0292ab175"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "5bbda32bd7bd0f5caf8b66044a2168bc621e5723db5af10035ad56e5a8bb3ff3"
+              }
+            ],
+            "duration_s": 5.127086,
+            "exit_code": 0,
+            "expected_signal": "rel_l2_err relative to 1e-4 bound",
+            "json_parse_error": null,
+            "json_result": {
+              "finite": true,
+              "output": [
+                25.792875289916992
+              ],
+              "pass": false,
+              "reference": 25.811250835476812,
+              "rel_l2_err": 0.0007119199947707914
+            },
+            "output": 25.792875289916992,
+            "pass": false,
+            "reference": 25.811250835476812,
+            "rel_l2_err": 0.0007119199947707914,
+            "stderr": "",
+            "stdout": "{\"output\": [25.792875289916992], \"reference\": 25.811250835476812, \"rel_l2_err\": 0.0007119199947707914, \"pass\": false, \"finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output 25.792875 vs float64 reference 25.811251 on the exact fixed workload from make_inputs(); relative L2 error 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. Output is finite and float32 shape (1,), so the failure is purely the error bound.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 ran kernel.run on the exact fixed workload from make_inputs() (seed 98262 Gram + 1/1024 regularizer) and compared to the contract-mandated float64 log-det reference of the stored float32 entries. Output = 25.792875289916992, reference = 25.811250835476812, relative L2 error = 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. The output is finite and of correct shape/dtype, and float32 representation of the reference alone would introduce only ~1e-6 error, so this is a genuine accuracy failure of the elimination-based log-det computation, not a metric artifact. Claim c1 is in_scope with contract scope evidence (problem.txt error-bound requirement).",
+        "verdict": "reject"
+      },
+      "created_at": "2026-09-24T01:10:10Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-09-24T01:10:10Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 ran kernel.run on the exact fixed workload from make_inputs() (seed 98262 Gram + 1/1024 regularizer) and compared to the contract-mandated float64 log-det reference of the stored float32 entries. Output = 25.792875289916992, reference = 25.811250835476812, relative L2 error = 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. The output is finite and of correct shape/dtype, and float32 representation of the reference alone would introduce only ~1e-6 error, so this is a genuine accuracy failure of the elimination-based log-det computation, not a metric artifact. Claim c1 is in_scope with contract scope evidence (problem.txt error-bound requirement).",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-09-24T01:10:10Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t7 ran kernel.run on the exact fixed workload from make_inputs() (seed 98262 Gram + 1/1024 regularizer) and compared to the contract-mandated float64 log-det reference of the stored float32 entries. Output = 25.792875289916992, reference = 25.811250835476812, relative L2 error = 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. The output is finite and of correct shape/dtype, and float32 representation of the reference alone would introduce only ~1e-6 error, so this is a genuine accuracy failure of the elimination-based log-det computation, not a metric artifact. Claim c1 is in_scope with contract scope evidence (problem.txt error-bound requirement).",
+    "verdict": "reject"
+  }
+}

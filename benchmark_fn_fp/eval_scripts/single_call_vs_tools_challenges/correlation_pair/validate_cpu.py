@@ -3,8 +3,14 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.archive_paths import (
+    canonical_case_rows, frozen_case_id, frozen_case_rows,
+)
 
 try:
     from .build import measure
@@ -39,7 +45,7 @@ def main():
     key = json.loads((private/"answer_key_cpu.json").read_text())
     outputs = {}
     data = {}
-    for name, expected in key["cases"].items():
+    for name, expected in canonical_case_rows(ROOT, "correlation_pair", key["cases"]).items():
         path=ROOT.parent/"triton_eval_cases"/name/"kernel.py"
         code=path.read_text()
         assert hashlib.sha256(code.encode()).hexdigest()==expected["kernel_sha256"]
@@ -55,7 +61,8 @@ def main():
             assert np.isfinite(array).all()
             assert array.dtype==np.float32
             assert hashlib.sha256(array.tobytes()).hexdigest()==sha
-            with np.load(private/f"{name}_inputs.npz") as artifact:
+            original = frozen_case_id(ROOT, "correlation_pair", name)
+            with np.load(private/f"{original}_inputs.npz") as artifact:
                 assert np.array_equal(array,artifact[label])
         actual=measure(x,a,b,np.arange(len(a)))
         assert actual["cpu_ground_truth"]==expected["cpu_ground_truth"]
@@ -73,7 +80,8 @@ def main():
     assert np.array_equal(left[0],right[0]) and np.array_equal(left[1],right[1])
     # Exact row multisets, not just approximately matching mean and variance.
     assert sorted(row.tobytes() for row in left[2])==sorted(row.tobytes() for row in right[2])
-    result={"checks_passed":True,"gpu_verified":False,"model_evaluated":False,"cases":outputs}
+    result={"checks_passed":True,"gpu_verified":False,"model_evaluated":False,
+            "cases":frozen_case_rows(ROOT, "correlation_pair", outputs)}
     (private/"validation_cpu.json").write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2))
 

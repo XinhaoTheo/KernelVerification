@@ -1,24 +1,24 @@
 [
   {
-    "created_at": "2026-09-30T08:52:10Z",
+    "created_at": "2026-09-30T09:01:58Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T08:52:24Z",
+        "created_at": "2026-09-30T09:02:18Z",
         "data": {
-          "E": 0.08686038181585151,
+          "E": 0.0019032712117112664,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t6_probe.py",
-              "sha256": "11a57e75b0b7538403dce9c57df6ce66cced844db391d490332a3ee7e82fc732"
+              "sha256": "9ac02444140341c3d9dc4049281816059cb0efd66167c512a18db85bb376d44a"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t6_stdout.txt",
-              "sha256": "a8dc6046638f3d60d8b756947dd50f4d0ad336b467d9cb5cccd92f85a70a4c59"
+              "sha256": "32705fe546397f7ba414ab5838928112992e39951c762dcacf02c7e53646a2e6"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -30,47 +30,55 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t6_json_result.json",
-              "sha256": "c37da28692b68ef0fb96c76c04690fbea3ef516c67224f0d15ec8a60d0bdb7d9"
+              "sha256": "a9ece4017c1633b87c857fd307dd4f75f48c92d40e96a7eba13dde82f229805a"
             }
           ],
-          "duration_s": 6.491112,
-          "err_norm": 1.5346152887126971,
+          "duration_s": 4.793438,
           "exit_code": 0,
-          "expected_signal": null,
+          "expected_signal": "E <= 0.001 if compliant else E > 0.001",
           "finite": true,
           "json_parse_error": null,
           "json_result": {
-            "E": 0.08686038181585151,
-            "err_norm": 1.5346152887126971,
+            "E": 0.0019032712117112664,
             "finite": true,
-            "ref_norm": 17.667609290115266
+            "num": 0.00012276643834890214,
+            "out_norm": 0.06454333095632812,
+            "ref_norm": 0.0645028609656322,
+            "shape": [
+              32
+            ]
           },
-          "ref_norm": 17.667609290115266,
+          "num": 0.00012276643834890214,
+          "out_norm": 0.06454333095632812,
+          "ref_norm": 0.0645028609656322,
+          "shape": [
+            32
+          ],
           "stderr": "",
-          "stdout": "{\"E\": 0.08686038181585151, \"finite\": true, \"ref_norm\": 17.667609290115266, \"err_norm\": 1.5346152887126971}\n",
+          "stdout": "{\"E\": 0.0019032712117112664, \"finite\": true, \"num\": 0.00012276643834890214, \"ref_norm\": 0.0645028609656322, \"out_norm\": 0.06454333095632812, \"shape\": [32]}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "On the exact make_inputs() workload, kernel output is finite and E = 0.0869 <= 0.12 budget, so the budget-violation claim is false.",
-        "supports": "rebutted",
+        "summary": "On the exact make_inputs() workload (seed 813, n=128, d=32), kernel output is finite but E = 0.00190 > 0.001 budget vs the float64 reference on the same float32 inputs (num=1.228e-4, ref_norm=6.450e-2, 32 outputs). The fp16 rounding of softmax probabilities (line 15) causes the violation.",
+        "supports": "confirmed",
         "tool_event_id": "t6"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "The kernel quantizes weights to 7-step levels before the matvec, and x is constructed partly along the quantization residual direction, so relative error may exceed 0.12.",
+    "rationale": "The kernel deliberately rounds softmax probabilities to fp16 before the value reduction. With N=128, per-probability fp16 error ~5e-4 relative, and the value tensor is constructed (v -= 0.9*(p@v)) to make the output a near-cancellation residual, so the reduced-precision path may exceed the E<=0.001 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract defines E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(#outputs)) and requires all outputs finite and E <= 0.12 on the exact make_inputs workload."
+        "summary": "Implementation satisfies contract iff all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(#outputs)) <= 0.001, on exactly the make_inputs() workload."
       }
     ],
-    "scope_rationale": "Violates the explicit E <= 0.12 budget on the single specified make_inputs() workload.",
-    "statement": "The kernel's E metric (relative error vs float64 reference on the exact make_inputs workload) exceeds 0.12, or outputs are non-finite.",
-    "status": "rebutted",
-    "updated_at": "2026-09-30T08:52:24Z"
+    "scope_rationale": "Contract requires E <= 0.001 on the single make_inputs() workload; any larger relative error on that exact workload is a budget violation.",
+    "statement": "On the exact make_inputs() workload (seed 813, n=128, d=32), the kernel output violates the contract's numerical budget E > 0.001 relative to the float64 reference of the same operation on the same float32 inputs, or produces non-finite output.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T09:02:18Z"
   }
 ]

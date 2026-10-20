@@ -3,23 +3,26 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):
+def _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):
+    n = tl.arange(0, N)
     d = tl.arange(0, D)
-    h = tl.full((D,), 0.0, tl.float32)
-    for t in range(T):
-        a = tl.load(A + t * D + d)
-        b = tl.load(B + t * D + d)
-        h = a * h + b
-        h = h.to(tl.float16).to(tl.float32)
-        tl.store(O + t * D + d, h)
+    q = tl.load(Q + d)
+    k = tl.load(K + n[:, None] * D + d[None, :])
+    v = tl.load(V + n[:, None] * D + d[None, :])
+    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)
+    p = tl.exp(scores - tl.max(scores, 0))
+    p = p / tl.sum(p, 0)
+    p = p.to(tl.float16).to(tl.float32)
+    y = tl.sum(p[:, None] * v, 0)
+    tl.store(O + d, y)
 
-def run(a, b):
-    t, d = a.shape
-    out = torch.empty_like(b)
-    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)
+def run(q, k, v):
+    n, d = k.shape
+    out = torch.empty(d, dtype=torch.float32, device=q.device)
+    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'recurrence', 'seed': 454, 't': 896, 'd': 32, 'decay': 0.99, 'noise': 0.0001, 'bias': 0.01}
+CONFIG = {'family': 'attention', 'seed': 815, 'n': 128, 'd': 32, 'scale': 1.9000000000000001, 'center': 0.5}
 
 def make_inputs(device="cuda"):
     import numpy as np

@@ -1,39 +1,45 @@
+import itertools
 import numpy as np
 import torch
 import triton
 import triton.language as tl
 
-SEED = 194003
+SEED = 150405
 
 
 @triton.jit
-def _pruned_ffn(X, Out, N: tl.constexpr, BLOCK: tl.constexpr):
-    row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
-    x0 = tl.load(X + row * 12, row < N, other=0.0)
-    x1 = tl.load(X + row * 12 + 1, row < N, other=0.0)
-    value = 0.25 * x0 + 0.5 * x1
-    tl.store(Out + row, value, row < N)
+def _dropout(Seeds, X, Masks, Offsets, Out, SIZE: tl.constexpr,
+             BLOCK: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    row = index // 8
+    channel = index % 8
+    seed = tl.load(Seeds + row, row < SIZE, other=0)
+    mask = tl.load(Masks + channel)
+    offset = tl.load(Offsets + channel)
+    folded = seed & mask
+    folded = folded ^ (folded >> 8)
+    folded = folded ^ (folded >> 4)
+    folded = folded ^ (folded >> 2)
+    folded = folded ^ (folded >> 1)
+    keep = (folded & 1) ^ offset
+    activation = tl.load(X + channel)
+    value = tl.where(keep != 0, 2.0 * activation, 0.0)
+    tl.store(Out + index, value, row < SIZE)
 
 
-def run(x, weights, biases, coefficients):
-    output = torch.empty((x.shape[0],), dtype=torch.float32, device=x.device)
-    _pruned_ffn[(triton.cdiv(x.shape[0], 128),)](
-        x, output, N=x.shape[0], BLOCK=128, enable_fp_fusion=False)
+def run(seeds, x, masks, offsets):
+    output = torch.empty((seeds.numel(), 8), device=x.device, dtype=torch.float32)
+    _dropout[(triton.cdiv(seeds.numel() * 8, 256),)](
+        seeds, x, masks, offsets, output, SIZE=seeds.numel(), BLOCK=256)
     return output
 
 
 def make_inputs_numpy():
     rng = np.random.Generator(np.random.PCG64(SEED))
-    center = rng.choice(np.asarray([-1, 1]), size=12)
-    flip_probability = rng.uniform(0.05, 0.4)
-    flips = np.where(rng.uniform(size=(6, 12)) < flip_probability, -1, 1)
-    magnitudes = rng.choice(np.asarray([0.5, 1.0]), size=(6, 12))
-    weights = (center[None, :] * flips * magnitudes).astype(np.float32)
-    biases = (0.75 * np.abs(weights).sum(axis=1)).astype(np.float32)
-    coefficients = np.full(6, 0.25, dtype=np.float32)
-    smoke = np.concatenate((np.zeros((1, 12)), np.eye(12), -np.eye(12),
-                            rng.uniform(-1.0, 1.0, size=(16, 12))), axis=0).astype(np.float32)
-    return smoke, weights, biases, coefficients
+    masks = rng.choice(np.arange(1, 1024), size=8, replace=False).astype(np.int32)
+    offsets = rng.integers(0, 2, size=8, dtype=np.int32)
+    activation = rng.uniform(0.25, 1.75, size=8).astype(np.float32)
+    return np.arange(1024, dtype=np.int32), activation, masks, offsets
 
 
 def make_inputs(device="cuda"):
@@ -42,15 +48,24 @@ def make_inputs(device="cuda"):
 
 def initial_probe():
     inputs = make_inputs()
-    before = [value.clone() for value in inputs]
     actual = run(*inputs)
-    x, w, b, c = [value.double() for value in inputs]
-    expected = 0.25*x[:, 0] + 0.5*x[:, 1] + torch.relu(x @ w.T - b) @ c
-    error = torch.abs(actual.double() - expected)
-    structural = (actual.dtype == torch.float32 and actual.shape == (41,)
-                  and bool(torch.isfinite(actual).all())
-                  and all(torch.equal(a, z) for a, z in zip(inputs, before)))
-    return {"scope": "41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples",
-            "max_absolute_error": float(error.max()), "tolerance": 1.0,
-            "shape_dtype_finite_and_inputs_unmodified": bool(structural),
-            "all_passed": bool(structural and float(error.max()) <= 1.0)}
+    values = actual.detach().cpu().numpy()
+    x = inputs[1].detach().cpu().numpy()
+    allowed = np.logical_or(values == 0, values == 2*x[None, :])
+    keep = (values != 0).astype(np.int32)
+    means = keep.mean(axis=0)
+    pair_errors = []
+    for first, second in itertools.combinations(range(8), 2):
+        counts = np.bincount(keep[:, first] + 2*keep[:, second], minlength=4)
+        pair_errors.append(float(np.max(np.abs(counts/1024 - 0.25))))
+    marginal_error = float(np.max(np.abs(means - 0.5)))
+    pair_error = max(pair_errors)
+    structural_ok = (values.shape == (1024, 8) and values.dtype == np.float32
+                     and bool(np.isfinite(values).all()) and bool(allowed.all()))
+    return {"scope": "all 1024 seeds; eight marginal and 28 pair histograms",
+            "marginal_keep_probabilities": means.tolist(),
+            "max_marginal_probability_error": marginal_error,
+            "max_pair_pattern_probability_error": pair_error,
+            "shape_dtype_finite_and_allowed_values": structural_ok,
+            "all_passed": bool(structural_ok and marginal_error <= 1/1024
+                               and pair_error <= 1/1024)}

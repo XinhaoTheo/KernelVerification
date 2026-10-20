@@ -5,22 +5,22 @@ import triton.language as tl
 
 
 @triton.jit
-def _solve_kernel(Matrix, RHS, Output, N: tl.constexpr, STEPS: tl.constexpr):
+def _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):
     i = tl.arange(0, N)
     j = tl.arange(0, N)
-    matrix = tl.load(Matrix + i[:, None] * N + j[None, :]).to(tl.float32)
-    rhs = tl.load(RHS + i).to(tl.float32)
-    state = tl.full((N,), 0.0, tl.float32)
+    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])
+    state = tl.load(Initial + i).to(tl.float32)
     for step in range(STEPS):
-        residual = rhs - tl.sum(matrix * state[None, :], axis=1)
-        state = state + residual
+        forcing = tl.load(Drive + step * N + i)
+        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing
+        state = next_state.to(tl.float16).to(tl.float32)
     tl.store(Output + i, state)
 
 
-def run(matrix, rhs):
+def run(matrix, initial, drive):
     output = torch.empty((16,), device=matrix.device, dtype=torch.float32)
-    _solve_kernel[(1,)](matrix, rhs, output, N=16, STEPS=64,
-                       num_warps=4, enable_fp_fusion=False)
+    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,
+                            num_warps=4, enable_fp_fusion=False)
     return output
 
 
@@ -29,16 +29,17 @@ def make_inputs_numpy():
     while len(orthogonal) < 16:
         orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])
     orthogonal /= 4.0
-    eigenvalues = np.array([0.03125, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75,
-                            0.875, 1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75],
-                           dtype=np.float64)
-    matrix = np.sum(orthogonal[:, :, None] * eigenvalues[None, :, None]
-                    * orthogonal.T[None, :, :], axis=1).astype(np.float32)
-    rng = np.random.Generator(np.random.PCG64(701010))
-    rhs = rng.normal(0.0, 1.0, 16).astype(np.float32)
-    norm = np.sqrt(np.sum(rhs.astype(np.float64) ** 2, dtype=np.float64))
-    rhs = (rhs.astype(np.float64) / norm).astype(np.float32)
-    return matrix, rhs
+    matrix_rng = np.random.Generator(np.random.PCG64(20260923))
+    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)
+    upper = np.diag(diagonal)
+    upper += np.diag(np.full(15, 0.1875), 1)
+    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)
+    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)
+    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)
+    rng = np.random.Generator(np.random.PCG64(202009))
+    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)
+    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)
+    return matrix, initial, drive
 
 
 def make_inputs(device="cuda"):

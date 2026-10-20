@@ -5,36 +5,36 @@
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_e11",
+    "entry": "case_e05",
     "has_error": null,
-    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 194001\n\n\n@triton.jit\ndef _pruned_ffn(X, Out, N: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    x0 = tl.load(X + row * 12, row < N, other=0.0)\n    x1 = tl.load(X + row * 12 + 1, row < N, other=0.0)\n    value = 0.25 * x0 + 0.5 * x1\n    tl.store(Out + row, value, row < N)\n\n\ndef run(x, weights, biases, coefficients):\n    output = torch.empty((x.shape[0],), dtype=torch.float32, device=x.device)\n    _pruned_ffn[(triton.cdiv(x.shape[0], 128),)](\n        x, output, N=x.shape[0], BLOCK=128, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    center = rng.choice(np.asarray([-1, 1]), size=12)\n    flip_probability = rng.uniform(0.05, 0.4)\n    flips = np.where(rng.uniform(size=(6, 12)) < flip_probability, -1, 1)\n    magnitudes = rng.choice(np.asarray([0.5, 1.0]), size=(6, 12))\n    weights = (center[None, :] * flips * magnitudes).astype(np.float32)\n    biases = (0.75 * np.abs(weights).sum(axis=1)).astype(np.float32)\n    coefficients = np.full(6, 0.25, dtype=np.float32)\n    smoke = np.concatenate((np.zeros((1, 12)), np.eye(12), -np.eye(12),\n                            rng.uniform(-1.0, 1.0, size=(16, 12))), axis=0).astype(np.float32)\n    return smoke, weights, biases, coefficients\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(value).to(device) for value in make_inputs_numpy())\n\n\ndef initial_probe():\n    inputs = make_inputs()\n    before = [value.clone() for value in inputs]\n    actual = run(*inputs)\n    x, w, b, c = [value.double() for value in inputs]\n    expected = 0.25*x[:, 0] + 0.5*x[:, 1] + torch.relu(x @ w.T - b) @ c\n    error = torch.abs(actual.double() - expected)\n    structural = (actual.dtype == torch.float32 and actual.shape == (41,)\n                  and bool(torch.isfinite(actual).all())\n                  and all(torch.equal(a, z) for a, z in zip(inputs, before)))\n    return {\"scope\": \"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\",\n            \"max_absolute_error\": float(error.max()), \"tolerance\": 1.0,\n            \"shape_dtype_finite_and_inputs_unmodified\": bool(structural),\n            \"all_passed\": bool(structural and float(error.max()) <= 1.0)}\n",
+    "kernel_code": "import itertools\nimport numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 150400\n\n\n@triton.jit\ndef _dropout(Seeds, X, Masks, Offsets, Out, SIZE: tl.constexpr,\n             BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    row = index // 8\n    channel = index % 8\n    seed = tl.load(Seeds + row, row < SIZE, other=0)\n    mask = tl.load(Masks + channel)\n    offset = tl.load(Offsets + channel)\n    folded = seed & mask\n    folded = folded ^ (folded >> 8)\n    folded = folded ^ (folded >> 4)\n    folded = folded ^ (folded >> 2)\n    folded = folded ^ (folded >> 1)\n    keep = (folded & 1) ^ offset\n    activation = tl.load(X + channel)\n    value = tl.where(keep != 0, 2.0 * activation, 0.0)\n    tl.store(Out + index, value, row < SIZE)\n\n\ndef run(seeds, x, masks, offsets):\n    output = torch.empty((seeds.numel(), 8), device=x.device, dtype=torch.float32)\n    _dropout[(triton.cdiv(seeds.numel() * 8, 256),)](\n        seeds, x, masks, offsets, output, SIZE=seeds.numel(), BLOCK=256)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    masks = rng.choice(np.arange(1, 1024), size=8, replace=False).astype(np.int32)\n    offsets = rng.integers(0, 2, size=8, dtype=np.int32)\n    activation = rng.uniform(0.25, 1.75, size=8).astype(np.float32)\n    return np.arange(1024, dtype=np.int32), activation, masks, offsets\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(value).to(device) for value in make_inputs_numpy())\n\n\ndef initial_probe():\n    inputs = make_inputs()\n    actual = run(*inputs)\n    values = actual.detach().cpu().numpy()\n    x = inputs[1].detach().cpu().numpy()\n    allowed = np.logical_or(values == 0, values == 2*x[None, :])\n    keep = (values != 0).astype(np.int32)\n    means = keep.mean(axis=0)\n    pair_errors = []\n    for first, second in itertools.combinations(range(8), 2):\n        counts = np.bincount(keep[:, first] + 2*keep[:, second], minlength=4)\n        pair_errors.append(float(np.max(np.abs(counts/1024 - 0.25))))\n    marginal_error = float(np.max(np.abs(means - 0.5)))\n    pair_error = max(pair_errors)\n    structural_ok = (values.shape == (1024, 8) and values.dtype == np.float32\n                     and bool(np.isfinite(values).all()) and bool(allowed.all()))\n    return {\"scope\": \"all 1024 seeds; eight marginal and 28 pair histograms\",\n            \"marginal_keep_probabilities\": means.tolist(),\n            \"max_marginal_probability_error\": marginal_error,\n            \"max_pair_pattern_probability_error\": pair_error,\n            \"shape_dtype_finite_and_allowed_values\": structural_ok,\n            \"all_passed\": bool(structural_ok and marginal_error <= 1/1024\n                               and pair_error <= 1/1024)}\n",
     "passed": null,
-    "problem_text": "Validate pruning of a rare-activation ReLU residual over a continuous input box.\n\nThe fixed parameters W (6,12), b (6,), and c (6,) are the actual float32\narrays generated in make_inputs_numpy(). They do not change between calls.\nThe legal input is ANY contiguous finite float32 matrix X of shape (n,12),\n1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole\nbox, not just the smoke inputs returned by make_inputs_numpy().\n\nFor each row x the mathematical target, over its actual stored float32\nvalues and the stored parameters, is\n  target(x) = 0.25*x[0] + 0.5*x[1]\n              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).\nThe candidate omits the small residual module, retaining the linear base.\nIt is acceptable iff EVERY legal x has absolute output error <= 1.0 against\nthis mathematical target (evaluate the reference in float64 or better).\nNo relative-error test or independent per-neuron error threshold applies.\n\nrun(X,W,b,c) must return a finite float32 vector of shape (n,) without\nmodifying any input. There is no requirement on parameters from other seeds.\nmake_inputs() supplies the fixed parameters and a convenient smoke batch;\nother legal X may be constructed to establish or refute the whole-box bound.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its\ncode and observed result are evidence to assess, not an authoritative verdict\nor a replacement for the universal-domain requirement. All evaluation\nsystems receive the same code, contract, and initial observations.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\",\n  \"max_absolute_error\": 2.9802322387695312e-08,\n  \"tolerance\": 1.0,\n  \"shape_dtype_finite_and_inputs_unmodified\": true,\n  \"all_passed\": true\n}\n",
+    "problem_text": "Validate the joint dropout law of a small finite-seed generator.\n\nmake_inputs_numpy() constructs the complete workload: seeds is each integer\nfrom 0 through 1023 exactly once, X is a strictly positive float32 vector of\neight activations, and masks/offsets are the fixed generated integer tables.\nEvery seed is equally likely. There is no runtime randomness, sampling\nuncertainty, or requirement to handle other tables or activation vectors.\n\nrun(seeds, X, masks, offsets) must return a finite float32 array Y with shape\n(1024, 8), without modifying its inputs. Each Y[s,j] must be exactly either\n0 or 2*X[j]. Define B[s,j] = 1 when Y[s,j] is 2*X[j], and 0 otherwise.\n\nThis generator is used for a model with interactions among up to four\nchannels. Its contract is the joint law of independent dropout with keep\nprobability one half through order four: for every four distinct channel\nindices j0<j1<j2<j3 and every binary pattern b in {0,1}^4,\n  abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024.\nThis is an exact finite-domain requirement, not a statistical significance\ntest and not a requirement that outputs for different seeds be independent.\nNo specific ordering of the 16 patterns across seed rows is prescribed.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its\ncode and observed result are evidence to assess, not an alternative contract\nor an authoritative verdict. All evaluation systems receive this material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"all 1024 seeds; eight marginal and 28 pair histograms\",\n  \"marginal_keep_probabilities\": [\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5\n  ],\n  \"max_marginal_probability_error\": 0.0,\n  \"max_pair_pattern_probability_error\": 0.0,\n  \"shape_dtype_finite_and_allowed_values\": true,\n  \"all_passed\": true\n}\n",
     "rounds": null,
-    "session_dir": "/root/evidence_cases/case_e11",
+    "session_dir": "/root/evidence_cases/case_e05",
     "status": "unverified",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-24T06:54:37Z",
+      "created_at": "2026-09-24T06:37:40Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-24T06:55:23Z",
+          "created_at": "2026-09-24T06:37:58Z",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "9fb9c74e017cf228f27233f5a70f071e4fb71fa36a9590b236aa38f467c087cb"
+                "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "4c175fe09195de83f2146947fe9c36863735c95dbab07e3f30f67751d7171895"
+                "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -46,100 +46,52 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "05dad9e370ac933b990780a15f6a864325d0f03cc869f3592a26a08f780a4003"
+                "sha256": "ac5450fdbba68d905d7fec4ac9e1509ff14b9876541b0aab63b01107cd2ec370"
               }
             ],
-            "duration_s": 6.390903,
+            "duration_s": 6.243777,
             "exit_code": 0,
             "expected_signal": null,
             "json_parse_error": null,
             "json_result": {
-              "kernel_abs_err_at_best": 0.71875,
-              "max_residual": 0.71875
+              "inputs_unmodified": true,
+              "max_4th_order_error": 0.0,
+              "metric": "4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|",
+              "passes_contract": true,
+              "shape_dtype_finite": true,
+              "tolerance": 0.0009765625,
+              "values_allowed": true,
+              "worst_quadruple": null
             },
-            "kernel_abs_err_at_best": 0.71875,
-            "max_residual": 0.71875,
+            "max_4th_order_error": 0.0,
+            "passes_contract": true,
             "stderr": "",
-            "stdout": "W= [[ 0.5  1.  -1.  -1.   0.5 -1.   1.  -0.5  0.5  0.5 -0.5  1. ]\n [ 0.5  1.  -1.  -0.5  1.   0.5 -0.5 -0.5  1.   0.5 -1.   1. ]\n [ 0.5 -1.  -0.5 -0.5 -1.  -0.5  1.  -1.   1.  -1.  -0.5 -1. ]\n [ 0.5 -0.5 -1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -1.   1.   0.5]\n [ 1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -0.5 -0.5  1.   1.  -1. ]\n [ 0.5  0.5 -0.5 -0.5  1.  -1.   1.  -1.   0.5  1.  -1.  -1. ]]\nb= [6.75  6.75  7.125 6.375 6.75  7.125]\nl1= [9.  9.  9.5 8.5 9.  9.5]\nmax residual 0.71875 at x= [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nkernel output 0.75 expected 1.46875 abs err 0.71875\n{\"max_residual\": 0.71875, \"kernel_abs_err_at_best\": 0.71875}\n",
+            "stdout": "{\"metric\": \"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|\", \"max_4th_order_error\": 0.0, \"worst_quadruple\": null, \"tolerance\": 0.0009765625, \"shape_dtype_finite\": true, \"values_allowed\": true, \"inputs_unmodified\": true, \"passes_contract\": true}\n",
             "timed_out": false,
-            "timeout_s": 60
+            "timeout_s": 60,
+            "tolerance": 0.0009765625
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, kernel abs error 0.71875 at the best x \u2014 within the 1.0 tolerance. Residual is convex in x, so its box max is at a vertex; exhaustive vertex enumeration will confirm.",
+          "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
           "supports": "rebutted",
           "tool_event_id": "t7"
-        },
-        {
-          "artifacts": [],
-          "created_at": "2026-09-24T06:55:41Z",
-          "data": {
-            "artifacts": [
-              {
-                "description": "Python probe code executed by local runtime.",
-                "kind": "probe_code",
-                "path": "probes/t11_probe.py",
-                "sha256": "6d63e024750b6dd6c4f359e4843176b00ca125966c3bf436052a49548a1ed88d"
-              },
-              {
-                "description": "Captured stdout from the probe process.",
-                "kind": "stdout",
-                "path": "probes/t11_stdout.txt",
-                "sha256": "868b5f63e08f6aff93f655c034d69870595e162d1f6025cc591ca3bae316b3cc"
-              },
-              {
-                "description": "Captured stderr from the probe process.",
-                "kind": "stderr",
-                "path": "probes/t11_stderr.txt",
-                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-              },
-              {
-                "description": "Parsed JSON object from the last non-empty stdout line.",
-                "kind": "json_result",
-                "path": "probes/t11_json_result.json",
-                "sha256": "159207b5f7d6465a35d5c30812a5d16deb35b373f5dcbfec14364621871345df"
-              }
-            ],
-            "duration_s": 4.69714,
-            "exit_code": 0,
-            "expected_signal": null,
-            "json_parse_error": null,
-            "json_result": {
-              "tolerance": 1.0,
-              "vertex_max_abs_err": 0.71875,
-              "vertex_min_abs_err": 0.0,
-              "within_tolerance": true
-            },
-            "kernel_vertex_max_abs_err": 0.71875,
-            "stderr": "",
-            "stdout": "vertex max err 0.71875 argmax x [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nmin err 0.0\nshape torch.Size([4096]) torch.float32 finite True inputs_unmodified True\n{\"vertex_max_abs_err\": 0.71875, \"vertex_min_abs_err\": 0.0, \"tolerance\": 1.0, \"within_tolerance\": true}\n",
-            "timed_out": false,
-            "timeout_s": 60,
-            "tolerance": 1.0,
-            "vertex_max_abs_err": 0.71875,
-            "within_tolerance": true
-          },
-          "id": "c1.e2",
-          "kind": "runtime_probe",
-          "summary": "Exhaustive enumeration of all 2^12 box vertices (a legal X of shape (4096,12)) through the actual GPU kernel: max abs error 0.71875 <= 1.0, output float32 shape (4096,) finite, inputs unmodified. The omitted residual is a sum of convex ReLU terms, so its box maximum is attained at a vertex; this proves no legal x exceeds tolerance, refuting claim c1.",
-          "supports": "rebutted",
-          "tool_event_id": "t11"
         }
       ],
       "id": "c1",
       "raised_by": "solo",
-      "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so a maximally-aligned x (x_i = sign(W[j,i])) gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
+      "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
+          "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
         }
       ],
-      "scope_rationale": "problem.txt requires every legal x (entries in [-1,1], n up to 4096) to have absolute error <= 1.0 against the target that includes the ReLU residual; a single legal x with larger error violates the contract.",
-      "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement.",
+      "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.",
+      "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
       "status": "rebutted",
-      "updated_at": "2026-09-24T06:55:41Z"
+      "updated_at": "2026-09-24T06:37:58Z"
     }
   ],
   "convergence": null,
@@ -152,7 +104,7 @@
   },
   "description_tasks": [],
   "description_updates": [],
-  "entry": "case_e11",
+  "entry": "case_e05",
   "history": [
     {
       "duration_s": null,
@@ -162,25 +114,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_e11"
+            "entry": "case_e05"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_e11"
+            "entry": "case_e05"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_e11"
+            "entry": "case_e05"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_e11",
+            "entry": "case_e05",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -189,22 +141,22 @@
       "usage": null
     },
     {
-      "duration_s": 5.965761048000001,
+      "duration_s": 5.207228154,
       "role": "solo",
       "round": 2,
-      "text": "The kernel drops the ReLU residual entirely; the question is whether the omitted residual can exceed the 1.0 tolerance anywhere in the legal box. I'll record a claim and compute the worst case.",
+      "text": "The contract's decisive requirement is the 4th-order joint law, which the initial probe did not test. I'll record a claim and probe all C(8,4)=70 quadruples on the real GPU.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so maximally-aligned x gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
+            "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction could satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
+                "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
               }
             ],
-            "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement."
+            "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024."
           },
           "tool": "record_claim"
         }
@@ -212,29 +164,29 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.966,
-        "input_tokens": 8706,
-        "output_tokens": 431
+        "duration_s": 5.207,
+        "input_tokens": 9045,
+        "output_tokens": 278
       }
     },
     {
-      "duration_s": 3.8062813559999995,
+      "duration_s": 3.9468915010000005,
       "role": "solo",
       "round": 3,
-      "text": "I need to re-record the claim with scope_rationale, then run a probe maximizing the residual term over the box.",
+      "text": "I'll re-record the 4th-order joint law claim with the missing scope_rationale, then run the decisive probe.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so a maximally-aligned x (x_i = sign(W[j,i])) gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
+            "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
+                "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
               }
             ],
-            "scope_rationale": "problem.txt requires every legal x (entries in [-1,1], n up to 4096) to have absolute error <= 1.0 against the target that includes the ReLU residual; a single legal x with larger error violates the contract.",
-            "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement."
+            "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.",
+            "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024."
           },
           "tool": "record_claim"
         }
@@ -242,21 +194,21 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 3.806,
-        "input_tokens": 9505,
-        "output_tokens": 337
+        "duration_s": 3.947,
+        "input_tokens": 9755,
+        "output_tokens": 326
       }
     },
     {
-      "duration_s": 17.638889703,
+      "duration_s": 7.411134050000001,
       "role": "solo",
       "round": 4,
-      "text": "The kernel drops the ReLU residual entirely; I'll probe whether some legal input in the box makes the omitted term exceed 1.0.",
+      "text": "",
       "tool_calls": [
         {
           "args": {
             "claim_id": "c1",
-            "code": "import numpy as np, torch, itertools\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)\nprint(\"W=\", W); print(\"b=\", b); print(\"l1=\", np.abs(Wd).sum(1))\n\ndef residual(x):  # x (n,12) float32\n    x64 = x.astype(np.float64)\n    return (np.maximum(x64 @ Wd.T - bd, 0) * cd).sum(1)\n\n# candidate adversarial inputs\ncands = []\nfor j in range(6):  # aligned to each neuron\n    cands.append(np.sign(Wd[j])[None, :])\nrng = np.random.default_rng(0)\ncands.append(rng.uniform(-1,1,(4096,12)))\ncands.append(rng.choice([-1.,1.],(4096,12)))\n# greedy per-coordinate: coordinate maximize sum_j c_j relu(W[j]x-b[j]) is convex; try sign of each neuron and convex combos\ncands.append(np.sign(Wd.sum(0))[None,:])\nX = np.concatenate([np.clip(a,-1,1).astype(np.float32) for a in cands])\nr = residual(X)\ni = int(np.argmax(r))\nprint(\"max residual\", r.max(), \"at x=\", X[i])\n# also confirm on GPU kernel output error for best x\nbest = np.tile(X[i],(1,1))\nxb, wb, bb, cb = [torch.from_numpy(v).to(\"cuda\") for v in (best, W, b, c)]\nactual = k.run(xb, wb, bb, cb)\nx64 = torch.from_numpy(best).double().cuda()\nexpected = 0.25*x64[:,0]+0.5*x64[:,1] + torch.relu(x64@torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()\nprint(\"kernel output\", actual.item(), \"expected\", expected.item(), \"abs err\", abs(actual.item()-expected.item()))\nimport json\nprint(json.dumps({\"max_residual\": float(r.max()), \"kernel_abs_err_at_best\": abs(actual.item()-expected.item())}))\n"
+            "code": "import json, itertools, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e05\")\nimport kernel\ninputs = kernel.make_inputs()\nbefore = [t.clone() for t in inputs]\ny = kernel.run(*inputs)\nv = y.detach().cpu().numpy()\nx = inputs[1].detach().cpu().numpy()\ninputs_unmod = all(torch.equal(a,b) for a,b in zip(inputs,before))\nallowed = np.logical_or(v==0, v==2*x[None,:]).all()\nB = (v != 0).astype(np.int64)\nworst = 0.0; worst_case = None\nfor quad in itertools.combinations(range(8),4):\n    codes = (B[:,quad[0]]*8 + B[:,quad[1]]*4 + B[:,quad[2]]*2 + B[:,quad[3]])\n    counts = np.bincount(codes, minlength=16)\n    err = float(np.max(np.abs(counts/1024 - 1/16)))\n    if err > worst:\n        worst = err; worst_case = quad\n    if err > 1/1024 + 1e-12:\n        pass\nprint(json.dumps({\n  \"metric\":\"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|\",\n  \"max_4th_order_error\": worst,\n  \"worst_quadruple\": worst_case,\n  \"tolerance\": 1/1024,\n  \"shape_dtype_finite\": bool(v.shape==(1024,8) and v.dtype==np.float32 and np.isfinite(v).all()),\n  \"values_allowed\": bool(allowed),\n  \"inputs_unmodified\": bool(inputs_unmod),\n  \"passes_contract\": bool(v.shape==(1024,8) and allowed and worst <= 1/1024 + 1e-12)\n}))"
           },
           "tool": "run_claim_probe"
         }
@@ -264,154 +216,53 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 17.639,
-        "input_tokens": 11074,
-        "output_tokens": 745
+        "duration_s": 7.411,
+        "input_tokens": 11189,
+        "output_tokens": 434
       }
     },
     {
-      "duration_s": 8.744401109999998,
+      "duration_s": 4.1663634049999985,
       "role": "solo",
       "round": 5,
-      "text": "The probe found max residual 0.71875 \u2264 1.0, but it only sampled vertices. The residual is convex in x, so its box maximum is exactly at one of the 2^12 vertices \u2014 I should exhaustively check all 4096 vertices (a legal n=4096 input) via the actual kernel.",
+      "text": "The 4th-order probe passed with zero error across all 70 quadruples. Finalizing the claim and recording the verdict.",
       "tool_calls": [
         {
           "args": {
-            "claim_id": "c1",
-            "code": "import numpy as np, torch, itertools, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)\n# all 2^12 vertices = legal X of shape (4096,12), entries in [-1,1]\nV = np.array(list(itertools.product([-1.0,1.0], repeat=12)), dtype=np.float32)\nX = torch.from_numpy(V).cuda()\nWt, bt, ct = [torch.from_numpy(v).cuda() for v in (W, b, c)]\nactual = k.run(X, Wt, bt, ct)\nx64 = X.double()\nexpected = 0.25*x64[:,0] + 0.5*x64[:,1] + torch.relu(x64 @ torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()\nerr = (actual.double() - expected).abs()\n# also convexity argument: max of convex sum over box is at a vertex, so vertex max is global max\nprint(\"vertex max err\", err.max().item(), \"argmax x\", V[int(err.argmax())])\nprint(\"argmin err\", err.min().item())\n# structural checks\nbefore = [v.clone() for v in (X, Wt, bt, ct)]\nprint(\"shape\", actual.shape, actual.dtype, \"finite\", bool(torch.isfinite(actual).all()),\n      \"inputs_unmodified\", all(torch.equal(a,z) for a,z in zip((X,Wt,bt,ct), before)))\nprint(json.dumps({\"vertex_max_abs_err\": float(err.max()), \"vertex_min_abs_err\": float(err.min()),\n                  \"tolerance\": 1.0, \"within_tolerance\": bool(err.max() <= 1.0)}))\n"
+            "data": {
+              "max_4th_order_error": 0.0,
+              "passes_contract": true,
+              "tolerance": 0.0009765625
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
+            "supports": "rebutted"
           },
-          "tool": "run_claim_probe"
+          "tool": "finalize_probe_evidence"
         }
       ],
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 8.744,
-        "input_tokens": 14490,
-        "output_tokens": 668
+        "duration_s": 4.166,
+        "input_tokens": 13696,
+        "output_tokens": 186
       }
     },
     {
-      "duration_s": 8.817747255,
+      "duration_s": 4.856389365000002,
       "role": "solo",
       "round": 6,
-      "text": "The first probe found a max residual of 0.71875 (\u2264 1.0), but only sampled candidates. Since the residual is a convex function of x, its box maximum lies at a vertex \u2014 so I'll finalize t7, then exhaustively check all 4096 vertices via the actual kernel.",
+      "text": "The decisive claim is resolved with strong evidence: the 4th-order joint law holds exactly (error 0.0 across all 70 quadruples \u00d7 16 patterns), with shape/dtype/allowed values and input immutability all passing. No further claims would change the verdict.",
       "tool_calls": [
         {
           "args": {
-            "data": {
-              "kernel_abs_err_at_best": 0.71875,
-              "max_residual": 0.71875
-            },
-            "event_id": "t7",
-            "status": "inconclusive",
-            "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, with kernel abs error 0.71875 at the best x \u2014 within tolerance, but sampling does not prove the whole-box bound; the convex maximum lies at a box vertex, so exhaustive vertex enumeration is needed.",
-            "supports": "rebutted"
-          },
-          "tool": "finalize_probe_evidence"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 8.818,
-        "input_tokens": 15849,
-        "output_tokens": 257
-      }
-    },
-    {
-      "duration_s": 4.335957817999997,
-      "role": "solo",
-      "round": 7,
-      "text": "I'll finalize t7 as rebutting the claim, then run the exhaustive 2^12-vertex probe to confirm the whole-box bound.",
-      "tool_calls": [
-        {
-          "args": {
-            "data": {
-              "kernel_abs_err_at_best": 0.71875,
-              "max_residual": 0.71875
-            },
-            "event_id": "t7",
-            "status": "rebutted",
-            "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, kernel abs error 0.71875 at the best x \u2014 within the 1.0 tolerance. Residual is convex in x, so its box max is at a vertex; exhaustive vertex enumeration will confirm.",
-            "supports": "rebutted"
-          },
-          "tool": "finalize_probe_evidence"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 4.336,
-        "input_tokens": 16589,
-        "output_tokens": 200
-      }
-    },
-    {
-      "duration_s": 7.6467860630000075,
-      "role": "solo",
-      "round": 8,
-      "text": "The sampling probe rebutted the claim but exhaustive vertex enumeration is the decisive test since the error is convex over the box. Running it now.",
-      "tool_calls": [
-        {
-          "args": {
-            "claim_id": "c1",
-            "code": "import numpy as np, torch, itertools, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)\nV = np.array(list(itertools.product([-1.0,1.0], repeat=12)), dtype=np.float32)\nX = torch.from_numpy(V).cuda()\nWt, bt, ct = [torch.from_numpy(v).cuda() for v in (W, b, c)]\nactual = k.run(X, Wt, bt, ct)\nx64 = X.double()\nexpected = 0.25*x64[:,0] + 0.5*x64[:,1] + torch.relu(x64 @ torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()\nerr = (actual.double() - expected).abs()\nprint(\"vertex max err\", err.max().item(), \"argmax x\", V[int(err.argmax())])\nprint(\"min err\", err.min().item())\nbefore = [v.clone() for v in (X, Wt, bt, ct)]\nprint(\"shape\", actual.shape, actual.dtype, \"finite\", bool(torch.isfinite(actual).all()),\n      \"inputs_unmodified\", all(torch.equal(a,z) for a,z in zip((X,Wt,bt,ct), before)))\nprint(json.dumps({\"vertex_max_abs_err\": float(err.max()), \"vertex_min_abs_err\": float(err.min()),\n                  \"tolerance\": 1.0, \"within_tolerance\": bool(err.max() <= 1.0)}))"
-          },
-          "tool": "run_claim_probe"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 7.647,
-        "input_tokens": 20458,
-        "output_tokens": 448
-      }
-    },
-    {
-      "duration_s": 5.417257612,
-      "role": "solo",
-      "round": 9,
-      "text": "The exhaustive 2^12-vertex probe confirms the whole-box bound: since the error function (sum of ReLUs, convex in x) attains its box maximum at a vertex, checking all 4096 vertices proves the bound for every legal input. Max error 0.71875 \u2264 1.0. I'll finalize this evidence and record the verdict.",
-      "tool_calls": [
-        {
-          "args": {
-            "data": {
-              "kernel_vertex_max_abs_err": 0.71875,
-              "tolerance": 1.0,
-              "vertex_max_abs_err": 0.71875,
-              "within_tolerance": true
-            },
-            "event_id": "t11",
-            "status": "rebutted",
-            "summary": "Exhaustive enumeration of all 2^12 box vertices (a legal X of shape (4096,12)) through the actual GPU kernel: max abs error 0.71875 <= 1.0, output float32 shape (4096,) finite, inputs unmodified. The omitted residual is a sum of convex ReLU terms, so its box maximum is attained at a vertex; this proves no legal x exceeds tolerance, refuting claim c1.",
-            "supports": "rebutted"
-          },
-          "tool": "finalize_probe_evidence"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 5.417,
-        "input_tokens": 22524,
-        "output_tokens": 280
-      }
-    },
-    {
-      "duration_s": 6.442699661999995,
-      "role": "solo",
-      "round": 10,
-      "text": "The decisive question \u2014 whether the omitted ReLU residual can exceed the 1.0 tolerance anywhere in the legal box \u2014 is settled by exhaustive vertex enumeration plus convexity: max error 0.71875 \u2264 1.0. Structural requirements (float32, shape, finite, inputs unmodified) also passed. Recording the verdict.",
-      "tool_calls": [
-        {
-          "args": {
-            "confidence": 0.97,
+            "confidence": 0.98,
             "decisive_claims": [
               "c1"
             ],
-            "reason": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1], dropping the ReLU residual. The only way it could fail the contract is if some legal x in [-1,1]^12 makes the omitted residual exceed 1.0. Probe t7 sampled sign-aligned, uniform-random, and \u00b11 inputs: max omitted residual 0.71875. Probe t11 exhaustively evaluated all 2^12 box vertices (a legal (4096,12) float32 input) through the actual GPU kernel against a float64 reference: max absolute error 0.71875 <= 1.0. Since the residual sum_j c[j]*max(W[j]\u00b7x-b[j],0) is a sum of convex functions of x, its maximum over the box is attained at a vertex, so the vertex enumeration proves the whole-box bound for every legal input. Structural contract requirements also verified: output is finite float32 of shape (4096,), and no input tensor was modified. Claim c1 is rebutted; the kernel satisfies the contract.",
+            "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
             "verdict": "trust"
           },
           "tool": "record_verdict"
@@ -420,9 +271,9 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 6.443,
-        "input_tokens": 26682,
-        "output_tokens": 372
+        "duration_s": 4.856,
+        "input_tokens": 16667,
+        "output_tokens": 261
       }
     }
   ],
@@ -440,9 +291,9 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_e11"
+        "entry": "case_e05"
       },
-      "created_at": "2026-09-24T06:54:26Z",
+      "created_at": "2026-09-24T06:37:30Z",
       "id": "t1",
       "output": {
         "artifact_files": [
@@ -450,13 +301,13 @@
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_e11",
+        "entry": "case_e05",
         "has_error": null,
-        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 194001\n\n\n@triton.jit\ndef _pruned_ffn(X, Out, N: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    x0 = tl.load(X + row * 12, row < N, other=0.0)\n    x1 = tl.load(X + row * 12 + 1, row < N, other=0.0)\n    value = 0.25 * x0 + 0.5 * x1\n    tl.store(Out + row, value, row < N)\n\n\ndef run(x, weights, biases, coefficients):\n    output = torch.empty((x.shape[0],), dtype=torch.float32, device=x.device)\n    _pruned_ffn[(triton.cdiv(x.shape[0], 128),)](\n        x, output, N=x.shape[0], BLOCK=128, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    center = rng.choice(np.asarray([-1, 1]), size=12)\n    flip_probability = rng.uniform(0.05, 0.4)\n    flips = np.where(rng.uniform(size=(6, 12)) < flip_probability, -1, 1)\n    magnitudes = rng.choice(np.asarray([0.5, 1.0]), size=(6, 12))\n    weights = (center[None, :] * flips * magnitudes).astype(np.float32)\n    biases = (0.75 * np.abs(weights).sum(axis=1)).astype(np.float32)\n    coefficients = np.full(6, 0.25, dtype=np.float32)\n    smoke = np.concatenate((np.zeros((1, 12)), np.eye(12), -np.eye(12),\n                            rng.uniform(-1.0, 1.0, size=(16, 12))), axis=0).astype(np.float32)\n    return smoke, weights, biases, coefficients\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(value).to(device) for value in make_inputs_numpy())\n\n\ndef initial_probe():\n    inputs = make_inputs()\n    before = [value.clone() for value in inputs]\n    actual = run(*inputs)\n    x, w, b, c = [value.double() for value in inputs]\n    expected = 0.25*x[:, 0] + 0.5*x[:, 1] + torch.relu(x @ w.T - b) @ c\n    error = torch.abs(actual.double() - expected)\n    structural = (actual.dtype == torch.float32 and actual.shape == (41,)\n                  and bool(torch.isfinite(actual).all())\n                  and all(torch.equal(a, z) for a, z in zip(inputs, before)))\n    return {\"scope\": \"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\",\n            \"max_absolute_error\": float(error.max()), \"tolerance\": 1.0,\n            \"shape_dtype_finite_and_inputs_unmodified\": bool(structural),\n            \"all_passed\": bool(structural and float(error.max()) <= 1.0)}\n",
+        "kernel_code": "import itertools\nimport numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\nSEED = 150400\n\n\n@triton.jit\ndef _dropout(Seeds, X, Masks, Offsets, Out, SIZE: tl.constexpr,\n             BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    row = index // 8\n    channel = index % 8\n    seed = tl.load(Seeds + row, row < SIZE, other=0)\n    mask = tl.load(Masks + channel)\n    offset = tl.load(Offsets + channel)\n    folded = seed & mask\n    folded = folded ^ (folded >> 8)\n    folded = folded ^ (folded >> 4)\n    folded = folded ^ (folded >> 2)\n    folded = folded ^ (folded >> 1)\n    keep = (folded & 1) ^ offset\n    activation = tl.load(X + channel)\n    value = tl.where(keep != 0, 2.0 * activation, 0.0)\n    tl.store(Out + index, value, row < SIZE)\n\n\ndef run(seeds, x, masks, offsets):\n    output = torch.empty((seeds.numel(), 8), device=x.device, dtype=torch.float32)\n    _dropout[(triton.cdiv(seeds.numel() * 8, 256),)](\n        seeds, x, masks, offsets, output, SIZE=seeds.numel(), BLOCK=256)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(SEED))\n    masks = rng.choice(np.arange(1, 1024), size=8, replace=False).astype(np.int32)\n    offsets = rng.integers(0, 2, size=8, dtype=np.int32)\n    activation = rng.uniform(0.25, 1.75, size=8).astype(np.float32)\n    return np.arange(1024, dtype=np.int32), activation, masks, offsets\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(value).to(device) for value in make_inputs_numpy())\n\n\ndef initial_probe():\n    inputs = make_inputs()\n    actual = run(*inputs)\n    values = actual.detach().cpu().numpy()\n    x = inputs[1].detach().cpu().numpy()\n    allowed = np.logical_or(values == 0, values == 2*x[None, :])\n    keep = (values != 0).astype(np.int32)\n    means = keep.mean(axis=0)\n    pair_errors = []\n    for first, second in itertools.combinations(range(8), 2):\n        counts = np.bincount(keep[:, first] + 2*keep[:, second], minlength=4)\n        pair_errors.append(float(np.max(np.abs(counts/1024 - 0.25))))\n    marginal_error = float(np.max(np.abs(means - 0.5)))\n    pair_error = max(pair_errors)\n    structural_ok = (values.shape == (1024, 8) and values.dtype == np.float32\n                     and bool(np.isfinite(values).all()) and bool(allowed.all()))\n    return {\"scope\": \"all 1024 seeds; eight marginal and 28 pair histograms\",\n            \"marginal_keep_probabilities\": means.tolist(),\n            \"max_marginal_probability_error\": marginal_error,\n            \"max_pair_pattern_probability_error\": pair_error,\n            \"shape_dtype_finite_and_allowed_values\": structural_ok,\n            \"all_passed\": bool(structural_ok and marginal_error <= 1/1024\n                               and pair_error <= 1/1024)}\n",
         "passed": null,
-        "problem_text": "Validate pruning of a rare-activation ReLU residual over a continuous input box.\n\nThe fixed parameters W (6,12), b (6,), and c (6,) are the actual float32\narrays generated in make_inputs_numpy(). They do not change between calls.\nThe legal input is ANY contiguous finite float32 matrix X of shape (n,12),\n1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole\nbox, not just the smoke inputs returned by make_inputs_numpy().\n\nFor each row x the mathematical target, over its actual stored float32\nvalues and the stored parameters, is\n  target(x) = 0.25*x[0] + 0.5*x[1]\n              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).\nThe candidate omits the small residual module, retaining the linear base.\nIt is acceptable iff EVERY legal x has absolute output error <= 1.0 against\nthis mathematical target (evaluate the reference in float64 or better).\nNo relative-error test or independent per-neuron error threshold applies.\n\nrun(X,W,b,c) must return a finite float32 vector of shape (n,) without\nmodifying any input. There is no requirement on parameters from other seeds.\nmake_inputs() supplies the fixed parameters and a convenient smoke batch;\nother legal X may be constructed to establish or refute the whole-box bound.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its\ncode and observed result are evidence to assess, not an authoritative verdict\nor a replacement for the universal-domain requirement. All evaluation\nsystems receive the same code, contract, and initial observations.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\",\n  \"max_absolute_error\": 2.9802322387695312e-08,\n  \"tolerance\": 1.0,\n  \"shape_dtype_finite_and_inputs_unmodified\": true,\n  \"all_passed\": true\n}\n",
+        "problem_text": "Validate the joint dropout law of a small finite-seed generator.\n\nmake_inputs_numpy() constructs the complete workload: seeds is each integer\nfrom 0 through 1023 exactly once, X is a strictly positive float32 vector of\neight activations, and masks/offsets are the fixed generated integer tables.\nEvery seed is equally likely. There is no runtime randomness, sampling\nuncertainty, or requirement to handle other tables or activation vectors.\n\nrun(seeds, X, masks, offsets) must return a finite float32 array Y with shape\n(1024, 8), without modifying its inputs. Each Y[s,j] must be exactly either\n0 or 2*X[j]. Define B[s,j] = 1 when Y[s,j] is 2*X[j], and 0 otherwise.\n\nThis generator is used for a model with interactions among up to four\nchannels. Its contract is the joint law of independent dropout with keep\nprobability one half through order four: for every four distinct channel\nindices j0<j1<j2<j3 and every binary pattern b in {0,1}^4,\n  abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024.\nThis is an exact finite-domain requirement, not a statistical significance\ntest and not a requirement that outputs for different seeds be independent.\nNo specific ordering of the 16 patterns across seed rows is prescribed.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its\ncode and observed result are evidence to assess, not an alternative contract\nor an authoritative verdict. All evaluation systems receive this material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"all 1024 seeds; eight marginal and 28 pair histograms\",\n  \"marginal_keep_probabilities\": [\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5\n  ],\n  \"max_marginal_probability_error\": 0.0,\n  \"max_pair_pattern_probability_error\": 0.0,\n  \"shape_dtype_finite_and_allowed_values\": true,\n  \"all_passed\": true\n}\n",
         "rounds": null,
-        "session_dir": "/root/evidence_cases/case_e11",
+        "session_dir": "/root/evidence_cases/case_e05",
         "status": "unverified",
         "test_code": ""
       },
@@ -465,13 +316,13 @@
     },
     {
       "args": {
-        "entry": "case_e11"
+        "entry": "case_e05"
       },
-      "created_at": "2026-09-24T06:54:26Z",
+      "created_at": "2026-09-24T06:37:30Z",
       "id": "t2",
       "output": {
-        "content": "Validate pruning of a rare-activation ReLU residual over a continuous input box.\n\nThe fixed parameters W (6,12), b (6,), and c (6,) are the actual float32\narrays generated in make_inputs_numpy(). They do not change between calls.\nThe legal input is ANY contiguous finite float32 matrix X of shape (n,12),\n1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole\nbox, not just the smoke inputs returned by make_inputs_numpy().\n\nFor each row x the mathematical target, over its actual stored float32\nvalues and the stored parameters, is\n  target(x) = 0.25*x[0] + 0.5*x[1]\n              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).\nThe candidate omits the small residual module, retaining the linear base.\nIt is acceptable iff EVERY legal x has absolute output error <= 1.0 against\nthis mathematical target (evaluate the reference in float64 or better).\nNo relative-error test or independent per-neuron error threshold applies.\n\nrun(X,W,b,c) must return a finite float32 vector of shape (n,) without\nmodifying any input. There is no requirement on parameters from other seeds.\nmake_inputs() supplies the fixed parameters and a convenient smoke batch;\nother legal X may be constructed to establish or refute the whole-box bound.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its\ncode and observed result are evidence to assess, not an authoritative verdict\nor a replacement for the universal-domain requirement. All evaluation\nsystems receive the same code, contract, and initial observations.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples\",\n  \"max_absolute_error\": 2.9802322387695312e-08,\n  \"tolerance\": 1.0,\n  \"shape_dtype_finite_and_inputs_unmodified\": true,\n  \"all_passed\": true\n}\n",
-        "entry": "case_e11",
+        "content": "Validate the joint dropout law of a small finite-seed generator.\n\nmake_inputs_numpy() constructs the complete workload: seeds is each integer\nfrom 0 through 1023 exactly once, X is a strictly positive float32 vector of\neight activations, and masks/offsets are the fixed generated integer tables.\nEvery seed is equally likely. There is no runtime randomness, sampling\nuncertainty, or requirement to handle other tables or activation vectors.\n\nrun(seeds, X, masks, offsets) must return a finite float32 array Y with shape\n(1024, 8), without modifying its inputs. Each Y[s,j] must be exactly either\n0 or 2*X[j]. Define B[s,j] = 1 when Y[s,j] is 2*X[j], and 0 otherwise.\n\nThis generator is used for a model with interactions among up to four\nchannels. Its contract is the joint law of independent dropout with keep\nprobability one half through order four: for every four distinct channel\nindices j0<j1<j2<j3 and every binary pattern b in {0,1}^4,\n  abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024.\nThis is an exact finite-domain requirement, not a statistical significance\ntest and not a requirement that outputs for different seeds be independent.\nNo specific ordering of the 16 patterns across seed rows is prescribed.\n\nkernel.py includes initial_probe(), an executable prior experiment. Its\ncode and observed result are evidence to assess, not an alternative contract\nor an authoritative verdict. All evaluation systems receive this material.\n\nRecorded initial-probe execution on NVIDIA T4 (not an oracle verdict):\n{\n  \"scope\": \"all 1024 seeds; eight marginal and 28 pair histograms\",\n  \"marginal_keep_probabilities\": [\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5,\n    0.5\n  ],\n  \"max_marginal_probability_error\": 0.0,\n  \"max_pair_pattern_probability_error\": 0.0,\n  \"shape_dtype_finite_and_allowed_values\": true,\n  \"all_passed\": true\n}\n",
+        "entry": "case_e05",
         "exists": true,
         "path": "problem.txt"
       },
@@ -480,27 +331,27 @@
     },
     {
       "args": {
-        "entry": "case_e11"
+        "entry": "case_e05"
       },
-      "created_at": "2026-09-24T06:54:26Z",
+      "created_at": "2026-09-24T06:37:30Z",
       "id": "t3",
       "output": {
-        "entry": "case_e11",
+        "entry": "case_e05",
         "files": [
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 2340
+            "size_bytes": 2776
           },
           {
             "kind": "metadata",
             "path": "meta.json",
-            "size_bytes": 99
+            "size_bytes": 96
           },
           {
             "kind": "problem",
             "path": "problem.txt",
-            "size_bytes": 1841
+            "size_bytes": 1870
           }
         ]
       },
@@ -509,17 +360,17 @@
     },
     {
       "args": {
-        "entry": "case_e11",
+        "entry": "case_e05",
         "path": "meta.json"
       },
-      "created_at": "2026-09-24T06:54:26Z",
+      "created_at": "2026-09-24T06:37:30Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_e11\",\n  \"passed\": null,\n  \"status\": \"unverified\",\n  \"family\": \"box_relu_audit\"\n}\n",
-        "entry": "case_e11",
+        "content": "{\n  \"name\": \"case_e05\",\n  \"passed\": null,\n  \"status\": \"unverified\",\n  \"family\": \"joint_audit\"\n}\n",
+        "entry": "case_e05",
         "kind": "metadata",
         "path": "meta.json",
-        "size_chars": 99,
+        "size_chars": 96,
         "truncated": false
       },
       "status": "ok",
@@ -527,17 +378,17 @@
     },
     {
       "args": {
-        "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so maximally-aligned x gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
+        "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction could satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
+            "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
           }
         ],
-        "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement."
+        "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024."
       },
-      "created_at": "2026-09-24T06:54:33Z",
+      "created_at": "2026-09-24T06:37:36Z",
       "id": "t5",
       "output": {
         "error": {
@@ -555,36 +406,36 @@
     },
     {
       "args": {
-        "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so a maximally-aligned x (x_i = sign(W[j,i])) gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
+        "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
+            "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
           }
         ],
-        "scope_rationale": "problem.txt requires every legal x (entries in [-1,1], n up to 4096) to have absolute error <= 1.0 against the target that includes the ReLU residual; a single legal x with larger error violates the contract.",
-        "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement."
+        "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.",
+        "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024."
       },
-      "created_at": "2026-09-24T06:54:37Z",
+      "created_at": "2026-09-24T06:37:40Z",
       "id": "t6",
       "output": {
-        "created_at": "2026-09-24T06:54:37Z",
+        "created_at": "2026-09-24T06:37:40Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "solo",
-        "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so a maximally-aligned x (x_i = sign(W[j,i])) gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
+        "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
+            "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
           }
         ],
-        "scope_rationale": "problem.txt requires every legal x (entries in [-1,1], n up to 4096) to have absolute error <= 1.0 against the target that includes the ReLU residual; a single legal x with larger error violates the contract.",
-        "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement.",
+        "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.",
+        "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
         "status": "open",
-        "updated_at": "2026-09-24T06:54:37Z"
+        "updated_at": "2026-09-24T06:37:40Z"
       },
       "status": "ok",
       "tool": "record_claim"
@@ -592,9 +443,9 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "import numpy as np, torch, itertools\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)\nprint(\"W=\", W); print(\"b=\", b); print(\"l1=\", np.abs(Wd).sum(1))\n\ndef residual(x):  # x (n,12) float32\n    x64 = x.astype(np.float64)\n    return (np.maximum(x64 @ Wd.T - bd, 0) * cd).sum(1)\n\n# candidate adversarial inputs\ncands = []\nfor j in range(6):  # aligned to each neuron\n    cands.append(np.sign(Wd[j])[None, :])\nrng = np.random.default_rng(0)\ncands.append(rng.uniform(-1,1,(4096,12)))\ncands.append(rng.choice([-1.,1.],(4096,12)))\n# greedy per-coordinate: coordinate maximize sum_j c_j relu(W[j]x-b[j]) is convex; try sign of each neuron and convex combos\ncands.append(np.sign(Wd.sum(0))[None,:])\nX = np.concatenate([np.clip(a,-1,1).astype(np.float32) for a in cands])\nr = residual(X)\ni = int(np.argmax(r))\nprint(\"max residual\", r.max(), \"at x=\", X[i])\n# also confirm on GPU kernel output error for best x\nbest = np.tile(X[i],(1,1))\nxb, wb, bb, cb = [torch.from_numpy(v).to(\"cuda\") for v in (best, W, b, c)]\nactual = k.run(xb, wb, bb, cb)\nx64 = torch.from_numpy(best).double().cuda()\nexpected = 0.25*x64[:,0]+0.5*x64[:,1] + torch.relu(x64@torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()\nprint(\"kernel output\", actual.item(), \"expected\", expected.item(), \"abs err\", abs(actual.item()-expected.item()))\nimport json\nprint(json.dumps({\"max_residual\": float(r.max()), \"kernel_abs_err_at_best\": abs(actual.item()-expected.item())}))\n"
+        "code": "import json, itertools, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e05\")\nimport kernel\ninputs = kernel.make_inputs()\nbefore = [t.clone() for t in inputs]\ny = kernel.run(*inputs)\nv = y.detach().cpu().numpy()\nx = inputs[1].detach().cpu().numpy()\ninputs_unmod = all(torch.equal(a,b) for a,b in zip(inputs,before))\nallowed = np.logical_or(v==0, v==2*x[None,:]).all()\nB = (v != 0).astype(np.int64)\nworst = 0.0; worst_case = None\nfor quad in itertools.combinations(range(8),4):\n    codes = (B[:,quad[0]]*8 + B[:,quad[1]]*4 + B[:,quad[2]]*2 + B[:,quad[3]])\n    counts = np.bincount(codes, minlength=16)\n    err = float(np.max(np.abs(counts/1024 - 1/16)))\n    if err > worst:\n        worst = err; worst_case = quad\n    if err > 1/1024 + 1e-12:\n        pass\nprint(json.dumps({\n  \"metric\":\"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|\",\n  \"max_4th_order_error\": worst,\n  \"worst_quadruple\": worst_case,\n  \"tolerance\": 1/1024,\n  \"shape_dtype_finite\": bool(v.shape==(1024,8) and v.dtype==np.float32 and np.isfinite(v).all()),\n  \"values_allowed\": bool(allowed),\n  \"inputs_unmodified\": bool(inputs_unmod),\n  \"passes_contract\": bool(v.shape==(1024,8) and allowed and worst <= 1/1024 + 1e-12)\n}))"
       },
-      "created_at": "2026-09-24T06:55:01Z",
+      "created_at": "2026-09-24T06:37:54Z",
       "id": "t7",
       "output": {
         "artifacts": [
@@ -602,13 +453,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t7_probe.py",
-            "sha256": "9fb9c74e017cf228f27233f5a70f071e4fb71fa36a9590b236aa38f467c087cb"
+            "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t7_stdout.txt",
-            "sha256": "4c175fe09195de83f2146947fe9c36863735c95dbab07e3f30f67751d7171895"
+            "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -620,13 +471,13 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t7_json_result.json",
-            "sha256": "05dad9e370ac933b990780a15f6a864325d0f03cc869f3592a26a08f780a4003"
+            "sha256": "ac5450fdbba68d905d7fec4ac9e1509ff14b9876541b0aab63b01107cd2ec370"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement.",
-        "cwd": "/root/evidence_cases/case_e11",
-        "duration_s": 6.390903,
+        "claim_statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
+        "cwd": "/root/evidence_cases/case_e05",
+        "duration_s": 6.243777,
         "event_id": "t7",
         "evidence_draft": {
           "claim_id": "c1",
@@ -636,13 +487,13 @@
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "9fb9c74e017cf228f27233f5a70f071e4fb71fa36a9590b236aa38f467c087cb"
+                "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "4c175fe09195de83f2146947fe9c36863735c95dbab07e3f30f67751d7171895"
+                "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -654,19 +505,25 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "05dad9e370ac933b990780a15f6a864325d0f03cc869f3592a26a08f780a4003"
+                "sha256": "ac5450fdbba68d905d7fec4ac9e1509ff14b9876541b0aab63b01107cd2ec370"
               }
             ],
-            "duration_s": 6.390903,
+            "duration_s": 6.243777,
             "exit_code": 0,
             "expected_signal": null,
             "json_parse_error": null,
             "json_result": {
-              "kernel_abs_err_at_best": 0.71875,
-              "max_residual": 0.71875
+              "inputs_unmodified": true,
+              "max_4th_order_error": 0.0,
+              "metric": "4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|",
+              "passes_contract": true,
+              "shape_dtype_finite": true,
+              "tolerance": 0.0009765625,
+              "values_allowed": true,
+              "worst_quadruple": null
             },
             "stderr": "",
-            "stdout": "W= [[ 0.5  1.  -1.  -1.   0.5 -1.   1.  -0.5  0.5  0.5 -0.5  1. ]\n [ 0.5  1.  -1.  -0.5  1.   0.5 -0.5 -0.5  1.   0.5 -1.   1. ]\n [ 0.5 -1.  -0.5 -0.5 -1.  -0.5  1.  -1.   1.  -1.  -0.5 -1. ]\n [ 0.5 -0.5 -1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -1.   1.   0.5]\n [ 1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -0.5 -0.5  1.   1.  -1. ]\n [ 0.5  0.5 -0.5 -0.5  1.  -1.   1.  -1.   0.5  1.  -1.  -1. ]]\nb= [6.75  6.75  7.125 6.375 6.75  7.125]\nl1= [9.  9.  9.5 8.5 9.  9.5]\nmax residual 0.71875 at x= [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nkernel output 0.75 expected 1.46875 abs err 0.71875\n{\"max_residual\": 0.71875, \"kernel_abs_err_at_best\": 0.71875}\n",
+            "stdout": "{\"metric\": \"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|\", \"max_4th_order_error\": 0.0, \"worst_quadruple\": null, \"tolerance\": 0.0009765625, \"shape_dtype_finite\": true, \"values_allowed\": true, \"inputs_unmodified\": true, \"passes_contract\": true}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -679,8 +536,14 @@
         "expected_signal": null,
         "json_parse_error": null,
         "json_result": {
-          "kernel_abs_err_at_best": 0.71875,
-          "max_residual": 0.71875
+          "inputs_unmodified": true,
+          "max_4th_order_error": 0.0,
+          "metric": "4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|",
+          "passes_contract": true,
+          "shape_dtype_finite": true,
+          "tolerance": 0.0009765625,
+          "values_allowed": true,
+          "worst_quadruple": null
         },
         "sandbox": {
           "cpu_limit_s": 90,
@@ -690,7 +553,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "W= [[ 0.5  1.  -1.  -1.   0.5 -1.   1.  -0.5  0.5  0.5 -0.5  1. ]\n [ 0.5  1.  -1.  -0.5  1.   0.5 -0.5 -0.5  1.   0.5 -1.   1. ]\n [ 0.5 -1.  -0.5 -0.5 -1.  -0.5  1.  -1.   1.  -1.  -0.5 -1. ]\n [ 0.5 -0.5 -1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -1.   1.   0.5]\n [ 1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -0.5 -0.5  1.   1.  -1. ]\n [ 0.5  0.5 -0.5 -0.5  1.  -1.   1.  -1.   0.5  1.  -1.  -1. ]]\nb= [6.75  6.75  7.125 6.375 6.75  7.125]\nl1= [9.  9.  9.5 8.5 9.  9.5]\nmax residual 0.71875 at x= [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nkernel output 0.75 expected 1.46875 abs err 0.71875\n{\"max_residual\": 0.71875, \"kernel_abs_err_at_best\": 0.71875}\n",
+        "stdout": "{\"metric\": \"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|\", \"max_4th_order_error\": 0.0, \"worst_quadruple\": null, \"tolerance\": 0.0009765625, \"shape_dtype_finite\": true, \"values_allowed\": true, \"inputs_unmodified\": true, \"passes_contract\": true}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -700,85 +563,38 @@
     },
     {
       "args": {
-        "claim_id": "c1",
-        "code": "import numpy as np, torch, itertools, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)\n# all 2^12 vertices = legal X of shape (4096,12), entries in [-1,1]\nV = np.array(list(itertools.product([-1.0,1.0], repeat=12)), dtype=np.float32)\nX = torch.from_numpy(V).cuda()\nWt, bt, ct = [torch.from_numpy(v).cuda() for v in (W, b, c)]\nactual = k.run(X, Wt, bt, ct)\nx64 = X.double()\nexpected = 0.25*x64[:,0] + 0.5*x64[:,1] + torch.relu(x64 @ torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()\nerr = (actual.double() - expected).abs()\n# also convexity argument: max of convex sum over box is at a vertex, so vertex max is global max\nprint(\"vertex max err\", err.max().item(), \"argmax x\", V[int(err.argmax())])\nprint(\"argmin err\", err.min().item())\n# structural checks\nbefore = [v.clone() for v in (X, Wt, bt, ct)]\nprint(\"shape\", actual.shape, actual.dtype, \"finite\", bool(torch.isfinite(actual).all()),\n      \"inputs_unmodified\", all(torch.equal(a,z) for a,z in zip((X,Wt,bt,ct), before)))\nprint(json.dumps({\"vertex_max_abs_err\": float(err.max()), \"vertex_min_abs_err\": float(err.min()),\n                  \"tolerance\": 1.0, \"within_tolerance\": bool(err.max() <= 1.0)}))\n"
-      },
-      "created_at": "2026-09-24T06:55:10Z",
-      "id": "t8",
-      "output": {
-        "error": {
-          "message": "claim c1 already has a successful probe you have not interpreted: event t7. Call finalize_probe_evidence(event_id='t7', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t7 first and then probe again.",
-          "recoverable": true,
-          "type": "LedgerError"
-        },
-        "error_type": "LedgerError",
-        "event_id": "t8",
-        "message": "claim c1 already has a successful probe you have not interpreted: event t7. Call finalize_probe_evidence(event_id='t7', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t7 first and then probe again.",
-        "ok": false
-      },
-      "status": "error",
-      "tool": "run_claim_probe"
-    },
-    {
-      "args": {
         "data": {
-          "kernel_abs_err_at_best": 0.71875,
-          "max_residual": 0.71875
-        },
-        "event_id": "t7",
-        "status": "inconclusive",
-        "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, with kernel abs error 0.71875 at the best x \u2014 within tolerance, but sampling does not prove the whole-box bound; the convex maximum lies at a box vertex, so exhaustive vertex enumeration is needed.",
-        "supports": "rebutted"
-      },
-      "created_at": "2026-09-24T06:55:19Z",
-      "id": "t9",
-      "output": {
-        "error": {
-          "message": "`supports` and `status` disagree: this probe's evidence supports 'rebutted', but you asked to set claim c1 to 'inconclusive', and no existing evidence on it supports 'inconclusive'. Decide which the probe actually shows: pass status='rebutted' (or omit `status`), or if you believe the probe shows something else, set `supports` to that instead. Nothing was recorded.",
-          "recoverable": true,
-          "type": "LedgerError"
-        },
-        "error_type": "LedgerError",
-        "event_id": "t9",
-        "message": "`supports` and `status` disagree: this probe's evidence supports 'rebutted', but you asked to set claim c1 to 'inconclusive', and no existing evidence on it supports 'inconclusive'. Decide which the probe actually shows: pass status='rebutted' (or omit `status`), or if you believe the probe shows something else, set `supports` to that instead. Nothing was recorded.",
-        "ok": false
-      },
-      "status": "error",
-      "tool": "finalize_probe_evidence"
-    },
-    {
-      "args": {
-        "data": {
-          "kernel_abs_err_at_best": 0.71875,
-          "max_residual": 0.71875
+          "max_4th_order_error": 0.0,
+          "passes_contract": true,
+          "tolerance": 0.0009765625
         },
         "event_id": "t7",
         "status": "rebutted",
-        "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, kernel abs error 0.71875 at the best x \u2014 within the 1.0 tolerance. Residual is convex in x, so its box max is at a vertex; exhaustive vertex enumeration will confirm.",
+        "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
         "supports": "rebutted"
       },
-      "created_at": "2026-09-24T06:55:23Z",
-      "id": "t10",
+      "created_at": "2026-09-24T06:37:58Z",
+      "id": "t8",
       "output": {
         "claim": {
-          "created_at": "2026-09-24T06:54:37Z",
+          "created_at": "2026-09-24T06:37:40Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-24T06:55:23Z",
+              "created_at": "2026-09-24T06:37:58Z",
               "data": {
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
                     "path": "probes/t7_probe.py",
-                    "sha256": "9fb9c74e017cf228f27233f5a70f071e4fb71fa36a9590b236aa38f467c087cb"
+                    "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t7_stdout.txt",
-                    "sha256": "4c175fe09195de83f2146947fe9c36863735c95dbab07e3f30f67751d7171895"
+                    "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -790,62 +606,69 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t7_json_result.json",
-                    "sha256": "05dad9e370ac933b990780a15f6a864325d0f03cc869f3592a26a08f780a4003"
+                    "sha256": "ac5450fdbba68d905d7fec4ac9e1509ff14b9876541b0aab63b01107cd2ec370"
                   }
                 ],
-                "duration_s": 6.390903,
+                "duration_s": 6.243777,
                 "exit_code": 0,
                 "expected_signal": null,
                 "json_parse_error": null,
                 "json_result": {
-                  "kernel_abs_err_at_best": 0.71875,
-                  "max_residual": 0.71875
+                  "inputs_unmodified": true,
+                  "max_4th_order_error": 0.0,
+                  "metric": "4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|",
+                  "passes_contract": true,
+                  "shape_dtype_finite": true,
+                  "tolerance": 0.0009765625,
+                  "values_allowed": true,
+                  "worst_quadruple": null
                 },
-                "kernel_abs_err_at_best": 0.71875,
-                "max_residual": 0.71875,
+                "max_4th_order_error": 0.0,
+                "passes_contract": true,
                 "stderr": "",
-                "stdout": "W= [[ 0.5  1.  -1.  -1.   0.5 -1.   1.  -0.5  0.5  0.5 -0.5  1. ]\n [ 0.5  1.  -1.  -0.5  1.   0.5 -0.5 -0.5  1.   0.5 -1.   1. ]\n [ 0.5 -1.  -0.5 -0.5 -1.  -0.5  1.  -1.   1.  -1.  -0.5 -1. ]\n [ 0.5 -0.5 -1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -1.   1.   0.5]\n [ 1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -0.5 -0.5  1.   1.  -1. ]\n [ 0.5  0.5 -0.5 -0.5  1.  -1.   1.  -1.   0.5  1.  -1.  -1. ]]\nb= [6.75  6.75  7.125 6.375 6.75  7.125]\nl1= [9.  9.  9.5 8.5 9.  9.5]\nmax residual 0.71875 at x= [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nkernel output 0.75 expected 1.46875 abs err 0.71875\n{\"max_residual\": 0.71875, \"kernel_abs_err_at_best\": 0.71875}\n",
+                "stdout": "{\"metric\": \"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|\", \"max_4th_order_error\": 0.0, \"worst_quadruple\": null, \"tolerance\": 0.0009765625, \"shape_dtype_finite\": true, \"values_allowed\": true, \"inputs_unmodified\": true, \"passes_contract\": true}\n",
                 "timed_out": false,
-                "timeout_s": 60
+                "timeout_s": 60,
+                "tolerance": 0.0009765625
               },
               "id": "c1.e1",
               "kind": "runtime_probe",
-              "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, kernel abs error 0.71875 at the best x \u2014 within the 1.0 tolerance. Residual is convex in x, so its box max is at a vertex; exhaustive vertex enumeration will confirm.",
+              "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
               "supports": "rebutted",
               "tool_event_id": "t7"
             }
           ],
           "id": "c1",
           "raised_by": "solo",
-          "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so a maximally-aligned x (x_i = sign(W[j,i])) gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
+          "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
+              "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
             }
           ],
-          "scope_rationale": "problem.txt requires every legal x (entries in [-1,1], n up to 4096) to have absolute error <= 1.0 against the target that includes the ReLU residual; a single legal x with larger error violates the contract.",
-          "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement.",
+          "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.",
+          "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
           "status": "rebutted",
-          "updated_at": "2026-09-24T06:55:23Z"
+          "updated_at": "2026-09-24T06:37:58Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-24T06:55:23Z",
+          "created_at": "2026-09-24T06:37:58Z",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "9fb9c74e017cf228f27233f5a70f071e4fb71fa36a9590b236aa38f467c087cb"
+                "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "4c175fe09195de83f2146947fe9c36863735c95dbab07e3f30f67751d7171895"
+                "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -857,27 +680,34 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "05dad9e370ac933b990780a15f6a864325d0f03cc869f3592a26a08f780a4003"
+                "sha256": "ac5450fdbba68d905d7fec4ac9e1509ff14b9876541b0aab63b01107cd2ec370"
               }
             ],
-            "duration_s": 6.390903,
+            "duration_s": 6.243777,
             "exit_code": 0,
             "expected_signal": null,
             "json_parse_error": null,
             "json_result": {
-              "kernel_abs_err_at_best": 0.71875,
-              "max_residual": 0.71875
+              "inputs_unmodified": true,
+              "max_4th_order_error": 0.0,
+              "metric": "4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|",
+              "passes_contract": true,
+              "shape_dtype_finite": true,
+              "tolerance": 0.0009765625,
+              "values_allowed": true,
+              "worst_quadruple": null
             },
-            "kernel_abs_err_at_best": 0.71875,
-            "max_residual": 0.71875,
+            "max_4th_order_error": 0.0,
+            "passes_contract": true,
             "stderr": "",
-            "stdout": "W= [[ 0.5  1.  -1.  -1.   0.5 -1.   1.  -0.5  0.5  0.5 -0.5  1. ]\n [ 0.5  1.  -1.  -0.5  1.   0.5 -0.5 -0.5  1.   0.5 -1.   1. ]\n [ 0.5 -1.  -0.5 -0.5 -1.  -0.5  1.  -1.   1.  -1.  -0.5 -1. ]\n [ 0.5 -0.5 -1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -1.   1.   0.5]\n [ 1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -0.5 -0.5  1.   1.  -1. ]\n [ 0.5  0.5 -0.5 -0.5  1.  -1.   1.  -1.   0.5  1.  -1.  -1. ]]\nb= [6.75  6.75  7.125 6.375 6.75  7.125]\nl1= [9.  9.  9.5 8.5 9.  9.5]\nmax residual 0.71875 at x= [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nkernel output 0.75 expected 1.46875 abs err 0.71875\n{\"max_residual\": 0.71875, \"kernel_abs_err_at_best\": 0.71875}\n",
+            "stdout": "{\"metric\": \"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|\", \"max_4th_order_error\": 0.0, \"worst_quadruple\": null, \"tolerance\": 0.0009765625, \"shape_dtype_finite\": true, \"values_allowed\": true, \"inputs_unmodified\": true, \"passes_contract\": true}\n",
             "timed_out": false,
-            "timeout_s": 60
+            "timeout_s": 60,
+            "tolerance": 0.0009765625
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, kernel abs error 0.71875 at the best x \u2014 within the 1.0 tolerance. Residual is convex in x, so its box max is at a vertex; exhaustive vertex enumeration will confirm.",
+          "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
           "supports": "rebutted",
           "tool_event_id": "t7"
         }
@@ -887,335 +717,22 @@
     },
     {
       "args": {
-        "claim_id": "c1",
-        "code": "import numpy as np, torch, itertools, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)\nV = np.array(list(itertools.product([-1.0,1.0], repeat=12)), dtype=np.float32)\nX = torch.from_numpy(V).cuda()\nWt, bt, ct = [torch.from_numpy(v).cuda() for v in (W, b, c)]\nactual = k.run(X, Wt, bt, ct)\nx64 = X.double()\nexpected = 0.25*x64[:,0] + 0.5*x64[:,1] + torch.relu(x64 @ torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()\nerr = (actual.double() - expected).abs()\nprint(\"vertex max err\", err.max().item(), \"argmax x\", V[int(err.argmax())])\nprint(\"min err\", err.min().item())\nbefore = [v.clone() for v in (X, Wt, bt, ct)]\nprint(\"shape\", actual.shape, actual.dtype, \"finite\", bool(torch.isfinite(actual).all()),\n      \"inputs_unmodified\", all(torch.equal(a,z) for a,z in zip((X,Wt,bt,ct), before)))\nprint(json.dumps({\"vertex_max_abs_err\": float(err.max()), \"vertex_min_abs_err\": float(err.min()),\n                  \"tolerance\": 1.0, \"within_tolerance\": bool(err.max() <= 1.0)}))"
-      },
-      "created_at": "2026-09-24T06:55:35Z",
-      "id": "t11",
-      "output": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t11_probe.py",
-            "sha256": "6d63e024750b6dd6c4f359e4843176b00ca125966c3bf436052a49548a1ed88d"
-          },
-          {
-            "description": "Captured stdout from the probe process.",
-            "kind": "stdout",
-            "path": "probes/t11_stdout.txt",
-            "sha256": "868b5f63e08f6aff93f655c034d69870595e162d1f6025cc591ca3bae316b3cc"
-          },
-          {
-            "description": "Captured stderr from the probe process.",
-            "kind": "stderr",
-            "path": "probes/t11_stderr.txt",
-            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-          },
-          {
-            "description": "Parsed JSON object from the last non-empty stdout line.",
-            "kind": "json_result",
-            "path": "probes/t11_json_result.json",
-            "sha256": "159207b5f7d6465a35d5c30812a5d16deb35b373f5dcbfec14364621871345df"
-          }
-        ],
-        "claim_id": "c1",
-        "claim_statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement.",
-        "cwd": "/root/evidence_cases/case_e11",
-        "duration_s": 4.69714,
-        "event_id": "t11",
-        "evidence_draft": {
-          "claim_id": "c1",
-          "data": {
-            "artifacts": [
-              {
-                "description": "Python probe code executed by local runtime.",
-                "kind": "probe_code",
-                "path": "probes/t11_probe.py",
-                "sha256": "6d63e024750b6dd6c4f359e4843176b00ca125966c3bf436052a49548a1ed88d"
-              },
-              {
-                "description": "Captured stdout from the probe process.",
-                "kind": "stdout",
-                "path": "probes/t11_stdout.txt",
-                "sha256": "868b5f63e08f6aff93f655c034d69870595e162d1f6025cc591ca3bae316b3cc"
-              },
-              {
-                "description": "Captured stderr from the probe process.",
-                "kind": "stderr",
-                "path": "probes/t11_stderr.txt",
-                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-              },
-              {
-                "description": "Parsed JSON object from the last non-empty stdout line.",
-                "kind": "json_result",
-                "path": "probes/t11_json_result.json",
-                "sha256": "159207b5f7d6465a35d5c30812a5d16deb35b373f5dcbfec14364621871345df"
-              }
-            ],
-            "duration_s": 4.69714,
-            "exit_code": 0,
-            "expected_signal": null,
-            "json_parse_error": null,
-            "json_result": {
-              "tolerance": 1.0,
-              "vertex_max_abs_err": 0.71875,
-              "vertex_min_abs_err": 0.0,
-              "within_tolerance": true
-            },
-            "stderr": "",
-            "stdout": "vertex max err 0.71875 argmax x [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nmin err 0.0\nshape torch.Size([4096]) torch.float32 finite True inputs_unmodified True\n{\"vertex_max_abs_err\": 0.71875, \"vertex_min_abs_err\": 0.0, \"tolerance\": 1.0, \"within_tolerance\": true}\n",
-            "timed_out": false,
-            "timeout_s": 60
-          },
-          "kind": "runtime_probe",
-          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
-          "supports": "needs_interpretation",
-          "tool_event_id": "t11"
-        },
-        "exit_code": 0,
-        "expected_signal": null,
-        "json_parse_error": null,
-        "json_result": {
-          "tolerance": 1.0,
-          "vertex_max_abs_err": 0.71875,
-          "vertex_min_abs_err": 0.0,
-          "within_tolerance": true
-        },
-        "sandbox": {
-          "cpu_limit_s": 90,
-          "cpu_quota_pct": null,
-          "memory_limit_mb": null,
-          "mode": "cpu_ulimit",
-          "network_isolated": false
-        },
-        "stderr": "",
-        "stdout": "vertex max err 0.71875 argmax x [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nmin err 0.0\nshape torch.Size([4096]) torch.float32 finite True inputs_unmodified True\n{\"vertex_max_abs_err\": 0.71875, \"vertex_min_abs_err\": 0.0, \"tolerance\": 1.0, \"within_tolerance\": true}\n",
-        "timed_out": false,
-        "timeout_s": 60,
-        "use_gpu": true
-      },
-      "status": "ok",
-      "tool": "run_claim_probe"
-    },
-    {
-      "args": {
-        "data": {
-          "kernel_vertex_max_abs_err": 0.71875,
-          "tolerance": 1.0,
-          "vertex_max_abs_err": 0.71875,
-          "within_tolerance": true
-        },
-        "event_id": "t11",
-        "status": "rebutted",
-        "summary": "Exhaustive enumeration of all 2^12 box vertices (a legal X of shape (4096,12)) through the actual GPU kernel: max abs error 0.71875 <= 1.0, output float32 shape (4096,) finite, inputs unmodified. The omitted residual is a sum of convex ReLU terms, so its box maximum is attained at a vertex; this proves no legal x exceeds tolerance, refuting claim c1.",
-        "supports": "rebutted"
-      },
-      "created_at": "2026-09-24T06:55:41Z",
-      "id": "t12",
-      "output": {
-        "claim": {
-          "created_at": "2026-09-24T06:54:37Z",
-          "evidence": [
-            {
-              "artifacts": [],
-              "created_at": "2026-09-24T06:55:23Z",
-              "data": {
-                "artifacts": [
-                  {
-                    "description": "Python probe code executed by local runtime.",
-                    "kind": "probe_code",
-                    "path": "probes/t7_probe.py",
-                    "sha256": "9fb9c74e017cf228f27233f5a70f071e4fb71fa36a9590b236aa38f467c087cb"
-                  },
-                  {
-                    "description": "Captured stdout from the probe process.",
-                    "kind": "stdout",
-                    "path": "probes/t7_stdout.txt",
-                    "sha256": "4c175fe09195de83f2146947fe9c36863735c95dbab07e3f30f67751d7171895"
-                  },
-                  {
-                    "description": "Captured stderr from the probe process.",
-                    "kind": "stderr",
-                    "path": "probes/t7_stderr.txt",
-                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                  },
-                  {
-                    "description": "Parsed JSON object from the last non-empty stdout line.",
-                    "kind": "json_result",
-                    "path": "probes/t7_json_result.json",
-                    "sha256": "05dad9e370ac933b990780a15f6a864325d0f03cc869f3592a26a08f780a4003"
-                  }
-                ],
-                "duration_s": 6.390903,
-                "exit_code": 0,
-                "expected_signal": null,
-                "json_parse_error": null,
-                "json_result": {
-                  "kernel_abs_err_at_best": 0.71875,
-                  "max_residual": 0.71875
-                },
-                "kernel_abs_err_at_best": 0.71875,
-                "max_residual": 0.71875,
-                "stderr": "",
-                "stdout": "W= [[ 0.5  1.  -1.  -1.   0.5 -1.   1.  -0.5  0.5  0.5 -0.5  1. ]\n [ 0.5  1.  -1.  -0.5  1.   0.5 -0.5 -0.5  1.   0.5 -1.   1. ]\n [ 0.5 -1.  -0.5 -0.5 -1.  -0.5  1.  -1.   1.  -1.  -0.5 -1. ]\n [ 0.5 -0.5 -1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -1.   1.   0.5]\n [ 1.  -0.5 -0.5 -1.   0.5 -0.5  1.  -0.5 -0.5  1.   1.  -1. ]\n [ 0.5  0.5 -0.5 -0.5  1.  -1.   1.  -1.   0.5  1.  -1.  -1. ]]\nb= [6.75  6.75  7.125 6.375 6.75  7.125]\nl1= [9.  9.  9.5 8.5 9.  9.5]\nmax residual 0.71875 at x= [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nkernel output 0.75 expected 1.46875 abs err 0.71875\n{\"max_residual\": 0.71875, \"kernel_abs_err_at_best\": 0.71875}\n",
-                "timed_out": false,
-                "timeout_s": 60
-              },
-              "id": "c1.e1",
-              "kind": "runtime_probe",
-              "summary": "Sampled adversarial inputs (per-neuron sign-aligned x, 4096 uniform random, 4096 random \u00b11, sign of W-sum) give max omitted residual 0.71875, kernel abs error 0.71875 at the best x \u2014 within the 1.0 tolerance. Residual is convex in x, so its box max is at a vertex; exhaustive vertex enumeration will confirm.",
-              "supports": "rebutted",
-              "tool_event_id": "t7"
-            },
-            {
-              "artifacts": [],
-              "created_at": "2026-09-24T06:55:41Z",
-              "data": {
-                "artifacts": [
-                  {
-                    "description": "Python probe code executed by local runtime.",
-                    "kind": "probe_code",
-                    "path": "probes/t11_probe.py",
-                    "sha256": "6d63e024750b6dd6c4f359e4843176b00ca125966c3bf436052a49548a1ed88d"
-                  },
-                  {
-                    "description": "Captured stdout from the probe process.",
-                    "kind": "stdout",
-                    "path": "probes/t11_stdout.txt",
-                    "sha256": "868b5f63e08f6aff93f655c034d69870595e162d1f6025cc591ca3bae316b3cc"
-                  },
-                  {
-                    "description": "Captured stderr from the probe process.",
-                    "kind": "stderr",
-                    "path": "probes/t11_stderr.txt",
-                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                  },
-                  {
-                    "description": "Parsed JSON object from the last non-empty stdout line.",
-                    "kind": "json_result",
-                    "path": "probes/t11_json_result.json",
-                    "sha256": "159207b5f7d6465a35d5c30812a5d16deb35b373f5dcbfec14364621871345df"
-                  }
-                ],
-                "duration_s": 4.69714,
-                "exit_code": 0,
-                "expected_signal": null,
-                "json_parse_error": null,
-                "json_result": {
-                  "tolerance": 1.0,
-                  "vertex_max_abs_err": 0.71875,
-                  "vertex_min_abs_err": 0.0,
-                  "within_tolerance": true
-                },
-                "kernel_vertex_max_abs_err": 0.71875,
-                "stderr": "",
-                "stdout": "vertex max err 0.71875 argmax x [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nmin err 0.0\nshape torch.Size([4096]) torch.float32 finite True inputs_unmodified True\n{\"vertex_max_abs_err\": 0.71875, \"vertex_min_abs_err\": 0.0, \"tolerance\": 1.0, \"within_tolerance\": true}\n",
-                "timed_out": false,
-                "timeout_s": 60,
-                "tolerance": 1.0,
-                "vertex_max_abs_err": 0.71875,
-                "within_tolerance": true
-              },
-              "id": "c1.e2",
-              "kind": "runtime_probe",
-              "summary": "Exhaustive enumeration of all 2^12 box vertices (a legal X of shape (4096,12)) through the actual GPU kernel: max abs error 0.71875 <= 1.0, output float32 shape (4096,) finite, inputs unmodified. The omitted residual is a sum of convex ReLU terms, so its box maximum is attained at a vertex; this proves no legal x exceeds tolerance, refuting claim c1.",
-              "supports": "rebutted",
-              "tool_event_id": "t11"
-            }
-          ],
-          "id": "c1",
-          "raised_by": "solo",
-          "rationale": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1]. The omitted term is sum_j 0.25*relu(W[j]\u00b7x - b[j]) with b[j]=0.75*|W[j]|_1, so a maximally-aligned x (x_i = sign(W[j,i])) gives per-neuron pre-activation up to 0.25*|W[j]|_1, and the residual could plausibly exceed 1.0.",
-          "scope": "in_scope",
-          "scope_evidence": [
-            {
-              "source": "problem.txt",
-              "summary": "Acceptable iff EVERY legal x (any finite float32 (n,12) with entries in [-1,1]) has absolute output error <= 1.0 against the full target including the ReLU residual."
-            }
-          ],
-          "scope_rationale": "problem.txt requires every legal x (entries in [-1,1], n up to 4096) to have absolute error <= 1.0 against the target that includes the ReLU residual; a single legal x with larger error violates the contract.",
-          "statement": "There exists a legal input X (entries in [-1,1]) for which the omitted residual term sum_j c[j]*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so the kernel violates the whole-box absolute error <= 1.0 requirement.",
-          "status": "rebutted",
-          "updated_at": "2026-09-24T06:55:41Z"
-        },
-        "evidence": {
-          "artifacts": [],
-          "created_at": "2026-09-24T06:55:41Z",
-          "data": {
-            "artifacts": [
-              {
-                "description": "Python probe code executed by local runtime.",
-                "kind": "probe_code",
-                "path": "probes/t11_probe.py",
-                "sha256": "6d63e024750b6dd6c4f359e4843176b00ca125966c3bf436052a49548a1ed88d"
-              },
-              {
-                "description": "Captured stdout from the probe process.",
-                "kind": "stdout",
-                "path": "probes/t11_stdout.txt",
-                "sha256": "868b5f63e08f6aff93f655c034d69870595e162d1f6025cc591ca3bae316b3cc"
-              },
-              {
-                "description": "Captured stderr from the probe process.",
-                "kind": "stderr",
-                "path": "probes/t11_stderr.txt",
-                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-              },
-              {
-                "description": "Parsed JSON object from the last non-empty stdout line.",
-                "kind": "json_result",
-                "path": "probes/t11_json_result.json",
-                "sha256": "159207b5f7d6465a35d5c30812a5d16deb35b373f5dcbfec14364621871345df"
-              }
-            ],
-            "duration_s": 4.69714,
-            "exit_code": 0,
-            "expected_signal": null,
-            "json_parse_error": null,
-            "json_result": {
-              "tolerance": 1.0,
-              "vertex_max_abs_err": 0.71875,
-              "vertex_min_abs_err": 0.0,
-              "within_tolerance": true
-            },
-            "kernel_vertex_max_abs_err": 0.71875,
-            "stderr": "",
-            "stdout": "vertex max err 0.71875 argmax x [ 1.  1. -1. -1.  1. -1.  1. -1.  1.  1. -1.  1.]\nmin err 0.0\nshape torch.Size([4096]) torch.float32 finite True inputs_unmodified True\n{\"vertex_max_abs_err\": 0.71875, \"vertex_min_abs_err\": 0.0, \"tolerance\": 1.0, \"within_tolerance\": true}\n",
-            "timed_out": false,
-            "timeout_s": 60,
-            "tolerance": 1.0,
-            "vertex_max_abs_err": 0.71875,
-            "within_tolerance": true
-          },
-          "id": "c1.e2",
-          "kind": "runtime_probe",
-          "summary": "Exhaustive enumeration of all 2^12 box vertices (a legal X of shape (4096,12)) through the actual GPU kernel: max abs error 0.71875 <= 1.0, output float32 shape (4096,) finite, inputs unmodified. The omitted residual is a sum of convex ReLU terms, so its box maximum is attained at a vertex; this proves no legal x exceeds tolerance, refuting claim c1.",
-          "supports": "rebutted",
-          "tool_event_id": "t11"
-        }
-      },
-      "status": "ok",
-      "tool": "finalize_probe_evidence"
-    },
-    {
-      "args": {
-        "confidence": 0.97,
+        "confidence": 0.98,
         "decisive_claims": [
           "c1"
         ],
-        "reason": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1], dropping the ReLU residual. The only way it could fail the contract is if some legal x in [-1,1]^12 makes the omitted residual exceed 1.0. Probe t7 sampled sign-aligned, uniform-random, and \u00b11 inputs: max omitted residual 0.71875. Probe t11 exhaustively evaluated all 2^12 box vertices (a legal (4096,12) float32 input) through the actual GPU kernel against a float64 reference: max absolute error 0.71875 <= 1.0. Since the residual sum_j c[j]*max(W[j]\u00b7x-b[j],0) is a sum of convex functions of x, its maximum over the box is attained at a vertex, so the vertex enumeration proves the whole-box bound for every legal input. Structural contract requirements also verified: output is finite float32 of shape (4096,), and no input tensor was modified. Claim c1 is rebutted; the kernel satisfies the contract.",
+        "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
         "verdict": "trust"
       },
-      "created_at": "2026-09-24T06:55:47Z",
-      "id": "t13",
+      "created_at": "2026-09-24T06:38:03Z",
+      "id": "t9",
       "output": {
-        "confidence": 0.97,
-        "created_at": "2026-09-24T06:55:47Z",
+        "confidence": 0.98,
+        "created_at": "2026-09-24T06:38:03Z",
         "decisive_claims": [
           "c1"
         ],
-        "reason": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1], dropping the ReLU residual. The only way it could fail the contract is if some legal x in [-1,1]^12 makes the omitted residual exceed 1.0. Probe t7 sampled sign-aligned, uniform-random, and \u00b11 inputs: max omitted residual 0.71875. Probe t11 exhaustively evaluated all 2^12 box vertices (a legal (4096,12) float32 input) through the actual GPU kernel against a float64 reference: max absolute error 0.71875 <= 1.0. Since the residual sum_j c[j]*max(W[j]\u00b7x-b[j],0) is a sum of convex functions of x, its maximum over the box is attained at a vertex, so the vertex enumeration proves the whole-box bound for every legal input. Structural contract requirements also verified: output is finite float32 of shape (4096,), and no input tensor was modified. Claim c1 is rebutted; the kernel satisfies the contract.",
+        "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
         "verdict": "trust"
       },
       "status": "ok",
@@ -1223,12 +740,12 @@
     }
   ],
   "verdict": {
-    "confidence": 0.97,
-    "created_at": "2026-09-24T06:55:47Z",
+    "confidence": 0.98,
+    "created_at": "2026-09-24T06:38:03Z",
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The kernel computes only the linear base 0.25*x[0]+0.5*x[1], dropping the ReLU residual. The only way it could fail the contract is if some legal x in [-1,1]^12 makes the omitted residual exceed 1.0. Probe t7 sampled sign-aligned, uniform-random, and \u00b11 inputs: max omitted residual 0.71875. Probe t11 exhaustively evaluated all 2^12 box vertices (a legal (4096,12) float32 input) through the actual GPU kernel against a float64 reference: max absolute error 0.71875 <= 1.0. Since the residual sum_j c[j]*max(W[j]\u00b7x-b[j],0) is a sum of convex functions of x, its maximum over the box is attained at a vertex, so the vertex enumeration proves the whole-box bound for every legal input. Structural contract requirements also verified: output is finite float32 of shape (4096,), and no input tensor was modified. Claim c1 is rebutted; the kernel satisfies the contract.",
+    "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
     "verdict": "trust"
   }
 }

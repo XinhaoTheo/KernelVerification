@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_j`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_d`
+- Turns: 5
+- Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 23.464s across 5 calls | tokens: in=52783 out=1462 total=54245
+- LLM time: 22.259s across 4 calls | tokens: in=42336 out=1078 total=43414
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.98
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_j"
+    "entry": "case_d"
   }
   Output summary:
   {
-    "entry": "case_j"
+    "entry": "case_d"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_j"
+    "entry": "case_d"
   }
   Output summary:
   {
-    "entry": "case_j"
+    "entry": "case_d"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_j"
+    "entry": "case_d"
   }
   Output summary:
   {
-    "entry": "case_j"
+    "entry": "case_d"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_j",
+    "entry": "case_d",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_j"
+    "entry": "case_d"
   }
 
-### Turn 2 - `solo` (2.9334413089999996s, in=7115 out=210)
+### Turn 2 - `solo` (7.250126241999999s, in=8023 out=405)
 
 Message:
 
 ```text
-I'll record the contract claim and run the kernel against the float64 reference on the fixed workload.
+The kernel simulates int8-style quantization of the logits before softmax, while the contract's reference uses the original logits — this is exactly the kind of lossy path where final-error tolerance (≤0.02 relative L2) must be measured, not assumed. I'll record that claim and run the fixed workload.
 ```
 
 Tool calls:
@@ -73,39 +73,39 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The kernel uses an E[x\u00b2]-mean\u00b2 variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.",
+    "rationale": "The kernel computes scale=max|logits|/7 and snaps logits to a 15-level grid before softmax, while the contract's reference uses unquantized logits. The resulting probability perturbation may exceed the 0.02 relative L2 tolerance on the fixed workload.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload."
+        "summary": "Reference uses original input logits without quantization; output relative L2 error must be <= 0.02 on the fixed make_inputs() workload."
       }
     ],
-    "scope_rationale": "Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().",
-    "statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference."
-  }
+    "scope_rationale": "The contract requires the output's relative L2 error against the unquantized float64 reference to be <= 0.02 for the fixed workload from make_inputs().",
+    "statement": "The kernel's quantized-logit softmax yields relative L2 error > 0.02 against the float6
+  ...[truncated 63 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel uses an E[x\u00b2]-mean\u00b2 variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.",
+    "rationale": "The kernel computes scale=max|logits|/7 and snaps logits to a 15-level grid before softmax, while the contract's reference uses unquantized logits. The resulting probability perturbation may exceed the 0.02 relative L2 tolerance on the fixed workload.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload."
+        "summary": "Reference uses original input logits without quantization; output relative L2 error must be <= 0.02 on the fixed make_inputs() workload."
       }
     ],
-    "scope_rationale": "Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().",
-    "statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
+    "scope_rationale": "The contract requires the output's relative L2 error against the unquantized float64 reference to be <= 0.02 for the fixed workload from make_inputs().",
+    "statement": "The kernel's quantized-logit softmax yields relative L2 error > 0.02 against the float64 unquantized reference on the fixed make_inputs() workload.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (4.174159713000001s, in=8124 out=311)
+### Turn 3 - `solo` (4.820248613s, in=9174 out=241)
 
 Message:
 
 ```text
-I'll run the kernel on the fixed workload and compute the relative L2 error against the float64 reference.
+I'll run the fixed workload and compute the contract's exact metric against the float64 reference.
 ```
 
 Tool calls:
@@ -114,8 +114,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_j\")\nimport torch, numpy as np\nfrom kernel import make_inputs, run\n\nx = make_inputs()[0]\nout = run(x)\n\nxf = x.to(torch.float64)\nmean = xf.sum() / 128\nvar = ((xf - mean) ** 2).sum() / 128\nref = (xf - mean) / np.sqrt(var + 1e-5)\n\nnum = (out.to(torch.float64) - ref).norm().item()\nden = max(ref.norm().item(), 0.001 * np.sqrt(128))\nerr = num / den\nres = {\"shape\": list(out.shape), \"dtype\": str(out.dtype), \"finite\": bool(torch.isfinite(out).all().item()),\n       \"rel_l2_error\": err, \"bound\": 0.02, \"passes\": bool(err <= 0.02),\n       \"max_abs_err\": (out.to(torch.float64) - ref).abs().max().item(),\n       \"max_rel_err\": ((out.to(torch.float64) - ref).abs() / ref.abs
-  ...[truncated 100 chars]
+    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_d\")\nimport kernel\n\nlogits_np, values_np = kernel.make_inputs_numpy()\nlogits = torch.from_numpy(logits_np).cuda()\nvalues = torch.from_numpy(values_np).cuda()\nout = kernel.run(logits, values).cpu().numpy().astype(np.float64)\n\nl = logits_np.astype(np.float64)\nv = values_np.astype(np.float64)\nw = np.exp(l - l.max())\np = w / w.sum()\nref = p @ v\n\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(16))\nerr = np.linalg.norm(out - ref) / denom\nprint(json.dumps({\"rel_l2\": float(err), \"tol\": 0.02, \"finite\": bool(np.all(np.isfinite(out))),\n                  \"ref_norm\": float(np.linalg.norm(ref)), \"out_norm\": float(np.linalg.norm(out))}))"
+  }
   Output summary:
   {
     "artifacts": [
@@ -123,116 +123,55 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "25b1dee6f214465e6fb6f5f003fe71f4d7a23935f011ef6e8fa4d2ba66cb64f2"
+        "sha256": "22782977558e3fa6dcd426507666d03e646c3be91f8ce9d410c1f72632792e04"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "a701a6d8a0e9776aa8920b1f84726dc2d81ad7ac7865d499e2968a8b62614378"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t6_stderr.txt",
-        "sha256": "1a20f8e361a2aad85dfb7b8e9c5083f681336398e0688149cf73f01862f86736"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
-    "duration_s": 8.19683,
-    "event_id": "t6",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t6_probe.py",
-            "sha256": "25b1dee6f214465e6
-  ...[truncated 2235 chars]
-
-### Turn 4 - `solo` (3.8636690799999975s, in=10072 out=299)
-
-Message:
-
-```text
-The probe hit a trivial host/device bug in my reference code (np.sqrt on a CUDA tensor). I'll rerun with a pure-torch reference computation.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t7 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_j\")\nimport torch, numpy as np\nfrom kernel import make_inputs, run\n\nx = make_inputs()[0]\nout = run(x)\n\nxf = x.to(torch.float64)\nmean = xf.sum() / 128\nvar = ((xf - mean) ** 2).sum() / 128\nref = (xf - mean) / torch.sqrt(var + 1e-5)\n\nnum = (out.to(torch.float64) - ref).norm().item()\nden = max(ref.norm().item(), 0.001 * np.sqrt(128))\nerr = num / den\nres = {\"shape\": list(out.shape), \"dtype\": str(out.dtype), \"finite\": bool(torch.isfinite(out).all().item()),\n       \"rel_l2_error\": err, \"bound\": 0.02, \"passes\": bool(err <= 0.02),\n       \"max_abs_err\": (out.to(torch.float64) - ref).abs().max().item()}\nprint(json.dumps(res))\n",
-    "expected_signal": "rel_l2_error"
-  }
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "cde1dabe258898af652106cbd3f430cb456ee742d51115bad6ca4786d9d5d090"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "a0a73f196c0f1b3f7da0b172ec8f93e7df32a14790d2145d80b316dd95b13ea8"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "dae3c01e23e5209186328331f72708339b249404fe12c304ced57eea61b1ea70"
+        "path": "probes/t6_json_result.json",
+        "sha256": "fae18dc0dc4bf8d500311407ce32a1d8be27530ce8b193e03c68e100e1933bb4"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
-    "duration_s": 4.812259,
-    "event_id": "t7",
-    "evidence_draft": {
-  
-  ...[truncated 2472 chars]
+    "claim_statement": "The kernel's quantized-logit softmax yields relative L2 error > 0.02 against the float64 unquantized reference on the fixed make_inputs() workload.",
+    "duration_s": 7.492209,
+    "event_id": "t6",
+    "evidence_draft
+  ...[truncated 2202 chars]
 
-### Turn 5 - `solo` (7.8949022169999985s, in=12113 out=384)
+### Turn 4 - `solo` (3.535646442000001s, in=11123 out=198)
 
 Message:
 
 ```text
-The probe (t7) shows the kernel's relative L2 error is 0.1448 — far above the 0.02 bound. The cause is clear from the source: with x ≈ 64, E[x²] ≈ 4096 while variance ≈ 0.015, so the fp32 `squares/N − mean²` computation suffers catastrophic cancellation. I'll record the evidence and close the claim.
+The probe shows relative L2 error of 0.0365, well above the 0.02 tolerance. Finalizing the claim and verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "max_abs_err": 0.3743162406125893,
-      "metric": "relative L2 error vs float64 reference",
-      "passes": false,
-      "reason": "matches contract's declared error metric",
-      "rel_l2_error": 0.14481964583989307,
-      "shape": [
-        128
-      ],
-      "shape_and_finiteness_ok": true
+      "finite": true,
+      "rel_l2": 0.0365238858077767,
+      "tol": 0.02
     },
-    "event_id": "t7",
+    "event_id": "t6",
     "status": "confirmed",
-    "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 \u2014 only the numeric bound fails.",
+    "summary": "On the fixed make_inputs() workload, the kernel's quantized-logit softmax produced relative L2 error 0.03652 against the float64 unquantized reference (tolerance 0.02). Output was finite with norm 3.9476 vs reference norm 4.0809.",
     "supports": "confirmed"
   }
   Output summary:
@@ -240,29 +179,29 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 \u2014 only the numeric bound fails.",
+    "summary": "On the fixed make_inputs() workload, the kernel's quantized-logit softmax produced relative L2 error 0.03652 against the float64 unquantized reference (tolerance 0.02). Output was finite with norm 3.9476 vs reference norm 4.0809.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
+    "tool_event_id": "t6"
   }
 
-### Turn 6 - `solo` (4.598102220000001s, in=15359 out=258)
+### Turn 5 - `solo` (6.652899518000002s, in=14016 out=234)
 
 Message:
 
 ```text
-The single in-scope claim is confirmed with runtime evidence: the kernel's fp32 E[x²]−mean² variance suffers catastrophic cancellation on the fixed workload (x ≈ 64), giving relative L2 error 0.1448 vs the 0.02 bound. I'll record the verdict.
+The single in-scope claim is confirmed by a runtime probe on the exact fixed workload: relative L2 error 0.03652 vs the required ≤ 0.02. Recording the final verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
     "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t6) and computed the contract's metric: ||output - float64 unquantized reference||_2 / max(||ref||_2, 0.04) = 0.03652, exceeding the required tolerance of 0.02. The output was finite and correctly shaped, but the kernel quantizes logits to a 15-level grid (scale = max|logits|/7) before softmax, while the contract requires the reference computed from the original unquantized logits. This confirmed, in-scope violation of the explicit numerical contract (claim c1) justifies rejection.",
     "verdict": "reject"
   }
   Output summary:
@@ -271,7 +210,7 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t6) and computed the contract's metric: ||output - float64 unquantized reference||_2 / max(||ref||_2, 0.04) = 0.03652, exceeding the required tolerance of 0.02. The output was finite and correctly shaped, but the kernel quantizes logits to a 15-level grid (scale = max|logits|/7) before softmax, while the contract requires the reference computed from the original unquantized logits. This confirmed, in-scope violation of the explicit numerical contract (claim c1) justifies rejection.",
     "verdict": "reject"
   }
 
@@ -283,60 +222,60 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.
+Statement: The kernel's quantized-logit softmax yields relative L2 error > 0.02 against the float64 unquantized reference on the fixed make_inputs() workload.
 
 Scope: `in_scope`
 
-Scope rationale: Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().
+Scope rationale: The contract requires the output's relative L2 error against the unquantized float64 reference to be <= 0.02 for the fixed workload from make_inputs().
 
 Scope evidence:
-- `problem.txt`: Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload.
+- `problem.txt`: Reference uses original input logits without quantization; output relative L2 error must be <= 0.02 on the fixed make_inputs() workload.
 
-Rationale: The kernel uses an E[x²]-mean² variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.
+Rationale: The kernel computes scale=max|logits|/7 and snaps logits to a 15-level grid before softmax, while the contract's reference uses unquantized logits. The resulting probability perturbation may exceed the 0.02 relative L2 tolerance on the fixed workload.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 — only the numeric bound fails.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: On the fixed make_inputs() workload, the kernel's quantized-logit softmax produced relative L2 error 0.03652 against the float64 unquantized reference (tolerance 0.02). Output was finite with norm 3.9476 vs reference norm 4.0809.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_j"
+  "entry": "case_d"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_j"
+  "entry": "case_d"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_j"
+  "entry": "case_d"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_j"
+  "entry": "case_d"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel uses an E[x\u00b2]-mean\u00b2 variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.",
+  "rationale": "The kernel computes scale=max|logits|/7 and snaps logits to a 15-level grid before softmax, while the contract's reference uses unquantized logits. The resulting probability perturbation may exceed the 0.02 relative L2 tolerance on the fixed workload.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload."
+      "summary": "Reference uses original input logits without quantization; output relative L2 error must be <= 0.02 on the fixed make_inputs() workload."
     }
   ],
-  "scope_rationale": "Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().",
-  "statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
+  "scope_rationale": "The contract requires the output's relative L2 error against the unquantized float64 reference to be <= 0.02 for the fixed workload from make_inputs().",
+  "statement": "The kernel's quantized-logit softmax yields relative L2 error > 0.02 against the float64 unquantized reference on the fixed make_inputs() workload.",
   "status": "open"
 }
 
@@ -348,24 +287,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "25b1dee6f214465e6fb6f5f003fe71f4d7a23935f011ef6e8fa4d2ba66cb64f2"
+      "sha256": "22782977558e3fa6dcd426507666d03e646c3be91f8ce9d410c1f72632792e04"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "a701a6d8a0e9776aa8920b1f84726dc2d81ad7ac7865d499e2968a8b62614378"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t6_stderr.txt",
-      "sha256": "1a20f8e361a2aad85dfb7b8e9c5083f681336398e0688149cf73f01862f86736"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t6_json_result.json",
+      "sha256": "fae18dc0dc4bf8d500311407ce32a1d8be27530ce8b193e03c68e100e1933bb4"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
-  "duration_s": 8.19683,
+  "claim_statement": "The kernel's quantized-logit softmax yields relative L2 error > 0.02 against the float64 unquantized reference on the fixed make_inputs() workload.",
+  "duration_s": 7.492209,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -375,105 +320,41 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "25b1dee6f214465e6fb6f5f003fe71f4d7a23935f011ef6e8fa4d2ba66cb64f2"
+          "sha256": "22782977558e3fa6dcd426507666d03e646c3be91f8ce9d410c1f72632792e04"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "a701a6d8a0e9776aa8920b1f84726dc2d81ad7ac7865d499e2968a8b62614378"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t6_stderr.txt",
-          "sha256": "1a20f8e361a2aad85dfb7b8e9c5083f681336398e0688149cf73f01862f86736"
-        }
-      ],
-      "duration_s": 8.19683,
-      "exit_code": 1,
-      "expected_signal": "rel_l2_error",
-      "json_parse_error": "stdout has no non-empty lines",
-      "json_result": null,
-      "stderr": "Traceback (most recent call last):\n  File \"
-...[truncated 1435 chars]
-
-### t7 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "cde1dabe258898af652106cbd3f430cb456ee742d51115bad6ca4786d9d5d090"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "a0a73f196c0f1b3f7da0b172ec8f93e7df32a14790d2145d80b316dd95b13ea8"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "dae3c01e23e5209186328331f72708339b249404fe12c304ced57eea61b1ea70"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
-  "duration_s": 4.812259,
-  "event_id": "t7",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "cde1dabe258898af652106cbd3f430cb456ee742d51115bad6ca4786d9d5d090"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "a0a73f196c0f1b3f7da0b172ec8f93e7df32a14790d2145d80b316dd95b13ea8"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        }
-...[truncated 1672 chars]
+    
+...[truncated 1402 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 \u2014 only the numeric bound fails.",
+  "summary": "On the fixed make_inputs() workload, the kernel's quantized-logit softmax produced relative L2 error 0.03652 against the float64 unquantized reference (tolerance 0.02). Output was finite with norm 3.9476 vs reference norm 4.0809.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t6"
 }
 
-### t9 - record_verdict - ok
+### t8 - record_verdict - ok
 
 {
   "confidence": 0.98,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t6) and computed the contract's metric: ||output - float64 unquantized reference||_2 / max(||ref||_2, 0.04) = 0.03652, exceeding the required tolerance of 0.02. The output was finite and correctly shaped, but the kernel quantizes logits to a 15-level grid (scale = max|logits|/7) before softmax, while the contract requires the reference computed from the original unquantized logits. This confirmed, in-scope violation of the explicit numerical contract (claim c1) justifies rejection.",
   "verdict": "reject"
 }
 
@@ -481,10 +362,10 @@ Evidence:
 
 {
   "confidence": 0.98,
-  "created_at": "2026-09-24T00:15:31Z",
+  "created_at": "2026-09-23T21:34:53Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t6) and computed the contract's metric: ||output - float64 unquantized reference||_2 / max(||ref||_2, 0.04) = 0.03652, exceeding the required tolerance of 0.02. The output was finite and correctly shaped, but the kernel quantizes logits to a 15-level grid (scale = max|logits|/7) before softmax, while the contract requires the reference computed from the original unquantized logits. This confirmed, in-scope violation of the explicit numerical contract (claim c1) justifies rejection.",
   "verdict": "reject"
 }

@@ -1,4 +1,4 @@
-"""Derive case_107–case_118 results; update only README's OZ RESULTS block, without model calls."""
+"""Derive case_113–case_124 results; update only README's OZ RESULTS block, without model calls."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "sin
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.report_extension import ARMS, derive, render, replace_results
 
-CASES = tuple(f"case_{i:02d}" for i in range(107, 119))
+CASES = tuple(f"case_{i:02d}" for i in range(113, 125))
 LOW_TRIALS = ("oz_low32_r1", "oz_low32_r2", "oz_low32_r3")
 PLANNED = {
     LOW_TRIALS[0]: {"reasoning_effort": "low", "max_tokens": 32768, "arms": ARMS},
@@ -22,7 +22,7 @@ PLANNED = {
 
 def main(*, export_json=False):
     result = derive(ROOT, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
-                    required_families=3, case_range="case_107–case_118")
+                    required_families=3, case_range="case_113–case_124")
     replace_results(ROOT, "OZ RESULTS", render(result))
     if export_json:
         output = ROOT / "private_data" / "reports" / "oz_scoreboard.json"

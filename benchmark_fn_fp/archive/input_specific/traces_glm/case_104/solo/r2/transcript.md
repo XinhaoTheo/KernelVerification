@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_l`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_f`
+- Turns: 5
+- Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 23.336s across 5 calls | tokens: in=53335 out=1692 total=55027
+- LLM time: 20.667s across 4 calls | tokens: in=41337 out=1063 total=42400
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.95
+- Confidence: 0.98
 
 ## Timeline
 
@@ -25,189 +25,157 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_l",
+    "entry": "case_f",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 
-### Turn 2 - `solo` (6.3421312950000015s, in=7510 out=508)
+### Turn 2 - `solo` (4.804025467000002s, in=7658 out=286)
 
 Message:
 
 ```text
-The kernel is a Richardson iteration `x ← x + (b − Ax)` for 64 steps. Convergence factor per eigendirection is |1−λ|; with eigenvalues down to 0.03125 the slowest factor is 0.96875, and 0.96875^64 ≈ 0.13 — the slowest-converging error component may not shrink below the 0.08 relative tolerance. I'll record that claim and test it directly.
+The kernel rounds each intermediate state to float16 (line 16) over 64 recurrence steps. That could accumulate error beyond the 0.002 relative L2 tolerance. I'll record a claim and run the actual workload.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 error`
+- `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "Richardson iteration converges as (1-\u03bb)^64 per eigendirection; for \u03bb=0.03125 the factor is 0.96875^64\u22480.13, so components of the error along the smallest-eigenvalue eigendirection may remain large relative to ||x||, possibly exceeding the 0.08 relative L2 tolerance.",
+    "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08 for the specified workload from make_inputs()."
+        "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
       }
     ],
-    "statement": "run(*make_inputs()) produces an output whose relative L2 error against the float64 exact solution exceeds 0.08, violating the contract tolerance."
+    "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+    "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload."
   }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 3 - `solo` (4.1738823550000035s, in=8297 out=292)
-
-Message:
-
-```text
-I'll re-record the claim with the required scope rationale, then run a direct numeric probe.
-```
-
-Tool calls:
-
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "Richardson iteration x \u2190 x + (b \u2212 Ax) converges as (1\u2212\u03bb)^STEPS per eigendirection; the generator's smallest eigenvalue is 0.03125 so the slowest factor is 0.96875^64 \u2248 0.13, which may leave residual error above the 0.08 relative tolerance depending on the rhs's components along slow modes.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08 for the specified workload from make_inputs()."
-      }
-    ],
-    "scope_rationale": "The contract requires run(*make_inputs()) to output a finite (16,) vector with relative L2 error at most 0.08 against the float64 exact solution; a violation of that tolerance for the spe
-  ...[truncated 212 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Richardson iteration x \u2190 x + (b \u2212 Ax) converges as (1\u2212\u03bb)^STEPS per eigendirection; the generator's smallest eigenvalue is 0.03125 so the slowest factor is 0.96875^64 \u2248 0.13, which may leave residual error above the 0.08 relative tolerance depending on the rhs's components along slow modes.",
+    "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08 for the specified workload from make_inputs()."
+        "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
       }
     ],
-    "scope_rationale": "The contract requires run(*make_inputs()) to output a finite (16,) vector with relative L2 error at most 0.08 against the float64 exact solution; a violation of that tolerance for the specified inputs is the defect this claim tests.",
-    "statement": "run(*make_inputs()) produces an output whose relative L2 error against the float64 exact solution exceeds 0.08, violating the contract tolerance.",
+    "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+    "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (4.179733401000007s, in=9693 out=288)
+### Turn 3 - `solo` (6.519336594999999s, in=8673 out=306)
 
 Message:
 
 ```text
-I'll run the decisive numeric probe on the actual kernel.
+I'll run the actual workload on GPU and compare against the float64 reference to test the fp16-quantization claim.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t7 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_l\")\nimport numpy as np, torch\nimport kernel\n\nmatrix, rhs = kernel.make_inputs()\nout = kernel.run(matrix, rhs)\n# float64 exact solution from original float32 values\nM64 = matrix.detach().cpu().numpy().astype(np.float64)\nb64 = rhs.detach().cpu().numpy().astype(np.float64)\nx = np.linalg.solve(M64, b64)\no = out.detach().cpu().numpy().astype(np.float64)\nrel = np.linalg.norm(o - x) / max(np.linalg.norm(x), 0.001*np.sqrt(16))\n# theory check: Richardson factor per eigenvalue\nfactors = [(1-l)**64 for l in [0.03125,0.0625,0.125,0.25]]\nprint(json.dumps({\n  \"relative_L2_error\": float(rel),\n  \"tolerance\": 0.08,\n  \"exceeds\": bool(rel > 0.08),\n  \"norm_x\": float(np.linalg.norm(x)
-  ...[truncated 99 chars]
+    "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, '/root/numerical_cases/case_f')\nfrom kernel import run, make_inputs, make_inputs_numpy\n\nmatrix, initial, drive = make_inputs()\nout = run(matrix, initial, drive)\ntorch.cuda.synchronize()\n\nm64 = matrix.cpu().numpy().astype(np.float64)\ns64 = initial.cpu().numpy().astype(np.float64)\nd64 = drive.cpu().numpy().astype(np.float64)\nfor t in range(64):\n    s64 = m64 @ s64 + d64[t]\n\no = out.cpu().numpy().astype(np.float64)\nnum = np.linalg.norm(o - s64)\nden = max(np.linalg.norm(s64), 0.001*np.sqrt(16))\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 reference\",\n    \"num\": float(num), \"den\": float(den),\n    \"rel_err\": float(num/den),\n    \"bound\": 0.002,\n    \"finite\
+  ...[truncated 159 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "45da6d587815bc1c89f71007e062c1db243e07649f5915ef12c47b6e61349f8a"
+        "path": "probes/t6_probe.py",
+        "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "d3ecbb01530f357f69603497496f0a85d388fbcec1d7ee20f158519d404a33d6"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "9bbbd7f555b131dad891525375539cc6e751685983ec0650af20ef9fd5f7d278"
+        "path": "probes/t6_json_result.json",
+        "sha256": "2d14cb8339a83195f4624f137171f08d960d18e10a6b8cf93b499cac0a5648b4"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "run(*make_inputs()) produces an output whose relative L2 error against the float64 exact solution exceeds 0.08, violating the contract tolerance.",
-    "duration_s": 7.103388,
-    "event_id": "t7",
-    "evidence_draft":
-  ...[truncated 2784 chars]
+    "claim_statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
+    "duration_s": 4.515833,
+    "event_id": "t
+  ...[truncated 2700 chars]
 
-### Turn 5 - `solo` (4.167163981999991s, in=11999 out=302)
+### Turn 4 - `solo` (4.695045809999996s, in=10870 out=242)
 
 Message:
 
 ```text
-The probe ran cleanly: the kernel's Richardson iteration leaves a relative L2 error of 0.1244 against the float64 exact solution, exceeding the 0.08 tolerance. I'll finalize this evidence and record the verdict.
+The probe ran on the actual GPU workload and measured rel_err ≈ 0.00491, exceeding the 0.002 bound. I'll finalize this evidence and record the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "exceeds": true,
+      "den": 162.41431887628192,
       "finite": true,
-      "norm_x": 18.216566495477316,
-      "relative_L2_error": 0.12440399903958174,
-      "tolerance": 0.08,
-      "worst_richardson_factors": [
-        0.13108403247847505,
-        0.01607539635095263,
-        0.00019431905663716255,
-        1.0090689833159348e-08
-      ]
+      "num": 0.7971033936944146,
+      "rel_err": 0.0049078394023965525,
+      "shape": [
+        16
+      ],
+      "tolerance": 0.002
     },
-    "event_id": "t7",
+    "event_id": "t6",
     "status": "confirmed",
-    "summary": "run(*make_inputs()) produced a finite (16,) output with relative L2 error 0.1244 vs the float64 exact solution, exceeding the contract's 0.08 tolerance; slowest Richardson factor (1-0.03125)^64 \u2248 0.131 explains the residual error.",
+    "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
     "supports": "confirmed"
   }
   Output summary:
@@ -215,37 +183,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "run(*make_inputs()) produced a finite (16,) output with relative L2 error 0.1244 vs the float64 exact solution, exceeding the contract's 0.08 tolerance; slowest Richardson factor (1-0.03125)^64 \u2248 0.131 explains the residual error.",
+    "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
+    "tool_event_id": "t6"
   }
 
-### Turn 6 - `solo` (4.472720436999992s, in=15836 out=302)
+### Turn 5 - `solo` (4.648790866999988s, in=14136 out=229)
 
 Message:
 
 ```text
-The single decisive claim is resolved: a clean runtime probe (t7) showed the kernel's 64-step Richardson iteration leaves a relative L2 error of 0.124 against the float64 exact solution, well above the contract's 0.08 limit, on exactly the in-scope inputs from `make_inputs()`. Recording the verdict.
+The single in-scope claim c1 is confirmed with decisive runtime evidence (t6): rel_err ≈ 0.0049 > 0.002. I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 ran kernel.run(*kernel.make_inputs()) on the real GPU artifact, computed the contract's reference (float64 np.linalg.solve of the supplied float32 matrix and rhs), and measured relative L2 error 0.12440 (denominator ||x||=18.22, so the tolerance clamp is irrelevant) against the required 0.08 maximum. The output was finite and shape (16,), but the error exceeds tolerance by ~1.5x. Cause matches theory: the Richardson iteration x \u2190 x + (b \u2212 Ax) with unit step converges per-eigendirection as (1\u2212\u03bb)^64; the generator's smallest eigenvalue 0.03125 gives 0.96875^64 \u2248 0.131, so the slowest mode never converges enough in 64 steps. This is the in-scope, contract-specified workload, so the kern
-  ...[truncated 61 chars]
+    "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
+    "verdict": "reject"
+  }
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 ran kernel.run(*kernel.make_inputs()) on the real GPU artifact, computed the contract's reference (float64 np.linalg.solve of the supplied float32 matrix and rhs), and measured relative L2 error 0.12440 (denominator ||x||=18.22, so the tolerance clamp is irrelevant) against the required 0.08 maximum. The output was finite and shape (16,), but the error exceeds tolerance by ~1.5x. Cause matches theory: the Richardson iteration x \u2190 x + (b \u2212 Ax) with unit step converges per-eigendirection as (1\u2212\u03bb)^64; the generator's smallest eigenvalue 0.03125 gives 0.96875^64 \u2248 0.131, so the slowest mode never converges enough in 64 steps. This is the in-scope, contract-specified workload, so the kernel violates the numerical contract.",
+    "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
     "verdict": "reject"
   }
 
@@ -257,103 +226,96 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: run(*make_inputs()) produces an output whose relative L2 error against the float64 exact solution exceeds 0.08, violating the contract tolerance.
+Statement: The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires run(*make_inputs()) to output a finite (16,) vector with relative L2 error at most 0.08 against the float64 exact solution; a violation of that tolerance for the specified inputs is the defect this claim tests.
+Scope rationale: Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.
 
 Scope evidence:
-- `problem.txt`: Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08 for the specified workload from make_inputs().
+- `problem.txt`: Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload.
 
-Rationale: Richardson iteration x ← x + (b − Ax) converges as (1−λ)^STEPS per eigendirection; the generator's smallest eigenvalue is 0.03125 so the slowest factor is 0.96875^64 ≈ 0.13, which may leave residual error above the 0.08 relative tolerance depending on the rhs's components along slow modes.
+Rationale: Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: run(*make_inputs()) produced a finite (16,) output with relative L2 error 0.1244 vs the float64 exact solution, exceeding the contract's 0.08 tolerance; slowest Richardson factor (1-0.03125)^64 ≈ 0.131 explains the residual error.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound — consistent with fp16 intermediate quantization accumulating over 64 steps.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
-### t5 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t6 - record_claim - ok
+### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Richardson iteration x \u2190 x + (b \u2212 Ax) converges as (1\u2212\u03bb)^STEPS per eigendirection; the generator's smallest eigenvalue is 0.03125 so the slowest factor is 0.96875^64 \u2248 0.13, which may leave residual error above the 0.08 relative tolerance depending on the rhs's components along slow modes.",
+  "rationale": "Each of 64 steps quantizes the state to fp16 (~1e-3 relative rounding), and errors compound through the recurrence; the resulting relative L2 error may exceed the contract's 0.002 bound.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08 for the specified workload from make_inputs()."
+      "summary": "Final output must have relative L2 error at most 0.002 vs float64 reference for the fixed make_inputs workload."
     }
   ],
-  "scope_rationale": "The contract requires run(*make_inputs()) to output a finite (16,) vector with relative L2 error at most 0.08 against the float64 exact solution; a violation of that tolerance for the specified inputs is the defect this claim tests.",
-  "statement": "run(*make_inputs()) produces an output whose relative L2 error against the float64 exact solution exceeds 0.08, violating the contract tolerance.",
+  "scope_rationale": "Contract requires relative L2 error <= 0.002 on the fixed make_inputs() workload.",
+  "statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
   "status": "open"
 }
 
-### t7 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "45da6d587815bc1c89f71007e062c1db243e07649f5915ef12c47b6e61349f8a"
+      "path": "probes/t6_probe.py",
+      "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "d3ecbb01530f357f69603497496f0a85d388fbcec1d7ee20f158519d404a33d6"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "9bbbd7f555b131dad891525375539cc6e751685983ec0650af20ef9fd5f7d278"
+      "path": "probes/t6_json_result.json",
+      "sha256": "2d14cb8339a83195f4624f137171f08d960d18e10a6b8cf93b499cac0a5648b4"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "run(*make_inputs()) produces an output whose relative L2 error against the float64 exact solution exceeds 0.08, violating the contract tolerance.",
-  "duration_s": 7.103388,
-  "event_id": "t7",
+  "claim_statement": "The fp16 intermediate quantization in _recurrence_kernel causes the final output's relative L2 error vs the float64 reference to exceed 0.002 on the specified workload.",
+  "duration_s": 4.515833,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -361,53 +323,52 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "45da6d587815bc1c89f71007e062c1db243e07649f5915ef12c47b6e61349f8a"
+          "path": "probes/t6_probe.py",
+          "sha256": "d933765de2b30315027ebca501f6b37de8aab4857fb649df2dd1706bd06680ff"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "d3ecbb01530f357f69603497496f0a85d388fbcec1d7ee20f158519d404a33d6"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "20e950944bf80ffde47153e1fb253533e7f7ceb69bb68b76203665f371cea145"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      
-...[truncated 1984 chars]
+          "path": "probes/t6_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca
+...[truncated 1900 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "run(*make_inputs()) produced a finite (16,) output with relative L2 error 0.1244 vs the float64 exact solution, exceeding the contract's 0.08 tolerance; slowest Richardson factor (1-0.03125)^64 \u2248 0.131 explains the residual error.",
+  "summary": "On the fixed make_inputs() workload, run() output (finite, shape (16,)) has relative L2 error 0.004908 vs the float64 reference, exceeding the contract's 0.002 bound \u2014 consistent with fp16 intermediate quantization accumulating over 64 steps.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t6"
 }
 
-### t9 - record_verdict - ok
+### t8 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.98,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 ran kernel.run(*kernel.make_inputs()) on the real GPU artifact, computed the contract's reference (float64 np.linalg.solve of the supplied float32 matrix and rhs), and measured relative L2 error 0.12440 (denominator ||x||=18.22, so the tolerance clamp is irrelevant) against the required 0.08 maximum. The output was finite and shape (16,), but the error exceeds tolerance by ~1.5x. Cause matches theory: the Richardson iteration x \u2190 x + (b \u2212 Ax) with unit step converges per-eigendirection as (1\u2212\u03bb)^64; the generator's smallest eigenvalue 0.03125 gives 0.96875^64 \u2248 0.131, so the slowest mode never converges enough in 64 steps. This is the in-scope, contract-specified workload, so the kernel violates the numerical contract.",
+  "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-24T00:16:31Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-23T21:35:50Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 ran kernel.run(*kernel.make_inputs()) on the real GPU artifact, computed the contract's reference (float64 np.linalg.solve of the supplied float32 matrix and rhs), and measured relative L2 error 0.12440 (denominator ||x||=18.22, so the tolerance clamp is irrelevant) against the required 0.08 maximum. The output was finite and shape (16,), but the error exceeds tolerance by ~1.5x. Cause matches theory: the Richardson iteration x \u2190 x + (b \u2212 Ax) with unit step converges per-eigendirection as (1\u2212\u03bb)^64; the generator's smallest eigenvalue 0.03125 gives 0.96875^64 \u2248 0.131, so the slowest mode never converges enough in 64 steps. This is the in-scope, contract-specified workload, so the kernel violates the numerical contract.",
+  "reason": "Probe t6 ran run(*make_inputs()) on the actual GPU workload and compared to the float64 reference defined in problem.txt. Output was finite with shape (16,), but relative L2 error = 0.004908 (num 0.7971, den 162.414), exceeding the contract's bound of 0.002. This is caused by the kernel's per-step float16 quantization of the intermediate state (kernel.py line 16) over 64 recurrence steps, accumulating error beyond what the contract tolerates on this fixed workload. Claim c1 is in_scope and confirmed; the kernel violates the numerical contract.",
   "verdict": "reject"
 }

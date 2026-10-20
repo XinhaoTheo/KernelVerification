@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 
-CASES = tuple(f"case_{i + 118:02d}" for i in range(15, 21))
+CASES = tuple(f"case_{i + 124:02d}" for i in range(15, 21))
 ROWS, COLS = 4, 12
 TOLERANCE = 1e-5
 SEARCH_SEEDS = range(203600, 204112)

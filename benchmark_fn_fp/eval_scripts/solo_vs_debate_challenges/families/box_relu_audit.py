@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_129", "case_130")
+CASES = ("case_135", "case_136")
 D, M = 12, 6
 TOLERANCE = 1.0
 BASE_ROUNDOFF_BOUND = 1e-7

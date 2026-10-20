@@ -19,7 +19,7 @@ import sys
 import numpy as np
 
 
-CASES = ("case_97", "case_98")
+CASES = ("case_103", "case_104")
 TOLERANCE = 0.002
 DIMENSION = 16
 STEPS = 64
@@ -138,7 +138,7 @@ def _search():
     failing = next(row for row in records
                    if 0.004 <= min(row["error_by_reduction"].values())
                    and max(row["error_by_reduction"].values()) <= 0.008)
-    return records, {"case_97": passing, "case_98": failing}
+    return records, {"case_103": passing, "case_104": failing}
 
 
 def _propagation_diagnostics(inputs):

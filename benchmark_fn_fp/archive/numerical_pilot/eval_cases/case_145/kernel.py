@@ -22,7 +22,7 @@ def run(q, k, v):
     _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'attention', 'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}
+CONFIG = {'family': 'attention', 'seed': 815, 'n': 128, 'd': 32, 'scale': 1.9000000000000001, 'center': 0.9}
 
 def make_inputs(device="cuda"):
     import numpy as np

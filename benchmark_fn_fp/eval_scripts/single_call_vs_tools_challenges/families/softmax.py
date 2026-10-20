@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_95", "case_96")
+CASES = ("case_101", "case_102")
 TOLERANCE = 0.02
 N, D = 128, 16
 SELECTED_SEED = 918233
@@ -120,7 +120,7 @@ def _search():
     failing = max(selected_candidates, key=lambda row: row["error"])
     assert passing["error"] <= TOLERANCE * 0.75
     assert failing["error"] >= TOLERANCE * 1.25
-    return records, {"case_95": passing, "case_96": failing}
+    return records, {"case_101": passing, "case_102": failing}
 
 
 PROBLEM = """Implement one attention head for the fixed workload below.

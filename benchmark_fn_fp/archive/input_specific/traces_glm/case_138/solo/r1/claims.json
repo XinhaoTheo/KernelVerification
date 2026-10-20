@@ -1,101 +1,98 @@
 [
   {
-    "created_at": "2026-09-24T07:18:24Z",
+    "created_at": "2026-09-24T06:56:24Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-24T07:18:51Z",
+        "created_at": "2026-09-24T06:56:46Z",
         "data": {
-          "artifacts": [
-            {
-              "description": "Python probe code executed by local runtime.",
-              "kind": "probe_code",
-              "path": "probes/t8_probe.py",
-              "sha256": "6f6ba34a500f02929280ce981ab544220a43c5c90c6079c0e0f88c6637cb965a"
-            },
-            {
-              "description": "Captured stdout from the probe process.",
-              "kind": "stdout",
-              "path": "probes/t8_stdout.txt",
-              "sha256": "7b0647b8989e4b77ecb6e3d3bada14eafd33f3a274def88e1da30b4bf87bf461"
-            },
-            {
-              "description": "Captured stderr from the probe process.",
-              "kind": "stderr",
-              "path": "probes/t8_stderr.txt",
-              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            },
-            {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t8_json_result.json",
-              "sha256": "218af3e7904ff6634c78f6c77bb8eb481dcb86cd3b87e8b474312fec3483c6c1"
-            }
-          ],
-          "duration_s": 4.832484,
-          "exit_code": 0,
-          "expected_signal": "relative_error above 1e-5 confirms the claim",
-          "json_parse_error": null,
-          "json_result": {
-            "finite": true,
-            "inputs_unmodified": true,
-            "metric": "relative L2 error vs exact real-number target (Fraction)",
-            "output": [
-              0.0,
-              0.0,
-              0.0,
-              0.0
-            ],
-            "passed": false,
-            "relative_error": 1.0,
-            "target": [
-              7.428201526403427,
-              9.405435025691986,
-              6.688341170549393,
-              6.113687425851822
-            ],
-            "tolerance": 1e-05
-          },
           "output": [
             0,
             0,
             0,
             0
           ],
-          "passed": false,
           "relative_error": 1.0,
-          "stderr": "",
-          "stdout": "{\"metric\": \"relative L2 error vs exact real-number target (Fraction)\", \"target\": [7.428201526403427, 9.405435025691986, 6.688341170549393, 6.113687425851822], \"output\": [0.0, 0.0, 0.0, 0.0], \"relative_error\": 1.0, \"tolerance\": 1e-05, \"inputs_unmodified\": true, \"finite\": true, \"passed\": false}\n",
           "target": [
-            7.428201526403427,
-            9.405435025691986,
-            6.688341170549393,
-            6.113687425851822
+            6.598899990320206,
+            8.408386647701263,
+            8.367730170488358,
+            7.147134065628052
           ],
-          "timed_out": false,
-          "timeout_s": 60,
           "tolerance": 1e-05
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "Kernel output is exactly [0,0,0,0] while the exact Fraction-based target of the stored make_inputs() values is [7.428, 9.405, 6.688, 6.114]; relative L2 error = 1.0 >> 1e-5 tolerance. Inputs unmodified and output finite/shape-dtype correct, but the acceptance metric fails badly. The initial_probe's float64 sequential reference of 0.0 was misleading because float64 of 2^80 + smalls then -2^80 order effects \u2014 actually it summed to 0 due to its own accumulation ordering, not the exact real-number sum.",
+        "summary": "Kernel output on the contract workload is [0,0,0,0] while exact fsum targets are [6.599, 8.408, 8.368, 7.147]; relative error = 1.0 >> 1e-5. Shape/dtype/finiteness/input-unmodified checks all pass, so the sole failure is the numeric error, consistent with the Kahan correction accumulator losing O(1) addends once it holds ~2^30.",
         "supports": "confirmed",
-        "tool_event_id": "t8"
+        "tool_event_id": "t9"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "Kahan with only one correction term loses the correction's own rounding: if correction accumulates small values (~1) and then +2^30 arrives, the smalls are absorbed into 2^30 and erased when -2^30 cancels, so the final sum can be 0 while the exact target is ~8 per row. The recorded initial-probe reference of 0.0 also contradicts the positive low values, suggesting bogus reference evidence.",
+    "rationale": "The correction variable is a plain float32 accumulator; once it holds \u00b12^30 (ulp 128), small lost terms (~1) may round away, so low-magnitude addends never reach the final sum, violating the 1e-5 relative tolerance against the exact target (~8 per row).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5, target being the exact real-number row sum of the stored float32 values from make_inputs(); run must return finite float32 shape (4,) and not modify X."
+        "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, target being the exact real sum of the stored make_inputs() values."
       }
     ],
-    "scope_rationale": "The contract requires the final row sums of the exact make_inputs() workload to match the exact real-number target within relative L2 error 1e-5; if the compensated sum loses the small addends the output fails this acceptance metric.",
-    "statement": "The kernel's single-level compensated float32 summation loses the small addends for the fixed make_inputs workload, producing row sums with relative error above 1e-5 versus the exact real-number target.",
+    "scope_rationale": "Contract requires final row sums within 1e-5 relative error of the exact real-number sum of the stored make_inputs() values; if the Kahan correction loses O(1) addends the final sums miss that tolerance on this fixed workload.",
+    "statement": "The kernel's Kahan correction accumulation loses the O(1) low-magnitude addends when the correction holds a \u00b12^30 value, so final row sums deviate from the exact target by more than 1e-5 relative error on the contract workload.",
     "status": "confirmed",
-    "updated_at": "2026-09-24T07:18:51Z"
+    "updated_at": "2026-09-24T06:56:56Z"
+  },
+  {
+    "created_at": "2026-09-24T06:56:24Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:56:46Z",
+        "data": {
+          "fsum_target": [
+            6.598899990320206,
+            8.408386647701263,
+            8.367730170488358,
+            7.147134065628052
+          ],
+          "recorded_reference": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Independent recomputation with math.fsum on the actual make_inputs() rows gives targets ~[6.60, 8.41, 8.37, 7.15], not the recorded initial-probe reference of [0,0,0,0]; the recorded probe's reference/output were inconsistent with the input generator.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T06:57:03Z",
+        "data": {},
+        "id": "c2.e2",
+        "kind": "agent_analysis",
+        "summary": "The recorded 0.0 reference is consistent with the generator: at magnitude 2^80 the float64 ulp is ~2^28, so sequential float64 accumulation of the \u00b12^30 and O(1) terms rounds away to 0 exactly. The recorded probe's flaw is its inadequate reference method, not inconsistency with the input; the contract's exact target is the fsum value \u2248[6.60, 8.41, 8.37, 7.15] (t9). Either way, the recorded probe's \"passed: true\" is not authoritative and the kernel fails the contract metric.",
+        "supports": "rebutted",
+        "tool_event_id": null
+      }
+    ],
+    "id": "c2",
+    "raised_by": "solo",
+    "rationale": "The float64 sequential sum of the constructed rows (\u00b12^80 cancel, \u00b12^30 cancel, 8 lows sum \u22488) cannot be exactly zero, so the recorded result appears inconsistent with the input generator.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The workload is the stored float32 array from make_inputs() in kernel.py; target is the exact real-number sum of those stored values."
+      }
+    ],
+    "scope_rationale": "The contract fixes the workload to the actual stored array from make_inputs(); the exact target must be recomputed independently to judge correctness rather than trusting the recorded probe's 0.0 reference.",
+    "statement": "The recorded initial-probe reference of exactly [0,0,0,0] is inconsistent with make_inputs' construction, so the actual reference must be recomputed independently.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T06:57:09Z"
   }
 ]

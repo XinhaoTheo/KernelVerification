@@ -1,16 +1,10 @@
+import torch, numpy as np, json, sys
+sys.path.insert(0, '/root/pilot_cases/case_86')
+import kernel as km
 
-import importlib.util, torch, numpy as np
-spec = importlib.util.spec_from_file_location("kernel", "/root/pilot_cases/case_92/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-a, b = k.make_inputs("cuda")
-out = k.run(a, b)
-af = a.double().cpu().numpy(); bf = b.double().cpu().numpy()
-ref = np.empty_like(af)
-h = np.zeros(af.shape[1])
-for t in range(af.shape[0]):
-    h = af[t]*h + bf[t]; ref[t] = h
-o = out.double().cpu().numpy()
-finite = bool(np.isfinite(o).all())
-diff = o - ref
-E = np.linalg.norm(diff.ravel()) / max(np.linalg.norm(ref.ravel()), 0.001*np.sqrt(ref.size))
-print({"finite": finite, "E": float(E), "ref_norm": float(np.linalg.norm(ref)), "max_abs_err": float(np.abs(diff).max()), "shape": o.shape, "dtype": str(out.dtype)})
+x, w = km.make_inputs("cuda")
+out = km.run(x, w)
+ref = w.to(torch.float64) @ x.to(torch.float64)
+num = torch.norm(out.to(torch.float64).flatten() - ref.flatten()).item()
+den = max(torch.norm(ref.flatten()).item(), 0.001*np.sqrt(ref.numel()))
+print(json.dumps({"E": num/den, "finite": bool(torch.isfinite(out).all().item()), "num": num, "den": den, "shape": list(out.shape)}))

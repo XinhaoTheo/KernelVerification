@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_s`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_m`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 21.24s across 4 calls | tokens: in=44931 out=1394 total=46325
+- LLM time: 51.38s across 5 calls | tokens: in=56033 out=1552 total=57585
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.97
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,208 +25,225 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_s",
+    "entry": "case_m",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_s"
+    "entry": "case_m"
   }
 
-### Turn 2 - `solo` (4.533957557999997s, in=7496 out=328)
+### Turn 2 - `solo` (5.546476248999994s, in=7569 out=420)
 
 Message:
 
 ```text
-The kernel approximates the continuous integral with a 32-point midpoint rule, while the contract's reference is the exact float64 analytic integral with relative L2 tolerance 0.035. With frequencies up to 220 Hz over [0,1], a 32-point rule is severely undersampled, so I expect a violation. Recording that claim and running it.
+The workload is deliberately near-cancelling (result ≈ 0.003), and the kernel uses float32 Horner, which can accumulate rounding error far above the tolerance relative to the tiny reference. I'll record that claim and run the actual kernel.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "Midpoint rule with 32 points cannot resolve frequencies up to 220 (Nyquist would need >440 samples), so the quadrature error likely exceeds the 3.5% relative L2 tolerance against the exact float64 reference on the fixed seeded workload.",
+    "rationale": "The input generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), so the relative error denominator is tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error ~1e-5, giving relative error >> 2e-4.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is the continuous integral in float64, and contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs workload."
+        "summary": "Relative L2 error vs float64 reference must be <= 0.0002, with denominator max(||reference||, 0.001*sqrt(8)); kernel uses float32 Horner with separate rounding."
       }
     ],
-    "scope_rationale": "The contract requires relative L2 error <= 0.035 vs the exact continuous float64 integral for the exact tensors returned by make_inputs(); the 32-point grid is only an approximation method, not the reference.",
-    "statement": "The midpoint-r
-  ...[truncated 158 chars]
+    "statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs()."
+  }
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 3 - `solo` (28.486188645s, in=8251 out=273)
+
+Message:
+
+```text
+The previous claim call failed for missing scope_rationale. I'll re-record the claim with the scope rationale and then run the kernel against a float64 reference.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops."
+      }
+    ],
+    "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to flo
+  ...[truncated 185 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Midpoint rule with 32 points cannot resolve frequencies up to 220 (Nyquist would need >440 samples), so the quadrature error likely exceeds the 3.5% relative L2 tolerance against the exact float64 reference on the fixed seeded workload.",
+    "rationale": "The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is the continuous integral in float64, and contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs workload."
+        "summary": "Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops."
       }
     ],
-    "scope_rationale": "The contract requires relative L2 error <= 0.035 vs the exact continuous float64 integral for the exact tensors returned by make_inputs(); the 32-point grid is only an approximation method, not the reference.",
-    "statement": "The midpoint-rule 32-point quadrature in the kernel produces output with relative L2 error > 0.035 against the exact float64 reference on the fixed make_inputs workload.",
+    "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to float32; near-cancellation makes this tolerance hard.",
+    "statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
     "status": "open"
   }
 
-### Turn 3 - `solo` (5.369678367000006s, in=8755 out=303)
+### Turn 4 - `solo` (5.239173190999992s, in=9532 out=305)
 
 Message:
 
 ```text
-I'll run the decisive probe on the real GPU workload.
+I'll run the kernel on the actual workload and compute the contract's exact metric.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_s\")\nimport numpy as np, torch\nfrom kernel import make_inputs, run\n\na, f, p = make_inputs()\nout = run(a, f, p).cpu().numpy().astype(np.float64)\nA = a.cpu().numpy().astype(np.float64)\nF = f.cpu().numpy().astype(np.float64)\nP = p.cpu().numpy().astype(np.float64)\nref = 1.0 + ((A * (np.cos(P) - np.cos(P + F)) / F).sum(axis=1))\nrel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)\n# also per-row errors\nrowerr = np.abs(out - ref)\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 analytic integral\",\n  \"output\": out.tolist(), \"reference\": ref.tolist(),\n  \"per_row_abs_err\": rowerr.tolist(),\n  \"rel_l2\": float(rel), \"tolerance\": 0.035,\n  \"max_fre
-  ...[truncated 141 chars]
+    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_m\")\nimport numpy as np, torch\nfrom kernel import make_inputs, run\n\ncoeffs, points = make_inputs()\nout = run(coeffs, points)\ntorch.cuda.synchronize()\nout = out.detach().cpu().numpy().astype(np.float64)\nc = coeffs.cpu().numpy().astype(np.float64)\np = points.cpu().numpy().astype(np.float64)\nref = np.array([np.sum(c[i] * p[i]**np.arange(49)) for i in range(8)])\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(8))\nrel = np.linalg.norm(out - ref) / denom\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 reference, contract denominator\",\n  \"output\": out.tolist(), \"reference\": ref.tolist(),\n  \"ref_norm\": float(np.linalg.norm(ref)), \"denominator\": float(denom),\
+  ...[truncated 222 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "775b7665fb86f3d448fec4aab18175b932d3c5d6beaf701ff26172b374e07bc8"
+        "path": "probes/t7_probe.py",
+        "sha256": "e06ceed72dbf93e15067ce68d4acc133c5ae13f4a76a07fdd147f851ea0c322b"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "49e7c49741abdc34a7f76c1243c4eb8c0b5dd146bb293a095ed98f70089ecf81"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "6874fac21defd60d2e2ee88fa8825597672c97f7c29924e2004ccc74ddd006d6"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
+        "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "486050726d69a4f7c4e19efc3385068977c50e2a7bbe5f504182abe500038493"
+        "path": "probes/t7_json_result.json",
+        "sha256": "83ab84f508baed1932be30ee6ddc8009649852770c22d5c11ec60f21b20f90b0"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The midpoint-rule 32-point quadrature in the kernel produces output with relative L2 error > 0.035 against the exact float64 reference on the fixed make_inputs workload.",
-    "duration_s": 5.135284,
-    "event_id": "
-  ...[truncated 4052 chars]
+    "claim_statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
+    "duration_s": 5.8473,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data
+  ...[truncated 4623 chars]
 
-### Turn 4 - `solo` (5.766056148000004s, in=11686 out=434)
+### Turn 5 - `solo` (5.427423695000016s, in=12860 out=279)
 
 Message:
 
 ```text
-The probe on the real GPU workload shows relative L2 error 0.00155, well within the 0.035 tolerance — the undersampling hypothesis is rebutted. I'll finalize the evidence and record a trust verdict.
+The probe ran the kernel on the fixed workload and computed the contract's exact metric: relative L2 error 3.37e-5, well below the 2e-4 tolerance, with finite output of shape (8,). My hypothesis of excessive float32 Horner rounding is rebutted.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "max_frequency": 185.70498657226562,
-      "output": [
-        0.9963262677192688,
-        0.9724535942077637,
-        0.9964014887809753,
-        1.0057293176651
-      ],
-      "per_row_abs_err": [
-        0.002231716017303542,
-        0.001234150348357832,
-        0.0005284294888945329,
-        0.0016491190042615678
-      ],
-      "reference": [
-        0.9985579837365723,
-        0.9712194438594058,
-        0.9969299182698699,
-        1.0040801986608385
-      ],
-      "rel_l2": 0.001552519962372429,
-      "tolerance": 0.035
+      "abs_err": 1.997119552737297e-06,
+      "denominator": 0.05921132733264433,
+      "metric": "relative L2 error vs float64 reference, contract denominator",
+      "passes": true,
+      "relative_error": 3.372867393290552e-05,
+      "tolerance": 0.0002
     },
-    "event_id": "t6",
+    "event_id": "t7",
     "status": "rebutted",
-    "summary": "On the fixed make_inputs() workload, kernel output vs float64 analytic reference gives relative L2 error 0.00155 (tolerance 0.035); all 4 outputs finite, shape (4,). The Nyquist/undersampling concern does not materialize: per-
-  ...[truncated 100 chars]
+    "summary": "Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.",
+    "supports": "rebutted"
+  }
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload, kernel output vs float64 analytic reference gives relative L2 error 0.00155 (tolerance 0.035); all 4 outputs finite, shape (4,). The Nyquist/undersampling concern does not materialize: per-row absolute errors are <= 0.0023. The claim of error > 0.035 is false.",
+    "summary": "Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.",
     "supports": "rebutted",
-    "tool_event_id": "t6"
+    "tool_event_id": "t7"
   }
 
-### Turn 5 - `solo` (5.570542376999995s, in=16994 out=329)
+### Turn 6 - `solo` (6.680375386999998s, in=17821 out=275)
 
 Message:
 
 ```text
-The undersampling hypothesis was sound on paper, but the measurement is decisive: rel L2 = 0.00155 vs. 0.035 tolerance on the exact fixed workload. The relative tolerance is lenient enough that quadrature error stays well within bounds. Recording trust.
+The kernel was run on the exact fixed workload; relative L2 error 3.37e-5 is well within the 2e-4 tolerance, output finite of shape (8,). No further claims would change the verdict. Recording the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the real GPU with the fixed make_inputs() workload (PCG64 seed 711165) and compared against the contract's float64 analytic reference, 1 + sum_k A*(cos(P)-cos(P+F))/F. Output is a finite float32 (4,) vector with relative L2 error 0.001552, far inside the 0.035 tolerance; per-row absolute errors <= 0.00223 (probe event t6, claim c1.e1). The Nyquist/undersampling concern (max frequency 185.7, 32-point grid) does not materialize because the tolerance is 3.5% relative L2 and amplitudes are only N(0,0.1). No open claims remain; the kernel satisfies the stated contract for this fixed public workload.",
+    "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
     "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the real GPU with the fixed make_inputs() workload (PCG64 seed 711165) and compared against the contract's float64 analytic reference, 1 + sum_k A*(cos(P)-cos(P+F))/F. Output is a finite float32 (4,) vector with relative L2 error 0.001552, far inside the 0.035 tolerance; per-row absolute errors <= 0.00223 (probe event t6, claim c1.e1). The Nyquist/undersampling concern (max frequency 185.7, 32-point grid) does not materialize because the tolerance is 3.5% relative L2 and amplitudes are only N(0,0.1). No open claims remain; the kernel satisfies the stated contract for this fixed public workload.",
+    "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
     "verdict": "trust"
   }
 
@@ -238,96 +255,103 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The midpoint-rule 32-point quadrature in the kernel produces output with relative L2 error > 0.035 against the exact float64 reference on the fixed make_inputs workload.
+Statement: The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires relative L2 error <= 0.035 vs the exact continuous float64 integral for the exact tensors returned by make_inputs(); the 32-point grid is only an approximation method, not the reference.
+Scope rationale: The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to float32; near-cancellation makes this tolerance hard.
 
 Scope evidence:
-- `problem.txt`: Reference is the continuous integral in float64, and contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs workload.
+- `problem.txt`: Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops.
 
-Rationale: Midpoint rule with 32 points cannot resolve frequencies up to 220 (Nyquist would need >440 samples), so the quadrature error likely exceeds the 3.5% relative L2 tolerance against the exact float64 reference on the fixed seeded workload.
+Rationale: The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value ≈ 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: On the fixed make_inputs() workload, kernel output vs float64 analytic reference gives relative L2 error 0.00155 (tolerance 0.035); all 4 outputs finite, shape (4,). The Nyquist/undersampling concern does not materialize: per-row absolute errors are <= 0.0023. The claim of error > 0.035 is false.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_s"
+  "entry": "case_m"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Midpoint rule with 32 points cannot resolve frequencies up to 220 (Nyquist would need >440 samples), so the quadrature error likely exceeds the 3.5% relative L2 tolerance against the exact float64 reference on the fixed seeded workload.",
+  "rationale": "The generator constructs coefficients so the polynomial nearly cancels at the anchor point (value \u2248 0.003), making the reference norm tiny (~0.003). Float32 Horner rounding over 48 steps can accumulate absolute error far above the ~6e-7 needed for relative error 2e-4.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Reference is the continuous integral in float64, and contract requires ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs workload."
+      "summary": "Relative L2 error vs a float64 reference must be <= 0.0002 with denominator max(||reference||, 0.001*sqrt(8)), on the fixed make_inputs() workload; kernel uses float32 Horner with separately rounded ops."
     }
   ],
-  "scope_rationale": "The contract requires relative L2 error <= 0.035 vs the exact continuous float64 integral for the exact tensors returned by make_inputs(); the 32-point grid is only an approximation method, not the reference.",
-  "statement": "The midpoint-rule 32-point quadrature in the kernel produces output with relative L2 error > 0.035 against the exact float64 reference on the fixed make_inputs workload.",
+  "scope_rationale": "The contract requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload, and specifies every Horner multiply/add rounds to float32; near-cancellation makes this tolerance hard.",
+  "statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "775b7665fb86f3d448fec4aab18175b932d3c5d6beaf701ff26172b374e07bc8"
+      "path": "probes/t7_probe.py",
+      "sha256": "e06ceed72dbf93e15067ce68d4acc133c5ae13f4a76a07fdd147f851ea0c322b"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "49e7c49741abdc34a7f76c1243c4eb8c0b5dd146bb293a095ed98f70089ecf81"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "6874fac21defd60d2e2ee88fa8825597672c97f7c29924e2004ccc74ddd006d6"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
+      "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "486050726d69a4f7c4e19efc3385068977c50e2a7bbe5f504182abe500038493"
+      "path": "probes/t7_json_result.json",
+      "sha256": "83ab84f508baed1932be30ee6ddc8009649852770c22d5c11ec60f21b20f90b0"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The midpoint-rule 32-point quadrature in the kernel produces output with relative L2 error > 0.035 against the exact float64 reference on the fixed make_inputs workload.",
-  "duration_s": 5.135284,
-  "event_id": "t6",
+  "claim_statement": "The float32 Horner evaluation produces relative L2 error > 0.0002 on the fixed workload defined by make_inputs().",
+  "duration_s": 5.8473,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -335,52 +359,55 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "775b7665fb86f3d448fec4aab18175b932d3c5d6beaf701ff26172b374e07bc8"
+          "path": "probes/t7_probe.py",
+          "sha256": "e06ceed72dbf93e15067ce68d4acc133c5ae13f4a76a07fdd147f851ea0c322b"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "49e7c49741abdc34a7f76c1243c4eb8c0b5dd146bb293a095ed98f70089ecf81"
+          "path": "probes/t7_stdout.txt",
+          "sha256": "6874fac21defd60d2e2ee88fa8825597672c97f7c29924e2004ccc74ddd006d6"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934c
-...[truncated 3252 chars]
+          "path": "probes/t7_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "descript
+...[truncated 3823 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload, kernel output vs float64 analytic reference gives relative L2 error 0.00155 (tolerance 0.035); all 4 outputs finite, shape (4,). The Nyquist/undersampling concern does not materialize: per-row absolute errors are <= 0.0023. The claim of error > 0.035 is false.",
+  "summary": "Kernel output on the fixed make_inputs() workload gives relative L2 error 3.37e-5 vs the float64 reference, below the 2e-4 tolerance; output finite, shape (8,). The claim of >2e-4 error is rebutted.",
   "supports": "rebutted",
-  "tool_event_id": "t6"
+  "tool_event_id": "t7"
 }
 
-### t8 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the real GPU with the fixed make_inputs() workload (PCG64 seed 711165) and compared against the contract's float64 analytic reference, 1 + sum_k A*(cos(P)-cos(P+F))/F. Output is a finite float32 (4,) vector with relative L2 error 0.001552, far inside the 0.035 tolerance; per-row absolute errors <= 0.00223 (probe event t6, claim c1.e1). The Nyquist/undersampling concern (max frequency 185.7, 32-point grid) does not materialize because the tolerance is 3.5% relative L2 and amplitudes are only N(0,0.1). No open claims remain; the kernel satisfies the stated contract for this fixed public workload.",
+  "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-24T01:07:31Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T00:17:19Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the real GPU with the fixed make_inputs() workload (PCG64 seed 711165) and compared against the contract's float64 analytic reference, 1 + sum_k A*(cos(P)-cos(P+F))/F. Output is a finite float32 (4,) vector with relative L2 error 0.001552, far inside the 0.035 tolerance; per-row absolute errors <= 0.00223 (probe event t6, claim c1.e1). The Nyquist/undersampling concern (max frequency 185.7, 32-point grid) does not materialize because the tolerance is 3.5% relative L2 and amplitudes are only N(0,0.1). No open claims remain; the kernel satisfies the stated contract for this fixed public workload.",
+  "reason": "Ran the kernel on the fixed make_inputs() workload (probe t7) and computed the contract's exact metric: relative L2 error vs the float64 reference = 3.37e-5, well below the required 0.0002, using denominator max(||reference||, 0.001*sqrt(8)) = 0.0592. Output was finite with shape (8,) and dtype float32. My hypothesis (c1) that float32 Horner rounding would exceed the tolerance on this near-cancelling workload was rebutted by direct runtime evidence (event t7, artifacts probes/t7_json_result.json). The contract only covers this fixed workload, and the kernel satisfies it.",
   "verdict": "trust"
 }

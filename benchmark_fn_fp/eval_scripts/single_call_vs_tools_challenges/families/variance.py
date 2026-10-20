@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_101", "case_102")
+CASES = ("case_107", "case_108")
 TOLERANCE = 0.02
 N = 128
 OFFSET = 64.0
@@ -106,7 +106,7 @@ def _search():
     failing = max(records, key=lambda row: row["error"])
     if passing["error"] > 0.75 * TOLERANCE or failing["error"] < 1.25 * TOLERANCE:
         raise ValueError("Search did not produce the required numerical margins")
-    return records, {"case_101": passing, "case_102": failing}
+    return records, {"case_107": passing, "case_108": failing}
 
 
 PROBLEM = """Implement LayerNorm without an affine transform for this fixed workload.

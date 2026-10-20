@@ -64,7 +64,7 @@ def run(q, k, v):
     _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'attention', 'seed': 813, 'n': 128, 'd': 32, 'scale': 1.1, 'center': 0.9}
+CONFIG = {'family': 'attention', 'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.9}
 
 def make_inputs(device="cuda"):
     import numpy as np
@@ -111,28 +111,24 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-float16 rounding of p introduces error ~1e-3 per element relative; with softmax weights summing, error likely ~5e-4 relative in y. Relative budget 1e-3 of ||y||. fp16 has ~1e-3 relative error per weight (eps=9.8e-4). Actually fp16 relative precision up to 2^-11 ≈ 4.9e-4. Sum of weighted v: error ~ 4.9e-4 * weighted-average |v| / |y|. y is p@v, |y| ~ ||p@v||. Since v was offset to create cancellation ("Structured value offset controls cancellation"), y is small relative to |v| magnitude! v -= center*(p@v) makes p@v_new = p@v_old - center*(p@v_old)... wait p@v_new = p@v - center * p @ ((p@v)[None,:] broadcast over n) = p@v - center*(n*? ) hmm. p is (n,), (p@v) is (d,). Broadcast (p@v)[None,:] shape (1,d); v_new = v - center*(p@v) broadcast rows: each row subtracts the same vector. Then p@v_new = p@v - center*(p@v)*sum(p) = (1-center)*p@v. So y scaled by (1-center)=0.1, making it small while p to fp16 error gives error proportional to original magnitude... Actually error in p propagates to error in sum p*v ≈ ||delta p||*||v||. delta p relative 5e-4, so error ~5e-4*||v||-ish, while ||y|| = 0.1*||p@v_orig||. p@v_orig ~ typical v magnitude ~1. So relative error ~5e-3, exceeding 1e-3? But budget denominator uses max(||ref||, 0.001*sqrt(num elements)) — sqrt(32)*0.001=0.0057. ||y|| ≈ 0.1*||p@v||; p@v of random v with p concentrated... scores scaled by 1.1 then /sqrt(32)≈0.194, so scores range ~±1, softmax fairly uniform. p@v ~ (1/sqrt(n_eff))... ||v|| rows ~sqrt(32)*1.1; p@v with n=128 averaged: if p uniform, p@v ≈ mean of v rows, norm ~ sqrt(32)*1.1/sqrt(128) ≈ 0.55. So ||y||≈0.055. Budget floor 0.0057.
+fp16 rounding of p introduces error ~1e-3 relative per element? p values rounded to fp16 have relative error ~2^-11 ≈ 5e-4. Output y = p·V sums; error relative ~5e-4, likely within 1e-3 budget? Error in y: sum of δp_i v_i, |δp_i| ≤ 5e-4 p_i, so |δy| ≤ 5e-4 sum p_i |v_i| ≈ 5e-4·E[|v|]. ||y|| may be smaller due to cancellation (center subtracts 0.9 of p@v). If y ≈ 0.1·(p@v), relative error could be ~5e-3 → violation. But hard to be sure. Hmm.
 
-Error from fp16: each p_i rounded with relative error ≤2^-11. Errors in p random; resulting y error = sum delta_p_i * v_i. delta_p_i ≤ 4.9e-4 * p_i, sum |delta_p| ≤ 4.9e-4 (sum p=1). But errors random → error ~ 4.9e-4 * ||weighted v|| ≈ 4.9e-4 * 0.55 (in fp32-ish norm). That's 2.7e-4 vs budget min(?) E = err/max(0.055, 0.0057) = 2.7e-4/0.055 ≈ 5e-3. Hmm, that exceeds 1e-3.
+Actually V was constructed so that y_ref ≈ 0.1 × p@v roughly (only partially, center 0.9 applied). Then fp16 p error gives δy ~ 5e-4·||p@v|| which is ~5e-3 of y_ref... but errors are random and partially cancel: δy = sum ε_i p_i v_i with ε random ±5e-4. Magnitude ~5e-4·sqrt(sum(p_i v_i)^2)... roughly 5e-4·||p@v||. So relative error ~5e-4/0.1 = 5e-3 > 1e-3? But ε mean is ~0 with std ~2.4e-4 (half ulp relative ~2^-12? fp16 has 10 mantissa bits, rounding relative error up to 2^-11≈4.9e-4, std ~ 1.4e-4). δy ≈ std·sqrt(sum p_i² ||v_i||²)... with p spread over 64 tokens, sum p_i² small. Hmm, hard.
 
-But wait: after p normalized in fp32, rounding to fp16 then back to fp32: p values rounded, sum no longer exactly 1 but errors random sign. y = sum p_i v_i, error = sum e_i v_i where e_i ~ uniform ±4.9e-4 p_i. Worst-case |e| bound 4.9e-4 * sum p_i |v_i|... norm of error vector: each component d: sum_i e_i v_{i,d}. e_i random sign, magnitude ~ p_i * 2.4e-4 rms. RMS error per component ≈ 2.4e-4 * sqrt(sum p_i^2 * v^2) ≈ 2.4e-4 * ||p-weighted v|| ~ 2.4e-4*0.55 ≈ 1.3e-4 per comp; norm over 32 comps ≈ 1.3e-4*sqrt(32)=7.5e-4. E ≈ 7.5e-4/0.055 ≈ 0.014 > 0.001. Reject.
+Actually the denominator: E = ||out - ref|| / max(||ref||, 0.001*sqrt(numel)). numel = 32, so floor = 0.001·5.66 = 0.00566. If ||ref|| is small (cancellation), the floor kicks in at 0.00566. δy magnitude ~ 1.4e-4·sqrt(sum p_i² ||v_i||²). With p after softmax over 64 tokens with z = k·q/sqrt(32), k entries N(0,0.49), q N(0,1). z std: sum of 32 products each std 0.7 → std 0.7·sqrt(32)/sqrt(32)=0.7... wait z = k·q/sqrt(d): std of dot = 0.7·sqrt(32)=3.96, /sqrt(32)=0.7. So scores ~N(0,0.7). p fairly spread, sum p² maybe ~1/40 per... roughly p_max ~ few p. sqrt(sum p_i²)||v|| ≈ 0.2·(sqrt(32)·?)... v_i norm ~ sqrt(32)≈5.7. δy ~1.4e-4·0.2·5.7 ≈ 1.6e-4. Well under floor 0.00566. So fine.
 
-Also fp16 rounding loses small p values entirely? p values with uniform softmax over 128: each ~0.0078, fine in fp16.
-
-Hmm, but fp16 relative error is 2^-11 max, average maybe 1.2e-4. My estimate E ~ 0.005-0.014, well above 0.001. Also the whole computation in fp32 vs fp64 reference adds tiny error; the dominant is fp16. Seems like a clear budget violation. The "structured cancellation" (center=0.9) is designed to expose exactly this. Reject.
-
-Also note scores computed with tl.exp of fp32 — fine. The p cast to fp16 is the deliberate flaw. Confidence moderately high, say 0.8.
+Also the fp16 round-to-nearest is symmetric; errors unlikely to blow budget. Verdict: trust.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.8, "reason": "The softmax weights are quantized to float16 (eps ~4.9e-4 relative) before the weighted sum over V, while the input construction (center=0.9) deliberately shrinks the output norm to ~10% of p@v, so the fp16-induced error (~1e-4..1e-3 absolute against ||y||≈0.05) yields relative error E well above the 1e-3 budget."}
+{"verdict": "trust", "confidence": 0.7, "reason": "The fp16 round-trip of the softmax weights adds only ~1e-4-scale relative noise to p, and with the error denominator floored at 0.001*sqrt(32)≈0.0057, the resulting output perturbation (~1e-4 range) is comfortably within the 0.001 relative budget for this workload. The kernel otherwise computes softmax(Kq/sqrt(D))V correctly."}
 
 ## Verdict
 
 {
-  "verdict": "reject",
-  "confidence": 0.8,
-  "reason": "The softmax weights are quantized to float16 (eps ~4.9e-4 relative) before the weighted sum over V, while the input construction (center=0.9) deliberately shrinks the output norm to ~10% of p@v, so the fp16-induced error (~1e-4..1e-3 absolute against ||y||≈0.05) yields relative error E well above the 1e-3 budget."
+  "verdict": "trust",
+  "confidence": 0.7,
+  "reason": "The fp16 round-trip of the softmax weights adds only ~1e-4-scale relative noise to p, and with the error denominator floored at 0.001*sqrt(32)≈0.0057, the resulting output perturbation (~1e-4 range) is comfortably within the 0.001 relative budget for this workload. The kernel otherwise computes softmax(Kq/sqrt(D))V correctly."
 }
 
 ## Usage and stop reason
@@ -141,23 +137,23 @@ Also note scores computed with tl.exp of fp32 — fine. The p cast to fp16 is th
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "reject",
-    "confidence": 0.8,
-    "reason": "The softmax weights are quantized to float16 (eps ~4.9e-4 relative) before the weighted sum over V, while the input construction (center=0.9) deliberately shrinks the output norm to ~10% of p@v, so the fp16-induced error (~1e-4..1e-3 absolute against ||y||≈0.05) yields relative error E well above the 1e-3 budget."
+    "verdict": "trust",
+    "confidence": 0.7,
+    "reason": "The fp16 round-trip of the softmax weights adds only ~1e-4-scale relative noise to p, and with the error denominator floored at 0.001*sqrt(32)≈0.0057, the resulting output perturbation (~1e-4 range) is comfortably within the 0.001 relative budget for this workload. The kernel otherwise computes softmax(Kq/sqrt(D))V correctly."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
     "input_tokens": 1337,
-    "output_tokens": 1278
+    "output_tokens": 854
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 22.17058725003153,
-  "kernel_sha256": "03c8eb5c6fad288aca30faabdb206b06086c0e6eae85e2849d562e0b42ae8f4b",
+  "elapsed_s": 16.713347499957308,
+  "kernel_sha256": "130deb4eec049b914918de782cbbf095f9c47b27efd52e21c94d140f8fc61da6",
   "problem_sha256": "3ae6f5fe22e3e1d29bfba2617d6c5406f3386f21c6399601ac3cd79f9a1ec616",
   "prompt_variant": "original",
-  "estimated_usd": 0.007495000000000001,
+  "estimated_usd": 0.0056294000000000005,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

@@ -19,7 +19,7 @@ def run(a, b):
     _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 0.99, 'noise': 0.001, 'bias': 0.01}
+CONFIG = {'family': 'recurrence', 'seed': 451, 't': 512, 'd': 32, 'decay': 0.999, 'noise': 0.0001, 'bias': 0.01}
 
 def make_inputs(device="cuda"):
     import numpy as np

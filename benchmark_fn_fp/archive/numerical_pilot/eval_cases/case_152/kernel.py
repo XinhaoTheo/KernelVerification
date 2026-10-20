@@ -3,23 +3,23 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(X, W, O, K: tl.constexpr):
-    row = tl.program_id(0)
-    j = tl.arange(0, K)
-    x = tl.load(X + j)
-    w = tl.load(W + row * K + j)
-    scale = tl.max(tl.abs(w), 0) / 7.0
-    qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w / scale + 0.5)))
-    y = tl.sum(x * (qi * scale), 0)
-    tl.store(O + row, y)
+def _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):
+    d = tl.arange(0, D)
+    h = tl.full((D,), 0.0, tl.float32)
+    for t in range(T):
+        a = tl.load(A + t * D + d)
+        b = tl.load(B + t * D + d)
+        h = a * h + b
+        h = h.to(tl.float16).to(tl.float32)
+        tl.store(O + t * D + d, h)
 
-def run(x, w):
-    m, k = w.shape
-    out = torch.empty(m, dtype=torch.float32, device=x.device)
-    _kernel[(m,)](x, w, out, k, enable_fp_fusion=False)
+def run(a, b):
+    t, d = a.shape
+    out = torch.empty_like(b)
+    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'quantization', 'seed': 1223, 'm': 32, 'k': 128, 'mix': 0.2, 'residual': 0.5}
+CONFIG = {'family': 'recurrence', 'seed': 451, 't': 512, 'd': 32, 'decay': 0.999, 'noise': 0.001, 'bias': 0.01}
 
 def make_inputs(device="cuda"):
     import numpy as np

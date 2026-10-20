@@ -14,6 +14,11 @@ import sys
 
 import modal
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.archive_paths import (
+    canonical_case_rows, frozen_case_rows,
+)
+
 ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "solo_vs_debate_challenges"
 app = modal.App("kv-evidence-challenges-oracle")
 image = (modal.Image.debian_slim(python_version="3.11")
@@ -42,7 +47,7 @@ def cpu_answers():
             if name in rows:
                 raise ValueError(f"Duplicate CPU label: {name}")
             rows[name] = row
-    return rows
+    return canonical_case_rows(ROOT, "evidence_challenges", rows)
 
 
 @app.function(image=image, gpu="T4", timeout=1200)
@@ -119,10 +124,11 @@ def main(cases: str = "", freeze: bool = False):
         dest = ROOT / "private_data" / "validation_gpu.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
         previous = json.loads(dest.read_text()) if dest.exists() else {"cases": {}}
-        overlap = previous["cases"].keys() & result["cases"].keys()
+        current_frozen = canonical_case_rows(ROOT, "evidence_challenges", previous["cases"])
+        overlap = current_frozen.keys() & result["cases"].keys()
         if overlap:
             raise ValueError(f"Refusing to overwrite frozen cases: {sorted(overlap)}")
-        previous["cases"].update(result["cases"])
+        previous["cases"].update(frozen_case_rows(ROOT, "evidence_challenges", result["cases"]))
         previous["updated_at"] = result["recorded_at"]
         dest.write_text(json.dumps(previous, indent=2) + "\n")
         print(f"Frozen: {dest}")

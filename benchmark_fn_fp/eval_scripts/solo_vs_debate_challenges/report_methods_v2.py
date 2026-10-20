@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from benchmark_fn_fp.eval_scripts.solo_vs_debate_challenges.report import derive, render, replace_results
 
 ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "solo_vs_debate_challenges"
-CASES = tuple(f"case_{i + 118:02d}" for i in range(5, 11))
+CASES = tuple(f"case_{i + 124:02d}" for i in range(5, 11))
 TRIALS = ("ea_methods_v2_r1", "ea_methods_v2_r2")
 
 

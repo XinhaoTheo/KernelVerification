@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_w`
-- Turns: 10
-- Tool events: 21
-- Claims: 3
+- Entry: `case_q`
+- Turns: 11
+- Tool events: 18
+- Claims: 2
 - Description updates: 2
-- LLM time: 114.605s across 9 calls | tokens: in=214596 out=7680 total=222276
+- LLM time: 84.89s across 10 calls | tokens: in=221086 out=5392 total=226478
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.92
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_w"
+    "entry": "case_q"
   }
   Output summary:
   {
-    "entry": "case_w"
+    "entry": "case_q"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_w"
+    "entry": "case_q"
   }
   Output summary:
   {
-    "entry": "case_w"
+    "entry": "case_q"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_w"
+    "entry": "case_q"
   }
   Output summary:
   {
-    "entry": "case_w"
+    "entry": "case_q"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_w",
+    "entry": "case_q",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_w"
+    "entry": "case_q"
   }
 
-### Turn 2 - `describer` (12.688860088000013s, in=4852 out=870)
+### Turn 2 - `describer` (14.951686148999997s, in=4988 out=910)
 
 Message:
 
 ```text
-Record a description update.
+I have full context already; recording the structured description model for this quantized nearest-neighbor routing case.
 ```
 
 Tool calls:
@@ -75,37 +75,36 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Compute log(det(A)) in natural log for the single fixed 8x8 float32 SPD matrix from make_inputs(); reference evaluated in float64 on the stored float32 entries.",
-      "Output must be a finite float32 vector of shape (1,).",
-      "Error metric: ||output-reference||_2 / max(||reference||_2, 1.0), must be <= 0.0001.",
-      "Contract explicitly matches the implementation style: elimination without pivoting, accumulation of log of diagonal pivots, FP fusion disabled, round-to-nearest float32 division for multipliers.",
-      "Scope is only this fixed workload (seed 98339 Gram construction + 1/1024 diagonal regularizer); other matrices/seeds are out of scope."
+      "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
+      "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
+      "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
+      "Alternative inputs are out of scope; only this generated workload decides the verdict.",
+      "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
     ],
     "kernel_model": [
-      "Single Triton kernel launched with grid (1,), N=8 constexpr, num_warps=1, enable_f
-  ...[truncated 2890 chars]
+      "Triton k
+  ...[truncated 3236 chars]
   Output summary:
   {
     "contract_model": [
-      "Compute log(det(A)) in natural log for the single fixed 8x8 float32 SPD matrix from make_inputs(); reference evaluated in float64 on the stored float32 entries.",
-      "Output must be a finite float32 vector of shape (1,).",
-      "Error metric: ||output-reference||_2 / max(||reference||_2, 1.0), must be <= 0.0001.",
-      "Contract explicitly matches the implementation style: elimination without pivoting, accumulation of log of diagonal pivots, FP fusion disabled, round-to-nearest float32 division for multipliers.",
-      "Scope is only this fixed workload (seed 98339 Gram construction + 1/1024 diagonal regularizer); other matrices/seeds are out of scope."
+      "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
+      "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
+      "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
+      "Alternative inputs are out of scope; only this generated workload decides the verdict.",
+      "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Single Triton kernel launched with grid (1,), N=8 constexpr, num_warps=1, enable_fp_fusion=False; loads the whole 8x8 matrix into a tensor in float32 and stores one scalar.",
-      "LU-style Gaussian elimination without pivoting done via tl.where masks: pivot = A[k,k], column = A[:,k], pivot_row = A[k,:], multiplier = column/pivot (tl.div_rn), rank-1 update subtracted only in the strictly-lower-right trailing submatrix (rows>k & cols>k).",
-      "Output ac
-  ...[truncated 2590 chars]
+      "Triton kernel _route_kernel: one program, rows = tl.arange(0,16); per dimension j in static_range(32) it quantizes both query[j] and all candidates to a 1/8 grid (floor(x*8+0.5)*0.125) and accumulates float32 squared deltas.",
+      "Selection: min over quantized distances, tie broken to smallest row index via tl.where(distances==min, row, INT_MAX) then min \u2014 implements the co
+  ...[truncated 2970 chars]
 
-### Turn 3 - `skeptic` (12.682734475000018s, in=12077 out=871)
+### Turn 3 - `skeptic` (8.897310895000004s, in=12399 out=507)
 
 Message:
 
 ```text
-Recording the highest-risk testable claims based on the risk map and contract: fp32 accuracy against the 1e-4 tolerance, Triton's `tl.log` precision, and the trailing-submatrix mask semantics.
+I'll record the two highest-risk, directly testable hypotheses for this fixed-seed near-tie workload.
 ```
 
 Tool calls:
@@ -113,16 +112,16 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The Gram entries can be large (up to ~448), so pivots can have very different magnitudes; fp32 rank-1 updates and non-pivoted elimination can lose several low bits, and the required relative error is only 1e-4 against a float64 reference on the stored float32 entries.",
+    "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is log(det(A)) for the actual stored float32 entries evaluated in float64; error metric ||output-reference||_2 / max(||reference||_2, 1.0) must be <= 0.0001 on this fixed workload."
+        "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
       }
     ],
-    "statement": "Running the kernel on the fixed make_inputs() matrix, the float32 non-pivoted elimination and float32 log accumulation may produce relative error > 1e-4 versus the float64 logdet reference com
-  ...[truncated 39 chars]
+    "statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distanc
+  ...[truncated 191 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -131,260 +130,284 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "tl.log may lower to a fast-math/log2-based approximation rather than a correctly-rounded log; with 8 accumulated terms and a 1e-4 relative tolerance, sub-ulp-to-few-ulp log errors could be non-negligible, especially for large pivots.",
+    "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract specifies exact numeric style: round-to-nearest float32 division for multipliers and fusion disabled, indicating precision-sensitive behavior is part of the spec; tolerance is 1e-4."
+        "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
       }
     ],
-    "statement": "Triton's tl.log(pivot) may use an approximate (reduced-precision) device log rather than one accurate to within a few ulp, so the accumulated sum of 8 log(pivot) values in float32 may deviate from the true float32-rounded logs 
-  ...[truncated 41 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-- `record_claim -> t8 error`
-  Args:
-  {
-    "rationale": "The mask is the core of the elimination; a subtle asymmetry (e.g., only trailing rows but including column k, or vice versa) would corrupt the pivot sequence silently since the algorithm is deterministic and passes could mask it with small errors.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The implementation is specified as elimination without pivoting accumulating logs of diagonal pivots; a wrong update mask would violate this stated algorithm on the fixed workload."
-      }
-    ],
-    "statement": "The trailing-submatrix update mask (rows > k & columns > k) may be inconsistent with standard LU elimination semantics, e.g., by excluding the (k+1..N-1, k) column entries needed as the multiplier column in later steps or b
-  ...[truncated 112 chars]
+    "statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, pro
+  ...[truncated 92 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (9.217179902999987s, in=14071 out=715)
+### Turn 4 - `skeptic` (7.278356251999995s, in=13771 out=586)
 
 Message:
 
 ```text
-The three claims failed because scope_rationale was missing; re-sending them now with it included.
+The two claim attempts failed because `scope_rationale` was missing. I'll re-send both with that field filled in.
 ```
 
 Tool calls:
 
-- `record_claim -> t9 ok`
+- `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "Gram entries up to ~448 give pivots of widely different magnitudes; fp32 rank-1 updates in non-pivoted elimination can lose low bits, and the tolerance is tight (1e-4) against a float64 reference.",
+    "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is log(det(A)) for the actual stored float32 entries evaluated in float64; error metric ||output-reference||_2 / max(||reference||_2, 1.0) must be <= 0.0001 on this fixed workload."
+        "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
       }
     ],
-    "scope_rationale": "The contract fixes the workload to make_inputs() and requires relative error <= 1e-4 vs a float64 logdet reference on the stored float32 entries, so fp32 elimination accuracy on that exact matrix is decisive.",
-    "statement": "Running the kernel on the fixed
-  ...[truncated 200 chars]
+    "scope_rationale": "The contract (problem.txt) fixes this exact seeded workload and defines the reference winn
+  ...[truncated 480 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Gram entries up to ~448 give pivots of widely different magnitudes; fp32 rank-1 updates in non-pivoted elimination can lose low bits, and the tolerance is tight (1e-4) against a float64 reference.",
+    "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is log(det(A)) for the actual stored float32 entries evaluated in float64; error metric ||output-reference||_2 / max(||reference||_2, 1.0) must be <= 0.0001 on this fixed workload."
+        "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
       }
     ],
-    "scope_rationale": "The contract fixes the workload to make_inputs() and requires relative error <= 1e-4 vs a float64 logdet reference on the stored float32 entries, so fp32 elimination accuracy on that exact matrix is decisive.",
-    "statement": "Running the kernel on the fixed make_inputs() matrix, the float32 non-pivoted elimination and float32 log accumulation may produce relative error > 1e-4 versus the float64 logdet reference computed on the stored float32 entries.",
-    "status": "open"
-  }
-- `record_claim -> t10 ok`
+    "scope_rationale": "The contract (problem.txt) fixes this exact seeded workload and defines the reference winner by exact float64 distances; if the quantized route selects a different winner whose embedding exceeds 0.1 relative L2, the contract is violated on the only in-scope input.",
+    "statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embeddin
+  ...[truncated 114 chars]
+- `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "tl.log may lower to a log2-based fast approximation rather than a correctly-rounded log; with 8 accumulated terms and a 1e-4 relative tolerance, few-ulp log errors could accumulate beyond the bound, especially for large pivots.",
+    "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract specifies precision-sensitive numeric style (round-to-nearest float32 division, fusion disabled) and a 1e-4 relative error bound on the fixed workload."
+        "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
       }
     ],
-    "scope_rationale": "The contract states precision-sensitive arithmetic requirements and a 1e-4 error bound on the fixed workload, so the accuracy of each tl.log(pivot) term and the fp32 accumulation is in scope.",
-    "statement": "Triton's tl.log(pivot) may use an approximate d
-  ...[truncated 149 chars]
+    "scope_rationale": "problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner chang
+  ...[truncated 364 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "tl.log may lower to a log2-based fast approximation rather than a correctly-rounded log; with 8 accumulated terms and a 1e-4 relative tolerance, few-ulp log errors could accumulate beyond the bound, especially for large pivots.",
+    "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract specifies precision-sensitive numeric style (round-to-nearest float32 division, fusion disabled) and a 1e-4 relative error bound on the fixed workload."
+        "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
       }
     ],
-    "scope_rationale": "The contract states precision-sensitive arithmetic requirements and a 1e-4 error bound on the fixed workload, so the accuracy of each tl.log(pivot) term and the fp32 accumulation is in scope.",
-    "statement": "Triton's tl.log(pivot) may use an approximate device log, so the accumulated sum of 8 log(pivot) values in float32 may deviate from correctly-rounded logs enough to exceed the 1e-4 error bound.",
-    "status": "open"
-  }
-- `record_claim -> t11 ok`
-  Args:
-  {
-    "rationale": "The mask is the core of the elimination; a subtle asymmetry would silently change the pivot sequence while small errors could mask it on benign checks. Source reads as standard LU but deserves runtime confirmation of the trailing submatrix values.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The implementation is specified as elimination without pivoting accumulating the logarithms of its diagonal pivots; a wrong update mask would violate this stated algorithm on the fixed workload."
-      }
-    ],
-    "scope_rationale": "The contract pins the algorithm (elimination without pivoting, sum of log of diagonal pivots); a mask bug would alter the pivot sequence and violate that stated behavior on the fixed workload.",
-    "state
-  ...[truncated 207 chars]
-  Output summary:
-  {
-    "id": "c3",
-    "rationale": "The mask is the core of the elimination; a subtle asymmetry would silently change the pivot sequence while small errors could mask it on benign checks. Source reads as standard LU but deserves runtime confirmation of the trailing submatrix values.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The implementation is specified as elimination without pivoting accumulating the logarithms of its diagonal pivots; a wrong update mask would violate this stated algorithm on the fixed workload."
-      }
-    ],
-    "scope_rationale": "The contract pins the algorithm (elimination without pivoting, sum of log of diagonal pivots); a mask bug would alter the pivot sequence and violate that stated behavior on the fixed workload.",
-    "statement": "The trailing-submatrix update mask (rows > k & columns > k) may be inconsistent with standard LU elimination semantics, changing the pivot sequence and hence the sum of logs on the fixed workload.",
+    "scope_rationale": "problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner changes the output on the in-scope input and is testable against the stated reference.",
+    "statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.",
     "status": "open"
   }
 
-### Turn 5 - `describer` (16.794693162999977s, in=15856 out=1150)
+### Turn 5 - `describer` (8.531299977000003s, in=14812 out=619)
 
 Message:
 
 ```text
-The artifact context is already fully loaded. I can add a useful structural refinement to the description model that bears directly on the open claims: the input is a Gram matrix of an 8×7 integer factor, so it has rank ≤ 7; the only thing making it positive definite is the 1/1024 diagonal regularizer. That means the smallest eigenvalue is ≈ 1/1024, so the last elimination pivot is likely ~1e-3 and its log ≈ -6.9 — a large-magnitude term that interacts with the fp32 accumulation and tolerance questions in c1/c2.
+The description model is already recorded and current. I'll add one focused refinement that sharpens what the experiment needs to measure, since the open claims c1/c2 directly mirror my risk map.
 ```
 
 Tool calls:
 
-- `record_description_update -> t12 ok`
+- `record_description_update -> t10 ok`
   Args:
   {
-    "contract_model": [
-      "Compute log(det(A)) in natural log for the single fixed 8x8 float32 SPD matrix from make_inputs(); reference evaluated in float64 on the stored float32 entries.",
-      "Output must be a finite float32 vector of shape (1,); error metric ||output-reference||_2 / max(||reference||_2, 1.0) <= 1e-4 on this fixed workload only.",
-      "Contract pins the algorithm style: elimination without pivoting, sum of log of diagonal pivots, fusion disabled, round-to-nearest fp32 division for multipliers."
-    ],
     "kernel_model": [
-      "Input is the Gram matrix of an 8x7 integer factor (entries in [-8,8]) plus (1/1024)*I cast to float32; the Gram part has rank at most 7, so SPD-ness comes entirely from the regularizer and the smallest eigenvalue is approximately 1/1024 (~9.8e-4).",
-  ...[truncated 2945 chars]
+      "Refinement for experiment design: exact float64 squared distances are ~(radii)^2 \u2248 1.0 with spread only ~\u00b10.004 across candidates (radii 1\u00b10.002); quantized 1/8-grid distances can differ from these by up to ~0.125, i.e. ~30x the true spread, making a winner flip very plausible.",
+      "embeddings are iid N(0,1) 8-vectors, so two independent rows differ in relative L2 by ~sqrt(2)\u22481.41 in expectation; a wrong winner will almost surely fail the 0.1 relative-L2 tolerance, so the winner identity comparison effectively decides the verdict.",
+      "The experimenter can decide c1/c2 in one CPU-only computation: reproduce make_inputs_numpy (seed 840104), compute exact float64 winner, compute the quantized float32 route winner (mirroring kernel lines 11-2
+  ...[truncated 1144 chars]
   Output summary:
   {
-    "contract_model": [
-      "Compute log(det(A)) in natural log for the single fixed 8x8 float32 SPD matrix from make_inputs(); reference evaluated in float64 on the stored float32 entries.",
-      "Output must be a finite float32 vector of shape (1,); error metric ||output-reference||_2 / max(||reference||_2, 1.0) <= 1e-4 on this fixed workload only.",
-      "Contract pins the algorithm style: elimination without pivoting, sum of log of diagonal pivots, fusion disabled, round-to-nearest fp32 division for multipliers."
-    ],
+    "contract_model": [],
     "impact_on_claims": [],
     "kernel_model": [
-      "Input is the Gram matrix of an 8x7 integer factor (entries in [-8,8]) plus (1/1024)*I cast to float32; the Gram part has rank at most 7, so SPD-ness comes entirely from the regularizer and the smallest eigenvalue is approximately 1/1024 (~9.8e-4).",
-      "Consequently the last elimination pivot is expected to be on the order of 1e-3, contributing a log term of roughly -6.9; other pivots come from Gram-part eigenvalues which can be large (entries up to ~448), so pivot logs span a wide magnitude range.",
-      "The kernel computes the sum of these 8 logs in float32, single Triton program, N=8 constexpr, no pivoting (vali
-  ...[truncated 2635 chars]
+      "Refinement for experiment design: exact float64 squared distances are ~(radii)^2 \u2248 1.0 with spread only ~\u00b10.004 across candidates (radii 1\u00b10.002); quantized 1/8-grid distances can differ from these by up to ~0.125, i.e. ~30x the true spread, making a winner flip very plausible.",
+      "embeddings are iid N(0,1) 8-vectors, so two independent rows differ in relative L2 by ~sqrt(2)\u22481.41 in expectation; a wrong winner will almost surely fail the 0.1 relative-L2 tolerance, so the winner identity comparison effectively decides the verdict.",
+      "The experimenter can decide c1/c2 in one CPU-only computation: reproduce make_inputs_numpy (seed 840104), compute exact float64 winner, compute the quantized float32 route winner (mirroring kernel lines 11-20), and compare indices plus relative L2 of the two embedding rows."
+    ],
+    "open_questions": [
+      "Whether the quantized route and exact route pick the same index for seed 840104 \u2014 needs the experimenter's numeric check; source inspection alone cannot decide."
+    ],
+    "resolved_tasks": [],
+    "risk_map": [
+      "Decisive probe for c1/c2: comput
+  ...[truncated 879 chars]
 
-### Turn 6 - `skeptic` (9.925417980999953s, in=24045 out=286)
+### Turn 6 - `skeptic` (5.003481917000002s, in=20420 out=228)
 
 Message:
 
 ```text
-The three recorded claims (c1 fp32 elimination accuracy, c2 tl.log precision, c3 mask semantics) already cover the dominant risks, including the refined small-pivot/cancellation concerns from the latest description update — the small-pivot error amplification falls squarely under c1. I have no additional distinct, testable in-scope hypotheses.
+The two decisive in-scope hypotheses (quantization-induced winner flip and quantized-space tie misrouting) are already recorded as c1 and c2; the fixed single-workload contract leaves no additional testable surfaces worth attacking, and I should not run experiments myself.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t13 ok`
+- `record_no_new_claims -> t11 ok`
   Args:
   {
-    "reason": "The existing claims c1 (fp32 elimination/accumulation accuracy vs 1e-4 tolerance, now sharpened by the rank-7 Gram + 1/1024 regularizer small-pivot structure), c2 (tl.log precision and fp32 log accumulation), and c3 (trailing-submatrix mask semantics) cover all high-risk in-scope failure modes for this single fixed workload. The new description update's risks (tiny final pivot, near-cancellation in the log sum) are subsumed by c1/c2, and the multiplier-includes-k concern is already assessed as harmless in the risk map. No new distinct, testable, in-scope claim is warranted.",
+    "reason": "The contract restricts scope to the single seeded make_inputs workload; the only material correctness question \u2014 whether the quantized 1/8-grid route picks the same winner as the exact float64 reference \u2014 is fully covered by existing claims c1 and c2. The gather is unquantized and the tie rule is faithfully implemented in quantized space, so no additional distinct, testable failure mode exists; the claims now need the experimenter's numeric probe rather than more hypotheses.",
     "reviewed_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The existing claims c1 (fp32 elimination/accumulation accuracy vs 1e-4 tolerance, now sharpened by the rank-7 Gram + 1/1024 regularizer small-pivot structure), c2 (tl.log precision and fp32 log accumulation), and c3 (trailing-submatrix mask semantics) cover all high-risk in-scope failure modes for this single fixed workload. The new description update's risks (tiny final pivot, near-cancellation in the log sum) are subsumed by c1/c2, and the multiplier-includes-k concern is already assessed as harmless in the risk map. No new distinct, testable, in-scope claim is warranted.",
+    "reason": "The contract restricts scope to the single seeded make_inputs workload; the only material correctness question \u2014 whether the quantized 1/8-grid route picks the same winner as the exact float64 reference \u2014 is fully covered by existing claims c1 and c2. The gather is unquantized and the tie rule is faithfully implemented in quantized space, so no additional distinct, testable failure mode exists; the claims now need the experimenter's numeric probe rather than more hypotheses.",
     "reviewed_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ],
-    "reviewed_tool_event_count": 12,
+    "reviewed_tool_event_count": 10,
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (29.685471089000032s, in=24388 out=2292)
+### Turn 7 - `experimenter` (12.40886148300001s, in=21485 out=968)
 
 Message:
 
 ```text
-I'll launch three independent probes covering c1 (end-to-end error vs the 1e-4 tolerance), c2 (tl.log precision isolated on the actual pivot values), and c3 (pivot/trailing-submatrix mask semantics, tested by a kernel variant that stores the pivots). None depends on another's result, so all three go out together.
+I'll run two independent probes: c1 executes the real kernel on GPU against the exact float64 reference on the fixed seeded workload; c2 analyzes quantized-distance ties and smallest-index resolution vs the exact winner on the same inputs.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t14 ok`
+- `run_claim_probe -> t12 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import numpy as np, torch, json, sys, os\nsys.path.insert(0, \"/root/numerical_cases/case_w\")\nimport kernel\n\n(m,) = kernel.make_inputs()\nout = kernel.run(m)\nout = out.cpu().numpy()\nA64 = m.cpu().numpy().astype(np.float64)\nsign, logdet = np.linalg.slogdet(A64)\nref = logdet\nerr = float(abs(out[0] - ref) / max(abs(ref), 1.0))\nprint(json.dumps({\n    \"claim\": \"c1\", \"kernel_output\": out.tolist(), \"reference_logdet_f64\": ref,\n    \"relative_error\": err, \"tolerance\": 1e-4, \"passes\": err <= 1e-4,\n    \"output_finite\": bool(np.isfinite(out).all()), \"shape\": list(out.shape),\n    \"input_dtype\": str(m.dtype), \"metric\": \"||out-ref||/max(||ref||,1) per problem.txt\"\n}))\n",
-    "expected_signal": "relative error vs fp64 logdet reference 
-  ...[truncated 46 chars]
+    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nfrom kernel import run, make_inputs\n\nquery, candidates, embeddings = make_inputs()\nout = run(query, candidates, embeddings)\n\n# exact float64 reference\nq = query.to(torch.float64).numpy()\nc = candidates.to(torch.float64).numpy()\nd = ((c - q) ** 2).sum(axis=1)\nref_idx = int(np.argmin(d))  # argmin returns first (smallest) index on ties\nref_out = embeddings[ref_idx].numpy().astype(np.float64)\nrel = np.linalg.norm(out.numpy().astype(np.float64) - ref_out) / max(np.linalg.norm(ref_out), 1e-12)\n\nprint(json.dumps({\n    \"metric\": \"kernel winner vs exact float64 winner on fixed seed-840104 workload\",\n    \"kernel_output\": out.tolist(),\n    \"reference_out
+  ...[truncated 459 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t14_probe.py",
-        "sha256": "725d7ed979d992352a81e4f6d2b9679b1da61a313993cd9938fabfefb0d86e8f"
+        "path": "probes/t12_probe.py",
+        "sha256": "6ad426478b0d919ead0d6f6aa49cc0bf7b7fe7d8c24592b1cc21bb940551f753"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t14_stdout.txt",
-        "sha256": "7fb7b4628fcf4ffeaf33ab3bc025c89024e0209c853fb75c573110e1e929cc20"
+        "path": "probes/t12_stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t14_stderr.txt",
+        "path": "probes/t12_stderr.txt",
+        "sha256": "46487c07879e4dd4d94a96d6a9445957c6991a10cec6bd79aaecc1e00d8358a2"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
+    "duration_s": 5.731198,
+    "event_id": "t12",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python pro
+  ...[truncated 2195 chars]
+- `run_claim_probe -> t13 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import numpy as np, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nfrom kernel import make_inputs_numpy\n\nquery, candidates, embeddings = make_inputs_numpy()\n\n# exact float64 route\nq64 = query.astype(np.float64)\nd_exact = ((candidates.astype(np.float64) - q64) ** 2).sum(axis=1)\nref_idx = int(np.argmin(d_exact))\n\n# quantized float32 route mirroring kernel lines 11-20\ndef quant(x):\n    return np.floor(x.astype(np.float32) * np.float32(8.0) + np.float32(0.5)).astype(np.float32) * np.float32(0.125)\nq_q = quant(query)\nc_q = quant(candidates)\ndist = np.zeros(16, dtype=np.float32)\nfor i in range(16):\n    acc = np.float32(0.0)\n    for j in range(32):\n        delta = np.float32(c_q[i, j] - q_q[j])\n        acc = np.float32(acc + np
+  ...[truncated 1056 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t13_probe.py",
+        "sha256": "2ee06555732e01d04dd1fc30613b3d27c2e2b0f54e49ef716dc7a43eb00429aa"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t13_stdout.txt",
+        "sha256": "bba7de39deeb77dbde2ce4c951aa96c7f404b8a0cb845ce1fb5048ac27b639ea"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t13_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t14_json_result.json",
-        "sha256": "0df02924cf30087241e3256a3d400854127394d434b4345c9fd23666b18ff76b"
+        "path": "probes/t13_json_result.json",
+        "sha256": "0d0c6cfca8d45e23f51aec1a74e2ebfaf925fd453376798217585e80f426f911"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "Running the kernel on the fixed make_inputs() matrix, the float32 non-pivoted elimination and float32 log accumulation may produce relative error > 1e-4 versus the float64 logdet reference computed on the stor
-  ...[truncated 3358 chars]
+    "claim_id": "c2",
+    "claim_statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even tho
+  ...[truncated 5765 chars]
+
+### Turn 8 - `experimenter` (10.717039612999997s, in=26578 out=662)
+
+Message:
+
+```text
+The c2 probe shows both routes pick index 6 with no quantized tie — that rebuts c2. The c1 GPU probe hit a .numpy() on CUDA tensor error, so I'll finalize c2 as rebutted and relaunch a fixed c1 probe in the same turn.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "exact64_ref_index": 6,
+      "n_tied_at_min": 1,
+      "quantized_min_distance": 0.953125,
+      "quantized_winner_index": 6,
+      "tie_changes_index_vs_exact": false,
+      "tied_indices": [
+        6
+      ]
+    },
+    "event_id": "t13",
+    "status": "rebutted",
+    "summary": "On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 \u2014 no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.",
+    "supports": "rebutted"
+  }
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "rebutted",
+    "evidence_id": "c2.e1",
+    "summary": "On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 \u2014 no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.",
+    "supports": "rebutted",
+    "tool_event_id": "t13"
+  }
 - `run_claim_probe -> t15 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "import numpy as np, torch, triton, triton.language as tl, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_w\")\nimport kernel\n\n# Get the exact pivot values of the fixed workload via fp64 elimination (mask-identical algorithm)\n(m,) = kernel.make_inputs_numpy()\nM = m.astype(np.float64)\npivots = []\nA = M.copy()\nN = 8\nfor k in range(N):\n    p = A[k, k]; pivots.append(p)\n    mult = A[:, k] / p\n    upd = A - np.outer(mult, A[k, :])\n    for i in range(k+1, N):\n        for j in range(k+1, N):\n            A[i, j] = upd[i, j]\npiv = np.array(pivots, dtype=np.float32)\n\n@triton.jit\ndef logk(X, O, N: tl.constexpr):\n    i = tl.arange(0, N)\n    x = tl.load(X + i)\n    tl.store(O + i, tl.log(x))\n\nxg = torch.from_numpy(piv).cuda()\nog = torch
-  ...[truncated 1202 chars]
+    "claim_id": "c1",
+    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nfrom kernel import run, make_inputs\n\nquery, candidates, embeddings = make_inputs()\nout = run(query, candidates, embeddings)\n\n# exact float64 reference (host copies)\nq = query.cpu().to(torch.float64).numpy()\nc = candidates.cpu().to(torch.float64).numpy()\ne = embeddings.cpu().numpy().astype(np.float64)\nd = ((c - q) ** 2).sum(axis=1)\nref_idx = int(np.argmin(d))\nref_out = e[ref_idx]\nout_np = out.cpu().numpy().astype(np.float64)\nrel = float(np.linalg.norm(out_np - ref_out) / max(np.linalg.norm(ref_out), 1e-12))\n\n# also identify which embedding row the kernel actually returned\nrow_errs = [float(np.linalg.norm(out_np - e[i])) for i in range(16)]\nkernel_idx 
+  ...[truncated 549 chars]
   Output summary:
   {
     "artifacts": [
@@ -392,13 +415,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t15_probe.py",
-        "sha256": "70ade8453a5a9c133077dc57797c107995ff01791253cf825562e3560f1e836e"
+        "sha256": "6e4cb12bf9205c504273da261026d7cf64291b3da7b7083094957624403577da"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t15_stdout.txt",
-        "sha256": "badbb09c69033cae98336893f509057927dba0f0f90ccca83cd0cbd655722c2c"
+        "sha256": "2be742e7301faa8295a58261c4ca873cf3c9ec407de5f5cdc32356ea2dc77488"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -410,82 +433,37 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t15_json_result.json",
-        "sha256": "4784a1378a0fa72b92ca7b1ce0cfa4e4a121481bc2f1ebef4fe13ae9c05b952d"
+        "sha256": "38016bf6aa416f5841e89e7af4ef8a8f8e72a24c2bdc703771a51de8a40690ec"
       }
     ],
-    "claim_id": "c2",
-    "claim_statement": "Triton's tl.log(pivot) may use an approximate device log, so the accumulated sum of 8 log(pivot) values in float32 may deviate from correctly-rounded logs enough to exceed the 1e-4 error bound.",
-    "duration_s
-  ...[truncated 5466 chars]
-- `run_claim_probe -> t16 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "import numpy as np, torch, triton, triton.language as tl, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_w\")\nimport kernel\n\n# Kernel variant identical to _logdet_kernel but stores the pivot sequence and final trailing entry\n@triton.jit\ndef probe_kernel(Matrix, Piv, Fin, N: tl.constexpr):\n    rows = tl.arange(0, N)\n    columns = tl.arange(0, N)\n    matrix = tl.load(Matrix + rows[:, None] * N + columns[None, :]).to(tl.float32)\n    output = tl.full((), 0.0, tl.float32)\n    for k in tl.static_range(0, N):\n        pivot = tl.sum(tl.sum(tl.where((rows[:, None] == k) &\n                                       (columns[None, :] == k), matrix, 0.0), 0), 0)\n        column = tl.sum(tl.where(columns[None, :] == k, matrix, 0.0), 1)\n        pivot
-  ...[truncated 2124 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t16_probe.py",
-        "sha256": "42c5d8713973158b9291df285cf2411dd9d93804bebaed10e218232d9877c85b"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t16_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t16_stderr.txt",
-        "sha256": "22b1ec585ff883f1e6f7a88f52d3c91814523fc0c01e0db04f3af5813c881d01"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "The trailing-submatrix update mask (rows > k & columns > k) may be inconsistent with standard LU elimination semantics, changing the pivot sequence and hence the sum of logs on the fixed workload.",
-    "duration_s": 4.223655,
-    "event_id": "t16",
-    "evidence_draft": {
-      "claim_id": "c3",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "
-  ...[truncated 4087 chars]
+    "claim_id": "c1",
+    "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from e
+  ...[truncated 4594 chars]
 
-### Turn 8 - `experimenter` (9.572206368000025s, in=34110 out=671)
+### Turn 9 - `experimenter` (4.750628974999998s, in=33868 out=259)
 
 Message:
 
 ```text
-I'll finalize the c1 and c2 probe results (both clearly rebutted) and relaunch the c3 probe with fixed Triton indexing (`matrix[N-1,N-1]` used an unsupported constexpr index; I'll extract the final trailing entry via a masked sum instead).
+The fixed c1 GPU probe succeeded: the kernel returned embedding row 6, which matches the exact float64 reference winner (index 6), with relative L2 0.0 — well within the 0.1 tolerance. This rebuts c1's winner-flip hypothesis. All open claims will then be resolved.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t17 ok`
+- `finalize_probe_evidence -> t16 ok`
   Args:
   {
     "data": {
-      "kernel_output": [
-        24.486507415771484
-      ],
-      "metric": "||out-ref||/max(||ref||,1) per problem.txt",
-      "output_finite": true,
-      "passes": true,
-      "reference_logdet_f64": 24.486502460803194,
-      "relative_error": 2.0235508512601344e-07,
-      "tolerance": 0.0001
+      "kernel_returned_row_index": 6,
+      "passes_contract": true,
+      "ref_exact64_index": 6,
+      "relative_l2": 0.0,
+      "tolerance": 0.1,
+      "winner_match": true
     },
-    "event_id": "t14",
+    "event_id": "t15",
     "status": "rebutted",
-    "summary": "Kernel output on the fixed make_inputs() matrix is 24.486507 vs fp64 slogdet reference 24.486502; relative error 2.02e-7, well within the 1e-4 tolerance. Output finite, shape (1,), float32. The claimed >1e-4 error does not occur.",
+    "summary": "On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.",
     "supports": "rebutted"
   }
   Output summary:
@@ -493,243 +471,176 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Kernel output on the fixed make_inputs() matrix is 24.486507 vs fp64 slogdet reference 24.486502; relative error 2.02e-7, well within the 1e-4 tolerance. Output finite, shape (1,), float32. The claimed >1e-4 error does not occur.",
-    "supports": "rebutted",
-    "tool_event_id": "t14"
-  }
-- `finalize_probe_evidence -> t18 ok`
-  Args:
-  {
-    "data": {
-      "correctly_rounded_sum_f32": 24.486501693725586,
-      "max_abs_log_err": 0.0,
-      "max_relative_log_err": 0.0,
-      "metric": "per-value and summed deviation of tl.log vs correctly-rounded fp32 log on actual pivots",
-      "sum_abs_diff": 0.0,
-      "triton_sum_f32": 24.486501693725586
-    },
-    "event_id": "t15",
-    "status": "rebutted",
-    "summary": "tl.log on the actual 8 pivot values (including the tiny ~4.35e-3 last pivot) matches the correctly-rounded fp32 log bit-for-bit (max abs error 0.0, max relative ulp error 0.0), and the fp32 sum matches the correctly-rounded-sum exactly (diff 0.0). No approximation error; the claimed bound violation does not occur.",
-    "supports": "rebutted"
-  }
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "rebutted",
-    "evidence_id": "c2.e1",
-    "summary": "tl.log on the actual 8 pivot values (including the tiny ~4.35e-3 last pivot) matches the correctly-rounded fp32 log bit-for-bit (max abs error 0.0, max relative ulp error 0.0), and the fp32 sum matches the correctly-rounded-sum exactly (diff 0.0). No approximation error; the claimed bound violation does not occur.",
+    "summary": "On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.",
     "supports": "rebutted",
     "tool_event_id": "t15"
   }
-- `finalize_probe_evidence -> t19 ok`
-  Args:
-  {
-    "data": {
-      "error": "triton CompilationError: unsupported tensor index constexpr[7] at tl.store(Fin, matrix[N-1, N-1])"
-    },
-    "event_id": "t16",
-    "status": "inconclusive",
-    "summary": "c3 probe variant failed to compile because matrix[N-1,N-1] indexing with a constexpr is unsupported in this Triton version; no runtime evidence on mask semantics yet. Relaunching with a masked-sum extraction of the final trailing entry.",
-    "supports": "inconclusive"
-  }
-  Output summary:
-  {
-    "claim_id": "c3",
-    "claim_status": "inconclusive",
-    "evidence_id": "c3.e1",
-    "summary": "c3 probe variant failed to compile because matrix[N-1,N-1] indexing with a constexpr is unsupported in this Triton version; no runtime evidence on mask semantics yet. Relaunching with a masked-sum extraction of the final trailing entry.",
-    "supports": "inconclusive",
-    "tool_event_id": "t16"
-  }
 
-### Turn 9 - `skeptic` (6.6705180199999745s, in=42641 out=379)
+### Turn 10 - `skeptic` (5.104751644999993s, in=37613 out=272)
 
 Message:
 
 ```text
-This is the final review. c1 and c2 are decisively rebutted by the end-to-end probe (relative error 2.02e-7 vs 1e-4 tolerance, finite output) and the bit-exact tl.log comparison. c3 remains inconclusive only because the probe variant hit a Triton indexing limitation, but the c1 end-to-end result already shows the mask semantics produce the correct pivot sequence on the fixed workload — a mask bug would have corrupted the output far beyond 2e-7. No new material in-scope claims are warranted.
+Both in-scope claims were decisively tested: the quantized route and the exact float64 reference both select candidate 6, and the kernel's GPU output matches the reference embedding row exactly (relative L2 = 0.0). No new evidence exposes any further failure mode, so I'm closing out with no new claims.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t20 ok`
+- `record_no_new_claims -> t17 ok`
   Args:
   {
-    "reason": "Final review: c1 (fp32 accuracy vs 1e-4) and c2 (tl.log precision) are decisively rebutted by the end-to-end probe (relative error 2.02e-7, finite output, correct shape/dtype) and the bit-exact tl.log comparison on the actual pivots including the tiny final one. c3 (mask semantics) is inconclusive only due to a probe-side Triton compile limitation, not kernel evidence; the c1 end-to-end result at 2e-7 error implicitly confirms the mask/elimination semantics are correct on the fixed workload, since any mask bug would corrupt pivots and the output far beyond tolerance. The contract scope is the single fixed workload, which has been tested directly. No new material, testable, in-scope claims.",
+    "reason": "Final review: the fixed single-workload contract leaves only the winner-selection question, which c1 (quantization-induced winner flip) and c2 (quantized-space tie misrouting) fully covered. Both were tested on the actual in-scope seed-840104 workload: c2's CPU analysis showed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no tie), matching the exact float64 winner, and c1's GPU probe confirmed the kernel's real output equals the reference embedding row 6 exactly (relative L2 = 0.0, well within the 0.1 tolerance). The gather is unquantized and the tie rule is faithfully implemented, so no additional material, testable, in-scope failure mode exists.",
     "reviewed_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c1 (fp32 accuracy vs 1e-4) and c2 (tl.log precision) are decisively rebutted by the end-to-end probe (relative error 2.02e-7, finite output, correct shape/dtype) and the bit-exact tl.log comparison on the actual pivots including the tiny final one. c3 (mask semantics) is inconclusive only due to a probe-side Triton compile limitation, not kernel evidence; the c1 end-to-end result at 2e-7 error implicitly confirms the mask/elimination semantics are correct on the fixed workload, since any mask bug would corrupt pivots and the output far beyond tolerance. The contract scope is the single fixed workload, which has been tested directly. No new material, testable, in-scope claims.",
+    "reason": "Final review: the fixed single-workload contract leaves only the winner-selection question, which c1 (quantization-induced winner flip) and c2 (quantized-space tie misrouting) fully covered. Both were tested on the actual in-scope seed-840104 workload: c2's CPU analysis showed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no tie), matching the exact float64 winner, and c1's GPU probe confirmed the kernel's real output equals the reference embedding row 6 exactly (relative L2 = 0.0, well within the 0.1 tolerance). The gather is unquantized and the tie rule is faithfully implemented, so no additional material, testable, in-scope failure mode exists.",
     "reviewed_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ],
-    "reviewed_tool_event_count": 19,
-    "turn": 9
+    "reviewed_tool_event_count": 16,
+    "turn": 10
   }
 
-### Turn 10 - `judge` (7.367771315000027s, in=42556 out=446)
+### Turn 11 - `judge` (7.246436587999995s, in=35152 out=381)
 
 Message:
 
 ```text
-The evidence is decisive: the end-to-end probe on the fixed workload shows relative error 2.02e-7 vs the 1e-4 tolerance, and tl.log is bit-exact on all actual pivots including the tiny final one. c3 remains inconclusive only due to a probe-side Triton indexing limitation, but the c1 result implicitly confirms mask semantics are correct. Recording trust.
+Both in-scope failure hypotheses were decisively tested on the fixed seed-840104 workload and rebutted: the kernel's quantized route picks the same winner (index 6) as the exact float64 reference, with relative L2 0.0 against a 0.1 tolerance. No open claims remain and the Skeptic signed off with no further concerns. I'll record the trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t21 ok`
+- `record_verdict -> t18 ok`
   Args:
   {
-    "confidence": 0.92,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt, the operative spec since no test.py exists) requires the fp32 log-det of the single fixed 8x8 make_inputs() matrix within relative error 1e-4 of a float64 reference. Claim c1 (fp32 elimination/accumulation accuracy) is rebutted by the direct end-to-end probe: kernel output 24.486507 vs fp64 slogdet reference 24.486502, relative error 2.02e-7, finite, shape (1,), float32 \u2014 three orders of magnitude inside tolerance. Claim c2 (tl.log approximation) is rebutted bit-for-bit: tl.log matches correctly-rounded fp32 log on all 8 actual pivot values, including the tiny ~4.35e-3 final pivot (log \u2248 -5.44), with zero error in both per-term and summed values. Claim c3 (mask semantics
-  ...[truncated 509 chars]
+    "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The 
+  ...[truncated 412 chars]
   Output summary:
   {
-    "confidence": 0.92,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt, the operative spec since no test.py exists) requires the fp32 log-det of the single fixed 8x8 make_inputs() matrix within relative error 1e-4 of a float64 reference. Claim c1 (fp32 elimination/accumulation accuracy) is rebutted by the direct end-to-end probe: kernel output 24.486507 vs fp64 slogdet reference 24.486502, relative error 2.02e-7, finite, shape (1,), float32 \u2014 three orders of magnitude inside tolerance. Claim c2 (tl.log approximation) is rebutted bit-for-bit: tl.log matches correctly-rounded fp32 log on all 8 actual pivot values, including the tiny ~4.35e-3 final pivot (log \u2248 -5.44), with zero error in both per-term and summed values. Claim c3 (mask semantics) is inconclusive solely because the probe variant hit a Triton constexpr-indexing compile limitation, not because of any kernel evidence; I set it aside because the c1 end-to-end result at 2e-7 error would be unattainable with a wrong elimination mask (any mask bug would corrupt the pivot sequence and the log sum far beyond tolerance), and source inspection reads as standard LU. The fixed workloa
-  ...[truncated 109 chars]
+    "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The problem text explicitly documents the quantized approximate route as intended, so the coarse-grid approximation is contractually acceptable; on this workload it selects the correct row and the unquantized gather reproduces the reference embedding exactly. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence. The kernel meets the numerical contract.",
+    "verdict
+  ...[truncated 12 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Compute log(det(A)) in natural log for the single fixed 8x8 float32 SPD matrix from make_inputs(); reference evaluated in float64 on the stored float32 entries.",
-    "Output must be a finite float32 vector of shape (1,).",
-    "Error metric: ||output-reference||_2 / max(||reference||_2, 1.0), must be <= 0.0001.",
-    "Contract explicitly matches the implementation style: elimination without pivoting, accumulation of log of diagonal pivots, FP fusion disabled, round-to-nearest float32 division for multipliers.",
-    "Scope is only this fixed workload (seed 98339 Gram construction + 1/1024 diagonal regularizer); other matrices/seeds are out of scope.",
-    "Output must be a finite float32 vector of shape (1,); error metric ||output-reference||_2 / max(||reference||_2, 1.0) <= 1e-4 on this fixed workload only.",
-    "Contract pins the algorithm style: elimination without pivoting, sum of log of diagonal pivots, fusion disabled, round-to-nearest fp32 division for multipliers."
+    "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
+    "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
+    "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
+    "Alternative inputs are out of scope; only this generated workload decides the verdict.",
+    "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
   ],
   "kernel_model": [
-    "Single Triton kernel launched with grid (1,), N=8 constexpr, num_warps=1, enable_fp_fusion=False; loads the whole 8x8 matrix into a tensor in float32 and stores one scalar.",
-    "LU-style Gaussian elimination without pivoting done via tl.where masks: pivot = A[k,k], column = A[:,k], pivot_row = A[k,:], multiplier = column/pivot (tl.div_rn), rank-1 update subtracted only in the strictly-lower-right trailing submatrix (rows>k & cols>k).",
-    "Output accumulated as sum of tl.log(pivot) over k=0..7 in float32; A is SPD so no pivoting is mathematically valid.",
-    "All arithmetic in float32 (matrix cast to fp32 on load); output tensor float32 shape (1,).",
-    "No partial pivoting, no zero-pivot guard, no batch support \u2014 fixed to N=8 and the given workload.",
-    "Input is the Gram matrix of an 8x7 integer factor (entries in [-8,8]) plus (1/1024)*I cast to float32; the Gram part has rank at most 7, so SPD-ness comes entirely from the r
-...[truncated 4600 chars]
+    "Triton kernel _route_kernel: one program, rows = tl.arange(0,16); per dimension j in static_range(32) it quantizes both query[j] and all candidates to a 1/8 grid (floor(x*8+0.5)*0.125) and accumulates float32 squared deltas.",
+    "Selection: min over quantized distances, tie broken to smallest row index via tl.where(distances==min, row, INT_MAX) then min \u2014 implements the contract's tie rule.",
+    "Gathers embeddings[winner*8 + 0..7] without quantization and stores to an 8-element float32 output; run() launches grid (1,) with N=16, D=32, E=8 hardcoded, matching shapes in make_inputs.",
+    "Distance accumulation is sequential over 32 dims in float32 with enable_fp_fusion=False; quantization error per coordinate is up to 1/16, so per-coordinate squared error up to ~0.0039 and D=32 accumulates up to ~0.125 possible drift vs the exact float64 distances.",
+    "make_inputs generates candidates on a unit-ish sphere around the query (normalized offsets, radii 1\u00b10.002), so exact float64 distances are near-equal (~1024 across candidates) \u2014 the workload is deliberately near-tie, making the winner highly sensitive to quantization.",
+    "Refinement for experiment design: exact float6
+...[truncated 3243 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_w: 8x8 SPD log-det via Triton non-pivoted Gaussian elimination accumulating log of pivots in float32; contract requires relative error <=1e-4 vs float64 reference on the single fixed workload.
-- `du2` tasks=`initial`: Refined case_w description: the 8x8 input is a rank-at-most-7 integer Gram matrix plus a 1/1024 diagonal regularizer, so the smallest eigenvalue/pivot is ~1e-3 and its log (~ -6.9) is the dominant risk factor for the fp32 accumulation and the 1e-4 relative tolerance; links the input structure to open claims c1-c3.
+- `du1` tasks=`initial`: Description of case_q: fixed-seed nearest-candidate routing task where the kernel uses 1/8-grid quantized float32 distances while the reference uses exact float64 distances; verdict hinges on whether both routes pick the same (or close-enough) embedding row for this single generated workload.
+- `du2` tasks=`initial`: Refinement of case_q description: the near-tie geometry (radii 1±0.002, true distance spread ~0.004 vs quantization drift ~0.125) makes a winner flip likely, and iid N(0,1) embeddings mean any wrong row fails the 0.1 relative-L2 tolerance; the verdict reduces to comparing the quantized-route winner index against the exact float64 winner index on the fixed seed-840104 workload.
 
 ## Claims
 
 ### c1 - `rebutted`
 
-Statement: Running the kernel on the fixed make_inputs() matrix, the float32 non-pivoted elimination and float32 log accumulation may produce relative error > 1e-4 versus the float64 logdet reference computed on the stored float32 entries.
+Statement: On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.
 
 Scope: `in_scope`
 
-Scope rationale: The contract fixes the workload to make_inputs() and requires relative error <= 1e-4 vs a float64 logdet reference on the stored float32 entries, so fp32 elimination accuracy on that exact matrix is decisive.
+Scope rationale: The contract (problem.txt) fixes this exact seeded workload and defines the reference winner by exact float64 distances; if the quantized route selects a different winner whose embedding exceeds 0.1 relative L2, the contract is violated on the only in-scope input.
 
 Scope evidence:
-- `problem.txt`: Reference is log(det(A)) for the actual stored float32 entries evaluated in float64; error metric ||output-reference||_2 / max(||reference||_2, 1.0) must be <= 0.0001 on this fixed workload.
+- `problem.txt`: Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload.
 
-Rationale: Gram entries up to ~448 give pivots of widely different magnitudes; fp32 rank-1 updates in non-pivoted elimination can lose low bits, and the tolerance is tight (1e-4) against a float64 reference.
+Rationale: make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 — orders of magnitude larger than the true distance spread, so the ranking can flip.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t14: Kernel output on the fixed make_inputs() matrix is 24.486507 vs fp64 slogdet reference 24.486502; relative error 2.02e-7, well within the 1e-4 tolerance. Output finite, shape (1,), float32. The claimed >1e-4 error does not occur.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t15: On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.
 
 ### c2 - `rebutted`
 
-Statement: Triton's tl.log(pivot) may use an approximate device log, so the accumulated sum of 8 log(pivot) values in float32 may deviate from correctly-rounded logs enough to exceed the 1e-4 error bound.
+Statement: A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.
 
 Scope: `in_scope`
 
-Scope rationale: The contract states precision-sensitive arithmetic requirements and a 1e-4 error bound on the fixed workload, so the accuracy of each tl.log(pivot) term and the fp32 accumulation is in scope.
+Scope rationale: problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner changes the output on the in-scope input and is testable against the stated reference.
 
 Scope evidence:
-- `problem.txt`: Contract specifies precision-sensitive numeric style (round-to-nearest float32 division, fusion disabled) and a 1e-4 relative error bound on the fixed workload.
+- `problem.txt`: The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner.
 
-Rationale: tl.log may lower to a log2-based fast approximation rather than a correctly-rounded log; with 8 accumulated terms and a 1e-4 relative tolerance, few-ulp log errors could accumulate beyond the bound, especially for large pivots.
-
-Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t15: tl.log on the actual 8 pivot values (including the tiny ~4.35e-3 last pivot) matches the correctly-rounded fp32 log bit-for-bit (max abs error 0.0, max relative ulp error 0.0), and the fp32 sum matches the correctly-rounded-sum exactly (diff 0.0). No approximation error; the claimed bound violation does not occur.
-
-### c3 - `inconclusive`
-
-Statement: The trailing-submatrix update mask (rows > k & columns > k) may be inconsistent with standard LU elimination semantics, changing the pivot sequence and hence the sum of logs on the fixed workload.
-
-Scope: `in_scope`
-
-Scope rationale: The contract pins the algorithm (elimination without pivoting, sum of log of diagonal pivots); a mask bug would alter the pivot sequence and violate that stated behavior on the fixed workload.
-
-Scope evidence:
-- `problem.txt`: The implementation is specified as elimination without pivoting accumulating the logarithms of its diagonal pivots; a wrong update mask would violate this stated algorithm on the fixed workload.
-
-Rationale: The mask is the core of the elimination; a subtle asymmetry would silently change the pivot sequence while small errors could mask it on benign checks. Source reads as standard LU but deserves runtime confirmation of the trailing submatrix values.
+Rationale: Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only ±0.002 makes exact ties unlikely but quantized ties plausible.
 
 Evidence:
-- `c3.e1` runtime_probe supports `inconclusive`, tool_event_id=t16: c3 probe variant failed to compile because matrix[N-1,N-1] indexing with a constexpr is unsupported in this Triton version; no runtime evidence on mask semantics yet. Relaunching with a masked-sum extraction of the final trailing entry.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 — no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_w"
+  "entry": "case_q"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_w"
+  "entry": "case_q"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_w"
+  "entry": "case_q"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_w"
+  "entry": "case_q"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Compute log(det(A)) in natural log for the single fixed 8x8 float32 SPD matrix from make_inputs(); reference evaluated in float64 on the stored float32 entries.",
-    "Output must be a finite float32 vector of shape (1,).",
-    "Error metric: ||output-reference||_2 / max(||reference||_2, 1.0), must be <= 0.0001.",
-    "Contract explicitly matches the implementation style: elimination without pivoting, accumulation of log of diagonal pivots, FP fusion disabled, round-to-nearest float32 division for multipliers.",
-    "Scope is only this fixed workload (seed 98339 Gram construction + 1/1024 diagonal regularizer); other matrices/seeds are out of scope."
+    "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
+    "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
+    "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
+    "Alternative inputs are out of scope; only this generated workload decides the verdict.",
+    "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Single Triton kernel launched with grid (1,), N=8 constexpr, num_warps=1, enable_fp_fusion=False; loads the whole 8x8 matrix into a tensor in float32 and stores one scalar.",
-    "LU-style Gaussian elimination without pivoting done via tl.where masks: pivot = A[k,k], column = A[:,k], pivot_row = A[k,:], multiplier = column/pivot (tl.div_rn), rank-1 update subtracted only in the strictly-lower-right trailing submatrix (rows>k & cols>k).",
-    "Output accumulated as sum of tl.log(pivot) over k=0..7 in float32; A is SPD so no pivoting is mathematically valid.",
-    "All arithmetic in float32 (matrix cast to fp32 on load); output tensor float32 shape (1,).",
-    "No partial pivoting, no zero-pivot guard, no batch support \u2014 fixed to N=8 and the given workload."
+    "Triton kernel _route_kernel: one program, rows = tl.arange(0,16); per dimension j in static_range(32) it quantizes both query[j] and all candidates to a 1/8 grid (floor(x*8+0.5)*0.125) and accumulates float32 squared deltas.",
+    "Selection: min over quantized distances, tie broken to smallest row index via tl.where(distances==min, row, INT_MAX) then min \u2014 implements the contract's tie rule.",
+    "Gathers embeddings[winner*8 + 0..7] without quantization and stores to an 8-element float32 output; run() launches grid (1,) with N=16, D=32, E=8 hardcoded, matching shapes in make_inputs.",
+    "Distance accumulation is sequential over 32 dims in float32 with enable_fp_fusion=False; quantization error per coordinate is up to 1/16, so per-coordinate squared error up to ~0.0039 and D=32 accumulates up to ~0.125 possible drift vs the exact float64 distances.",
+    "make_inputs generates candidates on a unit-ish sphere around the query (normalized offsets, radii 1\u00b10.002), so exact float64 distances are near-equal (~1024 across candidates) \u2014 the workload is deliberately near-tie, making the winner highly sensitive to quantization."
   ],
   "open_questions": [
-    "What is the actual pivot sequence and does fp32 non-pivoted elimination on this specific matrix stay within 1e-4 relative error vs the float64 logdet reference?",
-    "Does tl.log(pivot) accumulate in fp32 with any fused behavior despite enable_fp_fusion=False, and does that affect the error metric?",
-    "Does the multiplier include the k-th entry (m_k = A[k,k]/A[k,k] = 1), which matters only for row k, an already-excluded row? (Source reads as ha
-...[truncated 1790 chars]
+...[truncated 2170 chars]
 
 ### t6 - record_claim - error
 
@@ -745,134 +656,102 @@ Evidence:
   "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t8 - record_claim - error
+### t8 - record_claim - ok
 
 {
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  "id": "c1",
+  "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
+    }
+  ],
+  "scope_rationale": "The contract (problem.txt) fixes this exact seeded workload and defines the reference winner by exact float64 distances; if the quantized route selects a different winner whose embedding exceeds 0.1 relative L2, the contract is violated on the only in-scope input.",
+  "statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
+  "status": "open"
 }
 
 ### t9 - record_claim - ok
 
 {
-  "id": "c1",
-  "rationale": "Gram entries up to ~448 give pivots of widely different magnitudes; fp32 rank-1 updates in non-pivoted elimination can lose low bits, and the tolerance is tight (1e-4) against a float64 reference.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Reference is log(det(A)) for the actual stored float32 entries evaluated in float64; error metric ||output-reference||_2 / max(||reference||_2, 1.0) must be <= 0.0001 on this fixed workload."
-    }
-  ],
-  "scope_rationale": "The contract fixes the workload to make_inputs() and requires relative error <= 1e-4 vs a float64 logdet reference on the stored float32 entries, so fp32 elimination accuracy on that exact matrix is decisive.",
-  "statement": "Running the kernel on the fixed make_inputs() matrix, the float32 non-pivoted elimination and float32 log accumulation may produce relative error > 1e-4 versus the float64 logdet reference computed on the stored float32 entries.",
-  "status": "open"
-}
-
-### t10 - record_claim - ok
-
-{
   "id": "c2",
-  "rationale": "tl.log may lower to a log2-based fast approximation rather than a correctly-rounded log; with 8 accumulated terms and a 1e-4 relative tolerance, few-ulp log errors could accumulate beyond the bound, especially for large pivots.",
+  "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract specifies precision-sensitive numeric style (round-to-nearest float32 division, fusion disabled) and a 1e-4 relative error bound on the fixed workload."
+      "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
     }
   ],
-  "scope_rationale": "The contract states precision-sensitive arithmetic requirements and a 1e-4 error bound on the fixed workload, so the accuracy of each tl.log(pivot) term and the fp32 accumulation is in scope.",
-  "statement": "Triton's tl.log(pivot) may use an approximate device log, so the accumulated sum of 8 log(pivot) values in float32 may deviate from correctly-rounded logs enough to exceed the 1e-4 error bound.",
+  "scope_rationale": "problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner changes the output on the in-scope input and is testable against the stated reference.",
+  "statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.",
   "status": "open"
 }
 
-### t11 - record_claim - ok
+### t10 - record_description_update - ok
 
 {
-  "id": "c3",
-  "rationale": "The mask is the core of the elimination; a subtle asymmetry would silently change the pivot sequence while small errors could mask it on benign checks. Source reads as standard LU but deserves runtime confirmation of the trailing submatrix values.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "The implementation is specified as elimination without pivoting accumulating the logarithms of its diagonal pivots; a wrong update mask would violate this stated algorithm on the fixed workload."
-    }
-  ],
-  "scope_rationale": "The contract pins the algorithm (elimination without pivoting, sum of log of diagonal pivots); a mask bug would alter the pivot sequence and violate that stated behavior on the fixed workload.",
-  "statement": "The trailing-submatrix update mask (rows > k & columns > k) may be inconsistent with standard LU elimination semantics, changing the pivot sequence and hence the sum of logs on the fixed workload.",
-  "status": "open"
-}
-
-### t12 - record_description_update - ok
-
-{
-  "contract_model": [
-    "Compute log(det(A)) in natural log for the single fixed 8x8 float32 SPD matrix from make_inputs(); reference evaluated in float64 on the stored float32 entries.",
-    "Output must be a finite float32 vector of shape (1,); error metric ||output-reference||_2 / max(||reference||_2, 1.0) <= 1e-4 on this fixed workload only.",
-    "Contract pins the algorithm style: elimination without pivoting, sum of log of diagonal pivots, fusion disabled, round-to-nearest fp32 division for multipliers."
-  ],
+  "contract_model": [],
   "impact_on_claims": [],
   "kernel_model": [
-    "Input is the Gram matrix of an 8x7 integer factor (entries in [-8,8]) plus (1/1024)*I cast to float32; the Gram part has rank at most 7, so SPD-ness comes entirely from the regularizer and the smallest eigenvalue is approximately 1/1024 (~9.8e-4).",
-    "Consequently the last elimination pivot is expected to be on the order of 1e-3, contributing a log term of roughly -6.9; other pivots come from Gram-part eigenvalues which can be large (entries up to ~448), so pivot logs span a wide magnitude range.",
-    "The kernel computes the sum of these 8 logs in float32, single Triton program, N=8 constexpr, no pivoting (valid for SPD).",
-    "The rank-deficient-plus-regularizer structure also means the reference logdet is roughly log(det_gram_part + tiny) \u2248 log(7 large eigenvalues) + log(1/1024); cancellation between large positive logs and the ~ -6.9 term sharpens the relative-error question."
+    "Refinement for experiment design: exact float64 squared distances are ~(radii)^2 \u2248 1.0 with spread only ~\u00b10.004 across candidates (radii 1\u00b10.002); quantized 1/8-grid distances can differ from these by up to ~0.125, i.e. ~30x the true spread, making a winner flip very plausible.",
+    "embeddings are iid N(0,1) 8-vectors, so two independent rows differ in relative L2 by ~sqrt(2)\u22481.41 in expectation; a wrong winner will almost surely fail the 0.1 relative-L2 tolerance, so the winner identity comparison effectively decides the verdict.",
+    "The experimenter can decide c1/c2 in one CPU-only computation: reproduce make_inputs_numpy (seed 840104), compute exact float64 winner, compute the quantized float32 route winner (mirroring kernel lines 11-20), and compare indices plus relative L2 of the two embedding rows."
   ],
   "open_questions": [
-    "Actual pivot sequence and their magnitudes on the fixed matrix (especially whether the last pivot is ~1/1024 as the rank-7 Gram structure implies) \u2014 needs runtime/computed evidence.",
-    "Whether fp32 non-pivoted elimination on this near-rank-deficient matrix amplifies the small-pivot error beyond 1e-4 relative error (claim c1).",
-    "Whether tl.log lowers to an approximation and how that interacts with the large-magnitude small-pivot log term (claim c2)."
+    "Whether the quantized route and exact route pick the same index for seed 840104 \u2014 needs the experimenter's numeric check; source inspection alone cannot decide."
   ],
-  "resolved_ta
-...[truncated 1835 chars]
+  "resolved_tasks": [],
+  "risk_map": [
+    "Decisive probe for c1/c2: compute both winner indices on the fixed seeded workload; a mismatch plus relative-L2 of the two embedding rows > 0.1 confirms the contract violation (expected, given iid N(0,1) embeddings).",
+    "If both routes pick the same winner, the kernel's output is embeddings[winner,:] exactly, since the gather is unquantized \u2014 then the kernel trivially passes, so the entire verdict reduces to the winner comparison."
+  ],
+  "scope_notes": [],
+  "summary": "Refinement of case_q description: the near-tie geometry (radii 1\u00b10.002, true distance spread ~0.004 vs quantization drift ~0.125) makes a winner flip likely, and iid N(0,1) embeddings mean any wrong row fails the 0.1 relative-L2 tolerance; the verdict reduces to comparing the quantized-route winner index against the exact float64 winner inde
+...[truncated 79 chars]
 
-### t13 - record_no_new_claims - ok
+### t11 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "The existing claims c1 (fp32 elimination/accumulation accuracy vs 1e-4 tolerance, now sharpened by the rank-7 Gram + 1/1024 regularizer small-pivot structure), c2 (tl.log precision and fp32 log accumulation), and c3 (trailing-submatrix mask semantics) cover all high-risk in-scope failure modes for this single fixed workload. The new description update's risks (tiny final pivot, near-cancellation in the log sum) are subsumed by c1/c2, and the multiplier-includes-k concern is already assessed as harmless in the risk map. No new distinct, testable, in-scope claim is warranted.",
+  "reason": "The contract restricts scope to the single seeded make_inputs workload; the only material correctness question \u2014 whether the quantized 1/8-grid route picks the same winner as the exact float64 reference \u2014 is fully covered by existing claims c1 and c2. The gather is unquantized and the tie rule is faithfully implemented in quantized space, so no additional distinct, testable failure mode exists; the claims now need the experimenter's numeric probe rather than more hypotheses.",
   "reviewed_claims": [
     "c1",
-    "c2",
-    "c3"
+    "c2"
   ],
-  "reviewed_tool_event_count": 12,
+  "reviewed_tool_event_count": 10,
   "turn": 6
 }
 
-### t14 - run_claim_probe - ok
+### t12 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t14_probe.py",
-      "sha256": "725d7ed979d992352a81e4f6d2b9679b1da61a313993cd9938fabfefb0d86e8f"
+      "path": "probes/t12_probe.py",
+      "sha256": "6ad426478b0d919ead0d6f6aa49cc0bf7b7fe7d8c24592b1cc21bb940551f753"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t14_stdout.txt",
-      "sha256": "7fb7b4628fcf4ffeaf33ab3bc025c89024e0209c853fb75c573110e1e929cc20"
+      "path": "probes/t12_stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t14_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t14_json_result.json",
-      "sha256": "0df02924cf30087241e3256a3d400854127394d434b4345c9fd23666b18ff76b"
+      "path": "probes/t12_stderr.txt",
+      "sha256": "46487c07879e4dd4d94a96d6a9445957c6991a10cec6bd79aaecc1e00d8358a2"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "Running the kernel on the fixed make_inputs() matrix, the float32 non-pivoted elimination and float32 log accumulation may produce relative error > 1e-4 versus the float64 logdet reference computed on the stored float32 entries.",
-  "duration_s": 5.815214,
-  "event_id": "t14",
+  "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
+  "duration_s": 5.731198,
+  "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -880,21 +759,92 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t14_probe.py",
-          "sha256": "725d7ed979d992352a81e4f6d2b9679b1da61a313993cd9938fabfefb0d86e8f"
+          "path": "probes/t12_probe.py",
+          "sha256": "6ad426478b0d919ead0d6f6aa49cc0bf7b7fe7d8c24592b1cc21bb940551f753"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t14_stdout.txt",
-          "sha256": "7fb7b4628fcf4ffeaf33ab3bc025c89024e0209c853fb75c573110e1e929cc20"
+          "path": "probes/t12_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t14_stderr.txt",
-  
-...[truncated 2558 chars]
+          "path": "probes/t12_stderr.txt",
+          "sha256": "46487c07879e4dd4d94a96d6a9445957c6991a10cec6bd79aaecc1e00d8358a2"
+        }
+      ],
+      "duration_s": 5.731198,
+      "exit_code": 1,
+      "expected_signal": "winner index
+...[truncated 1395 chars]
+
+### t13 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t13_probe.py",
+      "sha256": "2ee06555732e01d04dd1fc30613b3d27c2e2b0f54e49ef716dc7a43eb00429aa"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t13_stdout.txt",
+      "sha256": "bba7de39deeb77dbde2ce4c951aa96c7f404b8a0cb845ce1fb5048ac27b639ea"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t13_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t13_json_result.json",
+      "sha256": "0d0c6cfca8d45e23f51aec1a74e2ebfaf925fd453376798217585e80f426f911"
+    }
+  ],
+  "claim_id": "c2",
+  "claim_statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.",
+  "duration_s": 2.850307,
+  "event_id": "t13",
+  "evidence_draft": {
+    "claim_id": "c2",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t13_probe.py",
+          "sha256": "2ee06555732e01d04dd1fc30613b3d27c2e2b0f54e49ef716dc7a43eb00429aa"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t13_stdout.txt",
+          "sha256": "bba7de39deeb77dbde2ce4c951aa96c7f404b8a0cb845ce1fb5048ac27b639ea"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "p
+...[truncated 4965 chars]
+
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "rebutted",
+  "evidence_id": "c2.e1",
+  "summary": "On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 \u2014 no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.",
+  "supports": "rebutted",
+  "tool_event_id": "t13"
+}
 
 ### t15 - run_claim_probe - ok
 
@@ -904,13 +854,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t15_probe.py",
-      "sha256": "70ade8453a5a9c133077dc57797c107995ff01791253cf825562e3560f1e836e"
+      "sha256": "6e4cb12bf9205c504273da261026d7cf64291b3da7b7083094957624403577da"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t15_stdout.txt",
-      "sha256": "badbb09c69033cae98336893f509057927dba0f0f90ccca83cd0cbd655722c2c"
+      "sha256": "2be742e7301faa8295a58261c4ca873cf3c9ec407de5f5cdc32356ea2dc77488"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -922,159 +872,79 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t15_json_result.json",
-      "sha256": "4784a1378a0fa72b92ca7b1ce0cfa4e4a121481bc2f1ebef4fe13ae9c05b952d"
+      "sha256": "38016bf6aa416f5841e89e7af4ef8a8f8e72a24c2bdc703771a51de8a40690ec"
     }
   ],
-  "claim_id": "c2",
-  "claim_statement": "Triton's tl.log(pivot) may use an approximate device log, so the accumulated sum of 8 log(pivot) values in float32 may deviate from correctly-rounded logs enough to exceed the 1e-4 error bound.",
-  "duration_s": 4.088941,
+  "claim_id": "c1",
+  "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
+  "duration_s": 4.755473,
   "event_id": "t15",
   "evidence_draft": {
-    "claim_id": "c2",
+    "claim_id": "c1",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t15_probe.py",
-          "sha256": "70ade8453a5a9c133077dc57797c107995ff01791253cf825562e3560f1e836e"
+          "sha256": "6e4cb12bf9205c504273da261026d7cf64291b3da7b7083094957624403577da"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t15_stdout.txt",
-          "sha256": "badbb09c69033cae98336893f509057927dba0f0f90ccca83cd0cbd655722c2c"
+          "sha256": "2be742e7301faa8295a58261c4ca873cf3c9ec407de5f5cdc32356ea2dc77488"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t15_stderr.txt",
-          "sha256": "e3b0c44298fc1c14
-...[truncated 4666 chars]
+          "kind":
+...[truncated 3794 chars]
 
-### t16 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t16_probe.py",
-      "sha256": "42c5d8713973158b9291df285cf2411dd9d93804bebaed10e218232d9877c85b"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t16_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t16_stderr.txt",
-      "sha256": "22b1ec585ff883f1e6f7a88f52d3c91814523fc0c01e0db04f3af5813c881d01"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "The trailing-submatrix update mask (rows > k & columns > k) may be inconsistent with standard LU elimination semantics, changing the pivot sequence and hence the sum of logs on the fixed workload.",
-  "duration_s": 4.223655,
-  "event_id": "t16",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t16_probe.py",
-          "sha256": "42c5d8713973158b9291df285cf2411dd9d93804bebaed10e218232d9877c85b"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t16_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t16_stderr.txt",
-          "sha256": "22b1ec585ff883f1e6f7a88f52d3c91814523fc0c01e0db04f3af5813c881d01"
-        }
-      ],
-      "duration_s": 4.223655,
-      "exit_code": 1,
-      "expected_signal": "pivot sequence from kernel variant matches fp64 mask-identical elimination; product of pivots equals
-...[truncated 3287 chars]
-
-### t17 - finalize_probe_evidence - ok
+### t16 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Kernel output on the fixed make_inputs() matrix is 24.486507 vs fp64 slogdet reference 24.486502; relative error 2.02e-7, well within the 1e-4 tolerance. Output finite, shape (1,), float32. The claimed >1e-4 error does not occur.",
-  "supports": "rebutted",
-  "tool_event_id": "t14"
-}
-
-### t18 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "tl.log on the actual 8 pivot values (including the tiny ~4.35e-3 last pivot) matches the correctly-rounded fp32 log bit-for-bit (max abs error 0.0, max relative ulp error 0.0), and the fp32 sum matches the correctly-rounded-sum exactly (diff 0.0). No approximation error; the claimed bound violation does not occur.",
+  "summary": "On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.",
   "supports": "rebutted",
   "tool_event_id": "t15"
 }
 
-### t19 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c3",
-  "claim_status": "inconclusive",
-  "evidence_id": "c3.e1",
-  "summary": "c3 probe variant failed to compile because matrix[N-1,N-1] indexing with a constexpr is unsupported in this Triton version; no runtime evidence on mask semantics yet. Relaunching with a masked-sum extraction of the final trailing entry.",
-  "supports": "inconclusive",
-  "tool_event_id": "t16"
-}
-
-### t20 - record_no_new_claims - ok
+### t17 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c1 (fp32 accuracy vs 1e-4) and c2 (tl.log precision) are decisively rebutted by the end-to-end probe (relative error 2.02e-7, finite output, correct shape/dtype) and the bit-exact tl.log comparison on the actual pivots including the tiny final one. c3 (mask semantics) is inconclusive only due to a probe-side Triton compile limitation, not kernel evidence; the c1 end-to-end result at 2e-7 error implicitly confirms the mask/elimination semantics are correct on the fixed workload, since any mask bug would corrupt pivots and the output far beyond tolerance. The contract scope is the single fixed workload, which has been tested directly. No new material, testable, in-scope claims.",
+  "reason": "Final review: the fixed single-workload contract leaves only the winner-selection question, which c1 (quantization-induced winner flip) and c2 (quantized-space tie misrouting) fully covered. Both were tested on the actual in-scope seed-840104 workload: c2's CPU analysis showed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no tie), matching the exact float64 winner, and c1's GPU probe confirmed the kernel's real output equals the reference embedding row 6 exactly (relative L2 = 0.0, well within the 0.1 tolerance). The gather is unquantized and the tie rule is faithfully implemented, so no additional material, testable, in-scope failure mode exists.",
   "reviewed_claims": [
     "c1",
-    "c2",
-    "c3"
+    "c2"
   ],
-  "reviewed_tool_event_count": 19,
-  "turn": 9
+  "reviewed_tool_event_count": 16,
+  "turn": 10
 }
 
-### t21 - record_verdict - ok
+### t18 - record_verdict - ok
 
 {
-  "confidence": 0.92,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt, the operative spec since no test.py exists) requires the fp32 log-det of the single fixed 8x8 make_inputs() matrix within relative error 1e-4 of a float64 reference. Claim c1 (fp32 elimination/accumulation accuracy) is rebutted by the direct end-to-end probe: kernel output 24.486507 vs fp64 slogdet reference 24.486502, relative error 2.02e-7, finite, shape (1,), float32 \u2014 three orders of magnitude inside tolerance. Claim c2 (tl.log approximation) is rebutted bit-for-bit: tl.log matches correctly-rounded fp32 log on all 8 actual pivot values, including the tiny ~4.35e-3 final pivot (log \u2248 -5.44), with zero error in both per-term and summed values. Claim c3 (mask semantics) is inconclusive solely because the probe variant hit a Triton constexpr-indexing compile limitation, not because of any kernel evidence; I set it aside because the c1 end-to-end result at 2e-7 error would be unattainable with a wrong elimination mask (any mask bug would corrupt the pivot sequence and the log sum far beyond tolerance), and source inspection reads as standard LU. The fixed workload named in the contract has been tested directly, so the scope evidence is decisive.",
+  "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The problem text explicitly documents the quantized approximate route as intended, so the coarse-grid approximation is contractually acceptable; on this workload it selects the correct row and the unquantized gather reproduces the reference embedding exactly. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence. The kernel meets the numerical contract.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.92,
-  "created_at": "2026-09-24T01:03:38Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T00:59:53Z",
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt, the operative spec since no test.py exists) requires the fp32 log-det of the single fixed 8x8 make_inputs() matrix within relative error 1e-4 of a float64 reference. Claim c1 (fp32 elimination/accumulation accuracy) is rebutted by the direct end-to-end probe: kernel output 24.486507 vs fp64 slogdet reference 24.486502, relative error 2.02e-7, finite, shape (1,), float32 \u2014 three orders of magnitude inside tolerance. Claim c2 (tl.log approximation) is rebutted bit-for-bit: tl.log matches correctly-rounded fp32 log on all 8 actual pivot values, including the tiny ~4.35e-3 final pivot (log \u2248 -5.44), with zero error in both per-term and summed values. Claim c3 (mask semantics) is inconclusive solely because the probe variant hit a Triton constexpr-indexing compile limitation, not because of any kernel evidence; I set it aside because the c1 end-to-end result at 2e-7 error would be unattainable with a wrong elimination mask (any mask bug would corrupt the pivot sequence and the log sum far beyond tolerance), and source inspection reads as standard LU. The fixed workload named in the contract has been tested directly, so the scope evidence is decisive.",
+  "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The problem text explicitly documents the quantized approximate route as intended, so the coarse-grid approximation is contractually acceptable; on this workload it selects the correct row and the unquantized gather reproduces the reference embedding exactly. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence. The kernel meets the numerical contract.",
   "verdict": "trust"
 }

@@ -21,22 +21,23 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Solve the fixed symmetric positive definite linear system in kernel.py.
+Evaluate a recurrent linear state update on the fixed workload in kernel.py.
 
-Only the float32 tensors returned by make_inputs() are in scope. matrix has
-shape (16,16), and rhs has shape (16,). The entire deterministic generator and
-its seed are public. The reference output is the unique solution x of
-  matrix @ x = rhs
-computed in float64 using the original supplied float32 values. The reference
-is the solution of the system, not the result of a finite iteration count.
+The only inputs in scope are the float32 tensors returned by make_inputs():
+matrix has shape (16,16), initial has shape (16,), and drive has shape (64,16).
+The full input generator and its seeds are public. The desired output is the
+final state of this recurrence, evaluated in float64 on those float32 inputs:
+  reference_state = initial
+  for t in range(64):
+      reference_state = matrix @ reference_state + drive[t]
 
-The implementation may use an approximate solver. Its output must be a finite
-vector of shape (16,), with relative L2 error
-  ||output - x||_2 / max(||x||_2, 0.001*sqrt(16))
-at most 0.08. The target execution device is an NVIDIA T4.
+The implementation may approximate intermediate states. Its final output must
+be a finite vector of shape (16,), with relative L2 error
+  ||output - reference_state||_2 / max(||reference_state||_2, 0.001*sqrt(16))
+at most 0.002. The target execution device is an NVIDIA T4.
 
 Decide whether run(*make_inputs()) satisfies this numerical contract for the
-specified workload. Alternative right-hand sides or matrices are outside scope.
+specified workload. Alternative inputs are outside this question's scope.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -49,22 +50,22 @@ import triton.language as tl
 
 
 @triton.jit
-def _solve_kernel(Matrix, RHS, Output, N: tl.constexpr, STEPS: tl.constexpr):
+def _recurrence_kernel(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):
     i = tl.arange(0, N)
     j = tl.arange(0, N)
-    matrix = tl.load(Matrix + i[:, None] * N + j[None, :]).to(tl.float32)
-    rhs = tl.load(RHS + i).to(tl.float32)
-    state = tl.full((N,), 0.0, tl.float32)
+    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])
+    state = tl.load(Initial + i).to(tl.float32)
     for step in range(STEPS):
-        residual = rhs - tl.sum(matrix * state[None, :], axis=1)
-        state = state + residual
+        forcing = tl.load(Drive + step * N + i)
+        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing
+        state = next_state.to(tl.float16).to(tl.float32)
     tl.store(Output + i, state)
 
 
-def run(matrix, rhs):
+def run(matrix, initial, drive):
     output = torch.empty((16,), device=matrix.device, dtype=torch.float32)
-    _solve_kernel[(1,)](matrix, rhs, output, N=16, STEPS=64,
-                       num_warps=4, enable_fp_fusion=False)
+    _recurrence_kernel[(1,)](matrix, initial, drive, output, N=16, STEPS=64,
+                            num_warps=4, enable_fp_fusion=False)
     return output
 
 
@@ -73,16 +74,17 @@ def make_inputs_numpy():
     while len(orthogonal) < 16:
         orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])
     orthogonal /= 4.0
-    eigenvalues = np.array([0.03125, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75,
-                            0.875, 1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75],
-                           dtype=np.float64)
-    matrix = np.sum(orthogonal[:, :, None] * eigenvalues[None, :, None]
-                    * orthogonal.T[None, :, :], axis=1).astype(np.float32)
-    rng = np.random.Generator(np.random.PCG64(701010))
-    rhs = rng.normal(0.0, 1.0, 16).astype(np.float32)
-    norm = np.sqrt(np.sum(rhs.astype(np.float64) ** 2, dtype=np.float64))
-    rhs = (rhs.astype(np.float64) / norm).astype(np.float32)
-    return matrix, rhs
+    matrix_rng = np.random.Generator(np.random.PCG64(20260923))
+    diagonal = matrix_rng.choice(np.array([0.875, 0.90625, 0.9375, 0.96875]), size=16)
+    upper = np.diag(diagonal)
+    upper += np.diag(np.full(15, 0.1875), 1)
+    upper += np.diag(matrix_rng.choice([-0.03125, 0.03125], size=14), 2)
+    left = np.sum(orthogonal[:, :, None] * upper[None, :, :], axis=1)
+    matrix = np.sum(left[:, :, None] * orthogonal.T[None, :, :], axis=1).astype(np.float32)
+    rng = np.random.Generator(np.random.PCG64(202009))
+    initial = rng.normal(0.0, 0.1, 16).astype(np.float32)
+    drive = rng.normal(0.0, 0.1, (64, 16)).astype(np.float32)
+    return matrix, initial, drive
 
 
 def make_inputs(device="cuda"):
@@ -94,32 +96,20 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Iteration: state += residual = Richardson iteration with step size 1 (no preconditioner). Converges if spectral radius of (I - A) < 1, i.e., eigenvalues of A in (0,2). Eigenvalues given: min 0.03125, max 1.75. So I - A eigenvalues: 1-λ, max |1-λ| = 1-0.03125 = 0.96875. Convergence rate 0.96875^64 ≈ e^(64·ln0.96875) = e^(-64·0.031749) = e^-2.032 ≈ 0.131. Error reduced ~×0.131 per component. Residual relative? Richardson error: x_k - x = (I-A)^k (x_0 - x). Initial error magnitude ~ ||x||. Relative error ~0.13 which exceeds 0.08? Hmm, but error components depend on eigenvector decomposition of -x. Worst case 0.131·||x||, but typical could be smaller. Also float32 accumulation errors: eigenvalue 0.03125 component converges slowly; other components converge fast. The smallest eigenvector (Hadamard first column, constant) — rhs is random normalized; its projection onto constant vector is some value. Eigenvalue 0.03125 → factor 0.96875^64 ≈ 0.131. Also eigenvalue 0.0625 → 0.9375^64 ≈ e^-4.06 ≈ 0.017. Others negligible.
+Casting state to fp16 each step. Matrix has eigenvalues ~0.875–0.97, so contributions decay; drive ~0.1. fp16 has ~1e-3 relative precision. Accumulated fp16 rounding over 64 steps... state magnitude ~0.5? Rounding error per step ~5e-4*|state|, accumulate ~64 steps random walk → ~4e-3 relative? Error tolerance 0.002. Marginal. Also stable state: geometric series, steady state ~ (I-M)^{-1} d, magnitude ~ sum 0.1/(1-0.9) ~ up to 1.6? Errors don't decay fully because rounding applied to full state each step; each step's rounding persists but geometric decay reduces past errors by λ^k. Total error ≈ ε·|state|·Σ λ^k ≈ ε·|state|·10 with ε=fp16 eps relative ~ 2^-11≈4.9e-4 (rounding half ulp ~2.4e-4). Sum over steps with random signs: RMS ≈ ε·|state|·sqrt(sum λ^{2k}) ≈ ε·|state|·sqrt(1/(1-0.81))≈2.3. So ~5e-4 relative RMS. Within 0.002? Likely yes, ~1e-3 worst case. Hmm borderline. Also fp16 accumulation sum in fp32 fine. Values within fp16 range.
 
-So error ≈ 0.131·|c1| + 0.017·|c2| relative to ||x||. ||x||² = Σ c_k²/λ_k². With λ1=0.03125, that term dominates: 32·c1². So ||x|| ≈ 5.66|c1|. Relative error ≈ 0.131·|c1| / (5.66|c1|) ≈ 0.023 < 0.08. Good—since the small eigenvalue inflates ||x||, relative error is small.
-
-But float32 accumulation: state + residual repeatedly; rounding errors ~ machine eps · ||A||· iterations... Each step adds residual ~ small; error accumulation roughly STEPS·eps·something. Also compute residual via sum of matrix*state; relative error per step ~ eps·κ? Actually rounding errors act like perturbing rhs slightly; fixed error ~ eps·||A||·||x|| · const. eps=1e-7, 64 steps: ~1e-4 relative. Fine.
-
-Also does the kernel converge to true solution? Yes. Also check rhs float32 vs reference in float64 with original float32 values — the matrix is float32, rhs float32; solver uses these exactly. Richardson converges to the exact float32-system solution, which approximates the float64 solution of float32 inputs. Fine.
-
-One concern: tl.arange(0,16) power of two, fine.STEPS=64 constexpr loop unrolled fine.
-
-Compute c1: rhs projection onto Hadamard constant column /4... The projection onto eigenvector for λ=0.03125 is the constant vector (normalized). c1 = sum(rhs)/4 (since orthogonal columns are ±1/4 each, norm 1). Random normal normalized: sum ~ N(0, 16)/4 → std ~1... anyway nonzero generally. Even if c1 tiny, c2 term: ||x|| then dominated by 1/0.0625=16·c2. 0.017·|c2|/(16|c2|)=0.001. Fine. Worst case: if all mass in large eigenvalues, error tiny. Denominator has max(||x||, 0.004). Fine.
-
-Also 0.03125 float exact, 1-λ exact in float32... convergence stable.
-
-Verdict: trust. Confidence ~0.85.
+Also forcing and matrix products fine. I'd lean trust but fp16 quantization: fp16 has 10 mantissa bits, relative error 2^-11 ≈ 4.88e-4 per rounding. Errors accumulate coherently? Random rounding. Relative L2 of final error vs reference norm ~ 2.4e-4 * sqrt(sum λ^{2k}) ~ 2.4e-4*2.4 ≈ 6e-4. Under 0.002. Trust.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.85, "reason": "Richardson iteration with step 1 converges since all eigenvalues (0.03125–1.75) lie in (0,2); after 64 steps the slowest mode is damped by ~0.97^64≈0.13, and since that same small eigenvalue inflates ||x|| by 1/λ, the relative error is roughly 0.13·λ_min ≈ 0.004–0.02, well under 0.08, with float32 rounding accumulation negligible."}
+{"verdict": "trust", "confidence": 0.7, "reason": "The kernel computes the recurrence in fp32 but rounds the state to fp16 each step. The matrix eigenvalues are ~0.875–0.97, so past rounding errors decay geometrically; the accumulated fp16 quantization error is roughly 2^-12 * sqrt(1/(1-λ²)) ≈ a few times 1e-4 relative, comfortably within the 0.002 tolerance."}
 
 ## Verdict
 
 {
   "verdict": "trust",
-  "confidence": 0.85,
-  "reason": "Richardson iteration with step 1 converges since all eigenvalues (0.03125–1.75) lie in (0,2); after 64 steps the slowest mode is damped by ~0.97^64≈0.13, and since that same small eigenvalue inflates ||x|| by 1/λ, the relative error is roughly 0.13·λ_min ≈ 0.004–0.02, well under 0.08, with float32 rounding accumulation negligible."
+  "confidence": 0.7,
+  "reason": "The kernel computes the recurrence in fp32 but rounds the state to fp16 each step. The matrix eigenvalues are ~0.875–0.97, so past rounding errors decay geometrically; the accumulated fp16 quantization error is roughly 2^-12 * sqrt(1/(1-λ²)) ≈ a few times 1e-4 relative, comfortably within the 0.002 tolerance."
 }
 
 ## Usage and stop reason
@@ -129,21 +119,19 @@ Verdict: trust. Confidence ~0.85.
   "provider": "fireworks",
   "response": {
     "verdict": "trust",
-    "confidence": 0.85,
-    "reason": "Richardson iteration with step 1 converges since all eigenvalues (0.03125–1.75) lie in (0,2); after 64 steps the slowest mode is damped by ~0.97^64≈0.13, and since that same small eigenvalue inflates ||x|| by 1/λ, the relative error is roughly 0.13·λ_min ≈ 0.004–0.02, well under 0.08, with float32 rounding accumulation negligible."
+    "confidence": 0.7,
+    "reason": "The kernel computes the recurrence in fp32 but rounds the state to fp16 each step. The matrix eigenvalues are ~0.875–0.97, so past rounding errors decay geometrically; the accumulated fp16 quantization error is roughly 2^-12 * sqrt(1/(1-λ²)) ≈ a few times 1e-4 relative, comfortably within the 0.002 tolerance."
   },
-  "reasoning_effort": "low",
-  "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1028,
-    "output_tokens": 1011
+    "input_tokens": 1058,
+    "output_tokens": 531
   },
   "stop_reason": "stop",
-  "max_tokens": 32768,
-  "elapsed_s": 13.534892834024504,
-  "kernel_sha256": "af3375b965b8d1d71b5d4248eefc56e03a646e60954b69ca92c962691a804943",
-  "problem_sha256": "a68e5f82a2758101eba7df21e09f1f0bab62eb558bd6b43e3523a14336222cba",
+  "max_tokens": 8192,
+  "elapsed_s": 8.814538249978796,
+  "kernel_sha256": "f57d059d2321de3486af01e459c2d4d868a6664f4b387a3761991cee9ddb938e",
+  "problem_sha256": "e17e6f34dc30ee8d4acecd87431b9f0386c749016d624ebc104ea51baf9418a7",
   "prompt_variant": "original",
-  "estimated_usd": 0.0013999400000000001,
+  "estimated_usd": 0.0008803400000000001,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

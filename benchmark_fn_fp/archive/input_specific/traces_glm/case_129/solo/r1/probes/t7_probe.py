@@ -1,34 +1,30 @@
-import numpy as np, torch, itertools
-import importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/evidence_cases/case_e11/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-smoke, W, b, c = k.make_inputs_numpy()
-Wd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)
-print("W=", W); print("b=", b); print("l1=", np.abs(Wd).sum(1))
-
-def residual(x):  # x (n,12) float32
-    x64 = x.astype(np.float64)
-    return (np.maximum(x64 @ Wd.T - bd, 0) * cd).sum(1)
-
-# candidate adversarial inputs
-cands = []
-for j in range(6):  # aligned to each neuron
-    cands.append(np.sign(Wd[j])[None, :])
-rng = np.random.default_rng(0)
-cands.append(rng.uniform(-1,1,(4096,12)))
-cands.append(rng.choice([-1.,1.],(4096,12)))
-# greedy per-coordinate: coordinate maximize sum_j c_j relu(W[j]x-b[j]) is convex; try sign of each neuron and convex combos
-cands.append(np.sign(Wd.sum(0))[None,:])
-X = np.concatenate([np.clip(a,-1,1).astype(np.float32) for a in cands])
-r = residual(X)
-i = int(np.argmax(r))
-print("max residual", r.max(), "at x=", X[i])
-# also confirm on GPU kernel output error for best x
-best = np.tile(X[i],(1,1))
-xb, wb, bb, cb = [torch.from_numpy(v).to("cuda") for v in (best, W, b, c)]
-actual = k.run(xb, wb, bb, cb)
-x64 = torch.from_numpy(best).double().cuda()
-expected = 0.25*x64[:,0]+0.5*x64[:,1] + torch.relu(x64@torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()
-print("kernel output", actual.item(), "expected", expected.item(), "abs err", abs(actual.item()-expected.item()))
-import json
-print(json.dumps({"max_residual": float(r.max()), "kernel_abs_err_at_best": abs(actual.item()-expected.item())}))
+import json, itertools, numpy as np, torch, sys
+sys.path.insert(0, "/root/evidence_cases/case_e05")
+import kernel
+inputs = kernel.make_inputs()
+before = [t.clone() for t in inputs]
+y = kernel.run(*inputs)
+v = y.detach().cpu().numpy()
+x = inputs[1].detach().cpu().numpy()
+inputs_unmod = all(torch.equal(a,b) for a,b in zip(inputs,before))
+allowed = np.logical_or(v==0, v==2*x[None,:]).all()
+B = (v != 0).astype(np.int64)
+worst = 0.0; worst_case = None
+for quad in itertools.combinations(range(8),4):
+    codes = (B[:,quad[0]]*8 + B[:,quad[1]]*4 + B[:,quad[2]]*2 + B[:,quad[3]])
+    counts = np.bincount(codes, minlength=16)
+    err = float(np.max(np.abs(counts/1024 - 1/16)))
+    if err > worst:
+        worst = err; worst_case = quad
+    if err > 1/1024 + 1e-12:
+        pass
+print(json.dumps({
+  "metric":"4th-order joint pattern histogram error, all 70 quadruples x 16 patterns, metric = |count/1024 - 1/16|",
+  "max_4th_order_error": worst,
+  "worst_quadruple": worst_case,
+  "tolerance": 1/1024,
+  "shape_dtype_finite": bool(v.shape==(1024,8) and v.dtype==np.float32 and np.isfinite(v).all()),
+  "values_allowed": bool(allowed),
+  "inputs_unmodified": bool(inputs_unmod),
+  "passes_contract": bool(v.shape==(1024,8) and allowed and worst <= 1/1024 + 1e-12)
+}))

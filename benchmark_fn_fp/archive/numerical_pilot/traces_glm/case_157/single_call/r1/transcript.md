@@ -26,11 +26,11 @@ The workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,
 rounded to float32 before transfer). No additional inputs or shapes are in scope.
 Target: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers
 of two where required. The operation is:
-y = W @ x, using the original binary32 weights as real values.
+y = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.
 The reference is the mathematical operation evaluated in float64 on the SAME
 float32 input values. Define E = ||output-reference||_2 /
 max(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.
-The implementation satisfies the contract iff all outputs are finite and E <= 0.12.
+The implementation satisfies the contract iff all outputs are finite and E <= 0.001.
 Reduced precision and approximate arithmetic are explicitly permitted if this
 budget is met. Their presence alone is neither a defect nor proof of compliance.
 Judge trust for compliance, reject for a budget violation, or needs_more_evidence.
@@ -45,23 +45,26 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(X, W, O, K: tl.constexpr):
-    row = tl.program_id(0)
-    j = tl.arange(0, K)
-    x = tl.load(X + j)
-    w = tl.load(W + row * K + j)
-    scale = tl.max(tl.abs(w), 0) / 7.0
-    qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w / scale + 0.5)))
-    y = tl.sum(x * (qi * scale), 0)
-    tl.store(O + row, y)
+def _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):
+    n = tl.arange(0, N)
+    d = tl.arange(0, D)
+    q = tl.load(Q + d)
+    k = tl.load(K + n[:, None] * D + d[None, :])
+    v = tl.load(V + n[:, None] * D + d[None, :])
+    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)
+    p = tl.exp(scores - tl.max(scores, 0))
+    p = p / tl.sum(p, 0)
+    p = p.to(tl.float16).to(tl.float32)
+    y = tl.sum(p[:, None] * v, 0)
+    tl.store(O + d, y)
 
-def run(x, w):
-    m, k = w.shape
-    out = torch.empty(m, dtype=torch.float32, device=x.device)
-    _kernel[(m,)](x, w, out, k, enable_fp_fusion=False)
+def run(q, k, v):
+    n, d = k.shape
+    out = torch.empty(d, dtype=torch.float32, device=q.device)
+    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'quantization', 'seed': 1222, 'm': 32, 'k': 256, 'mix': 1.0, 'residual': 0.5}
+CONFIG = {'family': 'attention', 'seed': 813, 'n': 128, 'd': 32, 'scale': 1.1, 'center': 0.9}
 
 def make_inputs(device="cuda"):
     import numpy as np
@@ -108,46 +111,28 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-This quantizes each weight row to 7 levels symmetric. Random normal weights, per-row quantization error ~ scale/2 relative... error per row: each weight has quantization error up to scale/2 = max|w|/14. max|w| for k=256 samples of N(0,1) ~ 3. scale ≈ 3/7. Error per element ~ scale/sqrt(12)? Actually rounded to nearest, error uniform-ish ~ scale * (something). Row dot product error vs signal: signal is sum of k terms ~ sqrt(k). Quantization error terms: x components ~ 1/sqrt(k) direction... hmm.
+float16 rounding of p introduces error ~1e-3 per element relative; with softmax weights summing, error likely ~5e-4 relative in y. Relative budget 1e-3 of ||y||. fp16 has ~1e-3 relative error per weight (eps=9.8e-4). Actually fp16 relative precision up to 2^-11 ≈ 4.9e-4. Sum of weighted v: error ~ 4.9e-4 * weighted-average |v| / |y|. y is p@v, |y| ~ ||p@v||. Since v was offset to create cancellation ("Structured value offset controls cancellation"), y is small relative to |v| magnitude! v -= center*(p@v) makes p@v_new = p@v_old - center*(p@v_old)... wait p@v_new = p@v - center * p @ ((p@v)[None,:] broadcast over n) = p@v - center*(n*? ) hmm. p is (n,), (p@v) is (d,). Broadcast (p@v)[None,:] shape (1,d); v_new = v - center*(p@v) broadcast rows: each row subtracts the same vector. Then p@v_new = p@v - center*(p@v)*sum(p) = (1-center)*p@v. So y scaled by (1-center)=0.1, making it small while p to fp16 error gives error proportional to original magnitude... Actually error in p propagates to error in sum p*v ≈ ||delta p||*||v||. delta p relative 5e-4, so error ~5e-4*||v||-ish, while ||y|| = 0.1*||p@v_orig||. p@v_orig ~ typical v magnitude ~1. So relative error ~5e-3, exceeding 1e-3? But budget denominator uses max(||ref||, 0.001*sqrt(num elements)) — sqrt(32)*0.001=0.0057. ||y|| ≈ 0.1*||p@v||; p@v of random v with p concentrated... scores scaled by 1.1 then /sqrt(32)≈0.194, so scores range ~±1, softmax fairly uniform. p@v ~ (1/sqrt(n_eff))... ||v|| rows ~sqrt(32)*1.1; p@v with n=128 averaged: if p uniform, p@v ≈ mean of v rows, norm ~ sqrt(32)*1.1/sqrt(128) ≈ 0.55. So ||y||≈0.055. Budget floor 0.0057.
 
-But note: make_inputs adversarially adds residual direction aligned with quantization error: x += 0.5 * residual where residual is the sum over rows of quantization error per column. So per-column quantization errors summed over 32 rows, times 0.5 added to x. This amplifies error: the output error = sum over j of x_j * qerr_{row,j}, and x contains 0.5*residual = 0.5*sum_row qerr_row. Error per output includes term 0.5*(sum_row qerr)·qerr_row plus (direction/x0 part with error ~ random).
+Error from fp16: each p_i rounded with relative error ≤2^-11. Errors in p random; resulting y error = sum delta_p_i * v_i. delta_p_i ≤ 4.9e-4 * p_i, sum |delta_p| ≤ 4.9e-4 (sum p=1). But errors random → error ~ 4.9e-4 * ||weighted v|| ≈ 4.9e-4 * 0.55 (in fp32-ish norm). That's 2.7e-4 vs budget min(?) E = err/max(0.055, 0.0057) = 2.7e-4/0.055 ≈ 5e-3. Hmm, that exceeds 1e-3.
 
-Estimate: qerr per weight ~ uniform in [-scale/2, scale/2], scale≈3.3/7≈0.47, so std ≈ 0.47/sqrt(12)≈0.136. Per row (256 entries) sum qerr ~ 0.136*16=2.2. residual vector norm: norm of (k=256 vector of entries ~0.136 std) ≈ 2.2, normalized. Then residual vector entries ~ 2.2/16 ≈ 0.137... actually residual is sum over m=32 rows: per column sum of 32 errors std 0.136*sqrt(32)=0.77, norm over 256 ≈ 0.77*16=12.3, normalized so entries ~0.048. x = direction (norm 1, entries ~1/16) + 0.5*residual. Also x normalized? x = mix*direction + ... then x += 0.5*residual (not normalized after). x entries ~0.0625 + 0.024.
+But wait: after p normalized in fp32, rounding to fp16 then back to fp32: p values rounded, sum no longer exactly 1 but errors random sign. y = sum p_i v_i, error = sum e_i v_i where e_i ~ uniform ±4.9e-4 p_i. Worst-case |e| bound 4.9e-4 * sum p_i |v_i|... norm of error vector: each component d: sum_i e_i v_{i,d}. e_i random sign, magnitude ~ p_i * 2.4e-4 rms. RMS error per component ≈ 2.4e-4 * sqrt(sum p_i^2 * v^2) ≈ 2.4e-4 * ||p-weighted v|| ~ 2.4e-4*0.55 ≈ 1.3e-4 per comp; norm over 32 comps ≈ 1.3e-4*sqrt(32)=7.5e-4. E ≈ 7.5e-4/0.055 ≈ 0.014 > 0.001. Reject.
 
-Output error per row: sum_j x_j * qerr_row,j. With x ~ direction part: direction_j ~ 1/16 random sign, error ~ sqrt(256)*0.0625*0.136 = 16*0.0625*0.136 ≈ 0.136. With residual part: 0.5 * sum_j residual_j * qerr_row,j. residual_j ≈ (1/12.3)*sum_{32 rows} qerr_{r,j} ≈ 0.081*... so sum_j residual_j qerr_row,j ≈ (1/12.3)*sum_j (sum_r qerr_{r,j}) qerr_row,j ≈ (1/12.3)*256*0.136² = 0.081*4.74 ≈ 0.384. Times 0.5 = 0.19. Total error per output ~ sqrt(0.136²+0.19²)≈0.23 per row, norm over 32 rows ≈ 1.3.
+Also fp16 rounding loses small p values entirely? p values with uniform softmax over 128: each ~0.0078, fine in fp16.
 
-Reference norm: y_ref row = w·x; w entries N(0,1), x entries ~0.067, per row sum ~ sqrt(256)*1*0.067... direction component: direction is w^T sum? direction = normalized sum of w columns, so w·direction entries ~ correlated... roughly row entries of y ~ sqrt(k)*std ~ 16*0.067? Actually y_row = sum_j w_rj x_j with x_j ~ 0.067 random-ish relative to w row → std ≈ sqrt(256)*1*0.067 ≈ 1.07. Norm over 32 ≈ 6. E ≈ 1.3/6 ≈ 0.22 > 0.12. Hmm, borderline reject? My estimates are rough.
+Hmm, but fp16 relative error is 2^-11 max, average maybe 1.2e-4. My estimate E ~ 0.005-0.014, well above 0.001. Also the whole computation in fp32 vs fp64 reference adds tiny error; the dominant is fp16. Seems like a clear budget violation. The "structured cancellation" (center=0.9) is designed to expose exactly this. Reject.
 
-This is the designed adversarial test: the residual amplifies quantization error. 7-level symmetric quantization is quite coarse. Let me think more carefully.
-
-scale = max|w_row|/7. Quantization error e_rj = q*scale - w. Note floor(w/scale+0.5)*scale is round-to-nearest in units of scale, error in [-scale/2, scale/2], average magnitude scale/4 for roughly uniform... std ≈ 0.29 scale.
-
-Actually errors: w/scale uniform in [-7,7], rounding error uniform [-0.5,0.5], std = 1/sqrt(12) = 0.289 scale. With max|w| over 256 N(0,1) samples ≈ 3.0-3.2, scale ≈ 0.43-0.46. Error std ≈ 0.127.
-
-Signal: x direction component: direction = normalized column sums of w. w·direction: for row r, w_r · direction. direction is in span of... direction = sum over rows? No, direction = sum over rows of w_r (columns summed → vector of length k, sum over m rows). So direction = Σ_r w_r. Then w_r · direction = w_r·w_r + Σ_{r'≠r} w_r·w_r'. ||w_r||² ≈ 256. Cross terms ~ N(0,256) each, sum over 31 → std ≈ 89. So w_r·direction ≈ 256 ± 89, divided by ||direction|| ≈ sqrt(32*256)=90.5 → ~2.8 ± 1.0 per row. Plus x0 component: x0 normalized, w_r·x0 ~ N(0,1) (since x0 unit) — times mix=1, so x = direction only initially! mix=1.0 means x = 1.0*direction + 0*x0. Then x += 0.5*residual. So signal = w·direction ≈ 2.8 per row → norm ≈ 16. Hmm larger than my earlier estimate.
-
-Error: error_r = Σ_j e_rj x_j = Σ_j e_rj direction_j + 0.5 Σ_j e_rj residual_j. First term: e_r ⊥-ish direction (direction mostly common component, e random) → std ≈ ||e_r||*||direction||_component... ||e_r|| ≈ 0.127*16 = 2.03; Σ_j e_rj direction_j: direction entries ≈ (1/90.5)*Σ_r w_rj, entries std 32/90.5=0.354. Σ_j e_rj direction_j ≈ sqrt(256)*0.127*0.354 ≈ 0.72? But correlation: direction includes w_r, e_r is uncorrelated with w_r. So std ≈ 16*0.127*0.354 ≈ 0.72.
-
-Second term: residual_j = (1/||res||) Σ_r e_rj, ||res|| ≈ sqrt(m*k)*0.127 = sqrt(8192)*0.127 ≈ 11.5. Σ_j e_rj residual_j = (1/11.5) Σ_j e_rj Σ_{r'} e_{r'j} = (1/11.5)(||e_r||² + cross) ≈ (1/11.5)(4.1 + N(0, ~4.1*... )). Cross: Σ_j e_rj e_r'j ~ N(0, 256*0.127²=4.1), sum over 31 rows → std sqrt(31*4.1)=11.3. So ≈ (4.1 ± 11.3)/11.5 ≈ 0.36 ± 0.98. Times 0.5 → 0.18 ± 0.49.
-
-Total per-row error ≈ sqrt(0.72² + 0.49²) ≈ 0.87. Norm over 32 rows ≈ 4.9 (uncorrelated). Reference norm ≈ 16. E ≈ 0.3. That exceeds 0.12 → reject.
-
-Hmm, my estimate E~0.3 significantly above budget. But rough. Let me sanity check signal: w·direction per row ≈ 256/90.5 ≈ 2.83 (self term), plus noise ±1.0. Rows: are these correlated? The self-term differs per row slightly (||w_r||² varies), cross terms independent-ish. y_ref norm ≈ sqrt(32)*2.83 ≈ 16. E ≈ 4.9/16 ≈ 0.31. Even conservatively, likely > 0.12. The workload is designed adversarially so 7-level quantization fails. Also note the "residual" term in x deliberately points along aggregate quantization error, amplifying relative error by factor related to alignment.
-
-Also compute directly E roughly: relative error per row: error/signal ≈ 0.87/2.83 ≈ 31%. Clearly fails 12% budget.
-
-Verdict: reject. Confidence moderate, ~0.7. Actually maybe higher: with mix=1.0 the signal is dominated by direction, error dominated... let me double check the dominant error term: 0.72 vs signal 2.83 → 25% per row even without residual. Yes, quantization error relative to signal: ||e_r||·(component along x) / (w_r·direction). Actually Σ_j e_rj direction_j: e_r std 0.127, direction entry std 0.354, random relative → std sqrt(256)*0.127*0.354 = 0.72. But signal 2.83, so ratio 25%. Norm-wise E ≈ 0.25+ likely > 0.12. Reject with confidence 0.7.
+Also note scores computed with tl.exp of fp32 — fine. The p cast to fp16 is the deliberate flaw. Confidence moderately high, say 0.8.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.7, "reason": "The kernel quantizes each weight row to only ~15 symmetric levels (scale = max|w|/7), giving per-element rounding error std ≈ 0.29*scale ≈ 0.13, which yields a per-row dot-product error on the order of 25-30% of the row signal (≈2.8 per row for this workload, since x is aligned with the weight-sum direction). The make_inputs workload further amplifies this by adding 0.5*residual aligned with the aggregate quantization error. The resulting relative error E is well above the 0.12 budget."}
+{"verdict": "reject", "confidence": 0.8, "reason": "The softmax weights are quantized to float16 (eps ~4.9e-4 relative) before the weighted sum over V, while the input construction (center=0.9) deliberately shrinks the output norm to ~10% of p@v, so the fp16-induced error (~1e-4..1e-3 absolute against ||y||≈0.05) yields relative error E well above the 1e-3 budget."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.7,
-  "reason": "The kernel quantizes each weight row to only ~15 symmetric levels (scale = max|w|/7), giving per-element rounding error std ≈ 0.29*scale ≈ 0.13, which yields a per-row dot-product error on the order of 25-30% of the row signal (≈2.8 per row for this workload, since x is aligned with the weight-sum direction). The make_inputs workload further amplifies this by adding 0.5*residual aligned with the aggregate quantization error. The resulting relative error E is well above the 0.12 budget."
+  "confidence": 0.8,
+  "reason": "The softmax weights are quantized to float16 (eps ~4.9e-4 relative) before the weighted sum over V, while the input construction (center=0.9) deliberately shrinks the output norm to ~10% of p@v, so the fp16-induced error (~1e-4..1e-3 absolute against ||y||≈0.05) yields relative error E well above the 1e-3 budget."
 }
 
 ## Usage and stop reason
@@ -157,22 +142,22 @@ Verdict: reject. Confidence moderate, ~0.7. Actually maybe higher: with mix=1.0 
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.7,
-    "reason": "The kernel quantizes each weight row to only ~15 symmetric levels (scale = max|w|/7), giving per-element rounding error std ≈ 0.29*scale ≈ 0.13, which yields a per-row dot-product error on the order of 25-30% of the row signal (≈2.8 per row for this workload, since x is aligned with the weight-sum direction). The make_inputs workload further amplifies this by adding 0.5*residual aligned with the aggregate quantization error. The resulting relative error E is well above the 0.12 budget."
+    "confidence": 0.8,
+    "reason": "The softmax weights are quantized to float16 (eps ~4.9e-4 relative) before the weighted sum over V, while the input construction (center=0.9) deliberately shrinks the output norm to ~10% of p@v, so the fp16-induced error (~1e-4..1e-3 absolute against ||y||≈0.05) yields relative error E well above the 1e-3 budget."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1275,
-    "output_tokens": 2362
+    "input_tokens": 1337,
+    "output_tokens": 1278
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 39.711197125026956,
-  "kernel_sha256": "4504ec76f7095a0b06165b1a6e26786db761b7ee72ddfe46af2c467f005a8060",
-  "problem_sha256": "cc5c2213b999dd6f410e44e248e6dc57a6635d0f1022d10505713ac864623dca",
+  "elapsed_s": 22.17058725003153,
+  "kernel_sha256": "03c8eb5c6fad288aca30faabdb206b06086c0e6eae85e2849d562e0b42ae8f4b",
+  "problem_sha256": "3ae6f5fe22e3e1d29bfba2617d6c5406f3386f21c6399601ac3cd79f9a1ec616",
   "prompt_variant": "original",
-  "estimated_usd": 0.0121778,
+  "estimated_usd": 0.007495000000000001,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

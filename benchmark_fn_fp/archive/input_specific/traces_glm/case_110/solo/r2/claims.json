@@ -1,23 +1,23 @@
 [
   {
-    "created_at": "2026-09-24T01:06:24Z",
+    "created_at": "2026-09-24T00:16:11Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-24T01:06:38Z",
+        "created_at": "2026-09-24T00:16:26Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t7_probe.py",
-              "sha256": "96b158c120f63b15f294b5c35d1d072077b4912ee02a6d02d4d28788d1ad6384"
+              "sha256": "45da6d587815bc1c89f71007e062c1db243e07649f5915ef12c47b6e61349f8a"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t7_stdout.txt",
-              "sha256": "15406c661752b29e61144487cd46aa4b1848cb4368b4df626d82fb07e70e3fe7"
+              "sha256": "d3ecbb01530f357f69603497496f0a85d388fbcec1d7ee20f158519d404a33d6"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -29,63 +29,62 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t7_json_result.json",
-              "sha256": "6c0e1d9902571e730d0d05871cf028bd6c728679b1736b7dcc62a71237bdbf01"
+              "sha256": "9bbbd7f555b131dad891525375539cc6e751685983ec0650af20ef9fd5f7d278"
             }
           ],
-          "duration_s": 5.072508,
+          "duration_s": 7.103388,
+          "exceeds": true,
           "exit_code": 0,
           "expected_signal": null,
+          "finite": true,
           "json_parse_error": null,
           "json_result": {
+            "exceeds": true,
             "finite": true,
-            "kernel_idx": 7,
-            "kernel_idx_sim": 7,
-            "pass": false,
-            "quant_dist_sorted_head": [
-              0.875,
-              0.921875,
-              0.921875,
-              0.96875
-            ],
-            "ref_dist_min": 0.9967549356501691,
-            "ref_dist_sorted_head": [
-              0.9967549356501691,
-              0.997261676148518,
-              0.9979134740458183,
-              0.9979150024728574
-            ],
-            "ref_idx": 9,
-            "rel_l2": 1.3401839962824444
+            "norm_x": 18.216566495477316,
+            "relative_L2_error": 0.12440399903958174,
+            "tolerance": 0.08,
+            "worst_richardson_factors": [
+              0.13108403247847505,
+              0.01607539635095263,
+              0.00019431905663716255,
+              1.0090689833159348e-08
+            ]
           },
-          "kernel_idx": 7,
-          "pass": false,
-          "ref_idx": 9,
-          "rel_l2": 1.3401839962824444,
+          "norm_x": 18.216566495477316,
+          "relative_L2_error": 0.12440399903958174,
           "stderr": "",
-          "stdout": "{\"ref_idx\": 9, \"kernel_idx\": 7, \"kernel_idx_sim\": 7, \"rel_l2\": 1.3401839962824444, \"pass\": false, \"ref_dist_min\": 0.9967549356501691, \"ref_dist_sorted_head\": [0.9967549356501691, 0.997261676148518, 0.9979134740458183, 0.9979150024728574], \"quant_dist_sorted_head\": [0.875, 0.921875, 0.921875, 0.96875], \"finite\": true}\n",
+          "stdout": "{\"relative_L2_error\": 0.12440399903958174, \"tolerance\": 0.08, \"exceeds\": true, \"norm_x\": 18.216566495477316, \"finite\": true, \"worst_richardson_factors\": [0.13108403247847505, 0.01607539635095263, 0.00019431905663716255, 1.0090689833159348e-08]}\n",
           "timed_out": false,
-          "timeout_s": 60
+          "timeout_s": 60,
+          "tolerance": 0.08,
+          "worst_richardson_factors": [
+            0.13108403247847505,
+            0.01607539635095263,
+            0.00019431905663716255,
+            1.0090689833159348e-08
+          ]
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "On the fixed make_inputs() workload, the kernel gathered embeddings[7] while the float64 reference selects embeddings[9]; relative L2 error 1.3402 > 0.1 tolerance. Output is finite and shape (8,), but the contract bound is violated.",
+        "summary": "run(*make_inputs()) produced a finite (16,) output with relative L2 error 0.1244 vs the float64 exact solution, exceeding the contract's 0.08 tolerance; slowest Richardson factor (1-0.03125)^64 \u2248 0.131 explains the residual error.",
         "supports": "confirmed",
         "tool_event_id": "t7"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "The kernel routes on quantized (1/8-grid) float32 distances while the reference uses exact float64 distances; if the winner index differs, the gathered embedding could differ far more than the 0.1 relative tolerance.",
+    "rationale": "Richardson iteration x \u2190 x + (b \u2212 Ax) converges as (1\u2212\u03bb)^STEPS per eigendirection; the generator's smallest eigenvalue is 0.03125 so the slowest factor is 0.96875^64 \u2248 0.13, which may leave residual error above the 0.08 relative tolerance depending on the rhs's components along slow modes.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: reference selects smallest float64 distance index, tie-break smallest index; kernel satisfies contract iff ||output-reference||_2 / max(||ref||,1e-12) <= 0.1 on the fixed make_inputs() workload."
+        "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08 for the specified workload from make_inputs()."
       }
     ],
-    "scope_rationale": "The contract requires the output embedding's relative L2 error vs the float64-reference winner's embedding to be <= 0.1 on the fixed make_inputs() workload.",
-    "statement": "On the fixed make_inputs() workload, the kernel's quantized routing picks a winner whose embedding differs from the float64 reference embedding by more than the 0.1 relative L2 tolerance.",
+    "scope_rationale": "The contract requires run(*make_inputs()) to output a finite (16,) vector with relative L2 error at most 0.08 against the float64 exact solution; a violation of that tolerance for the specified inputs is the defect this claim tests.",
+    "statement": "run(*make_inputs()) produces an output whose relative L2 error against the float64 exact solution exceeds 0.08, violating the contract tolerance.",
     "status": "confirmed",
-    "updated_at": "2026-09-24T01:06:38Z"
+    "updated_at": "2026-09-24T00:16:26Z"
   }
 ]

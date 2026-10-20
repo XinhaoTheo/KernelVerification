@@ -1,84 +1,76 @@
 [
   {
-    "created_at": "2026-09-30T09:01:58Z",
+    "created_at": "2026-09-30T08:57:41Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T09:02:18Z",
+        "created_at": "2026-09-30T08:58:01Z",
         "data": {
-          "E": 0.0019032712117112664,
+          "E": 0.0020607774650465947,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
-              "path": "probes/t6_probe.py",
-              "sha256": "9ac02444140341c3d9dc4049281816059cb0efd66167c512a18db85bb376d44a"
+              "path": "probes/t7_probe.py",
+              "sha256": "7bd1175d6f5b5ba624bf289987db61c3bb74d558266ede8151ec203a4a1f463e"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
-              "path": "probes/t6_stdout.txt",
-              "sha256": "32705fe546397f7ba414ab5838928112992e39951c762dcacf02c7e53646a2e6"
+              "path": "probes/t7_stdout.txt",
+              "sha256": "c71e65513fcdfdf445eb2c04d2328d7a05630e0c566138874883cf5e82adfc4b"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
-              "path": "probes/t6_stderr.txt",
+              "path": "probes/t7_stderr.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
-              "path": "probes/t6_json_result.json",
-              "sha256": "a9ece4017c1633b87c857fd307dd4f75f48c92d40e96a7eba13dde82f229805a"
+              "path": "probes/t7_json_result.json",
+              "sha256": "79411ff4544666055f4f974f9c2c044f57d0d9ca0d8f09bc01a01ee0771d84e8"
             }
           ],
-          "duration_s": 4.793438,
+          "duration_s": 5.265987,
           "exit_code": 0,
-          "expected_signal": "E <= 0.001 if compliant else E > 0.001",
+          "expected_signal": "E > 0.001 confirms the claim; E <= 0.001 rebuts it",
           "finite": true,
           "json_parse_error": null,
           "json_result": {
-            "E": 0.0019032712117112664,
+            "E": 0.0020607774650465947,
             "finite": true,
-            "num": 0.00012276643834890214,
-            "out_norm": 0.06454333095632812,
-            "ref_norm": 0.0645028609656322,
-            "shape": [
-              32
-            ]
+            "out_norm": 0.07416352720609487,
+            "ref_norm": 0.07416962226861899
           },
-          "num": 0.00012276643834890214,
-          "out_norm": 0.06454333095632812,
-          "ref_norm": 0.0645028609656322,
-          "shape": [
-            32
-          ],
+          "out_norm": 0.07416352720609487,
+          "ref_norm": 0.07416962226861899,
           "stderr": "",
-          "stdout": "{\"E\": 0.0019032712117112664, \"finite\": true, \"num\": 0.00012276643834890214, \"ref_norm\": 0.0645028609656322, \"out_norm\": 0.06454333095632812, \"shape\": [32]}\n",
+          "stdout": "{\"E\": 0.0020607774650465947, \"finite\": true, \"ref_norm\": 0.07416962226861899, \"out_norm\": 0.07416352720609487}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "On the exact make_inputs() workload (seed 813, n=128, d=32), kernel output is finite but E = 0.00190 > 0.001 budget vs the float64 reference on the same float32 inputs (num=1.228e-4, ref_norm=6.450e-2, 32 outputs). The fp16 rounding of softmax probabilities (line 15) causes the violation.",
+        "summary": "On the exact make_inputs() workload (seed 812, n=64, d=32, scale 0.7, center 0.9), the kernel output vs the float64 reference gives E = 0.00206, which exceeds the contract budget of 0.001 by ~2x. Output is finite, so the violation is purely the E-budget breach, consistent with the fp16 round-trip of softmax probabilities amplifying under the cancellation-inducing v offset.",
         "supports": "confirmed",
-        "tool_event_id": "t6"
+        "tool_event_id": "t7"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "The kernel deliberately rounds softmax probabilities to fp16 before the value reduction. With N=128, per-probability fp16 error ~5e-4 relative, and the value tensor is constructed (v -= 0.9*(p@v)) to make the output a near-cancellation residual, so the reduced-precision path may exceed the E<=0.001 budget.",
+    "rationale": "The kernel casts probabilities to fp16 and back (line 15), introducing up to ~1e-3 relative error per weight; the workload's v is offset by center=0.9*(p@v) to create cancellation in the output, which can amplify this rounding beyond the E<=0.001 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Implementation satisfies contract iff all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(#outputs)) <= 0.001, on exactly the make_inputs() workload."
+        "summary": "Implementation satisfies the contract iff all outputs are finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(nelem)) <= 0.001 on the exact make_inputs() workload, with the reference being the float64 mathematical operation on the same float32 inputs."
       }
     ],
-    "scope_rationale": "Contract requires E <= 0.001 on the single make_inputs() workload; any larger relative error on that exact workload is a budget violation.",
-    "statement": "On the exact make_inputs() workload (seed 813, n=128, d=32), the kernel output violates the contract's numerical budget E > 0.001 relative to the float64 reference of the same operation on the same float32 inputs, or produces non-finite output.",
+    "scope_rationale": "The contract requires E <= 0.001 on the exact make_inputs() workload with a float64 reference; if the fp16 round-trip of probabilities pushes E above 0.001, that is a direct violation of this stated budget.",
+    "statement": "The fp16 round-trip of softmax probabilities (line 15) causes the output error E to exceed the 0.001 budget on the specified workload.",
     "status": "confirmed",
-    "updated_at": "2026-09-30T09:02:18Z"
+    "updated_at": "2026-09-30T08:58:01Z"
   }
 ]

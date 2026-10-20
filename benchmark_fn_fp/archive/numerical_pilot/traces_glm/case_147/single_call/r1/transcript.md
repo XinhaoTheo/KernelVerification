@@ -26,11 +26,11 @@ The workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,
 rounded to float32 before transfer). No additional inputs or shapes are in scope.
 Target: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers
 of two where required. The operation is:
-h[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.
+y = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.
 The reference is the mathematical operation evaluated in float64 on the SAME
 float32 input values. Define E = ||output-reference||_2 /
 max(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.
-The implementation satisfies the contract iff all outputs are finite and E <= 0.003.
+The implementation satisfies the contract iff all outputs are finite and E <= 0.001.
 Reduced precision and approximate arithmetic are explicitly permitted if this
 budget is met. Their presence alone is neither a defect nor proof of compliance.
 Judge trust for compliance, reject for a budget violation, or needs_more_evidence.
@@ -45,23 +45,26 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):
+def _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):
+    n = tl.arange(0, N)
     d = tl.arange(0, D)
-    h = tl.full((D,), 0.0, tl.float32)
-    for t in range(T):
-        a = tl.load(A + t * D + d)
-        b = tl.load(B + t * D + d)
-        h = a * h + b
-        h = h.to(tl.float16).to(tl.float32)
-        tl.store(O + t * D + d, h)
+    q = tl.load(Q + d)
+    k = tl.load(K + n[:, None] * D + d[None, :])
+    v = tl.load(V + n[:, None] * D + d[None, :])
+    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)
+    p = tl.exp(scores - tl.max(scores, 0))
+    p = p / tl.sum(p, 0)
+    p = p.to(tl.float16).to(tl.float32)
+    y = tl.sum(p[:, None] * v, 0)
+    tl.store(O + d, y)
 
-def run(a, b):
-    t, d = a.shape
-    out = torch.empty_like(b)
-    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)
+def run(q, k, v):
+    n, d = k.shape
+    out = torch.empty(d, dtype=torch.float32, device=q.device)
+    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'recurrence', 'seed': 454, 't': 896, 'd': 32, 'decay': 0.99, 'noise': 0.0001, 'bias': 0.01}
+CONFIG = {'family': 'attention', 'seed': 815, 'n': 128, 'd': 32, 'scale': 1.9000000000000001, 'center': 0.5}
 
 def make_inputs(device="cuda"):
     import numpy as np
@@ -108,68 +111,38 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Recurrence with a=0.99, b~0.01+small noise, T=896, D=32. h converges to ~0.01/0.01=1 roughly. Kernel rounds h to fp16 each step. fp16 has ~1e-3 relative error... after rounding to fp16 each step, error accumulates but recurrence is stable (contraction factor 0.99). Steady-state error ~ eps/(1-0.99) relative — fp16 unit roundoff ~5e-4, error amplification ~1/(1-0.99)=100 → ~5e-2? Hmm, that's relative error analysis: h_t = 0.99 h_{t-1}+b. Rounding error at each step: e_t = 0.99 e_{t-1} + δ, with |δ| ≈ 5e-4·|h| ≈ 5e-4. Steady state e ≈ 5e-4·(1+0.99+...)≈ 5e-4/0.01 = 5e-2 absolute. Reference h≈1, so relative error ~5%, far over 0.003 budget.
+fp16 rounding of p: relative error ~5e-4 per element; softmax weights sum ~1. p cast to fp16 then back—sum of p after quantization may deviate from 1 by up to ~1e-3-ish, causing output error. N=128 elements, each fp16 quantization error up to ~5e-4 relative. But p values small (sum 1 over 128), fp16 has ~1e-3 relative precision (2^-11 ≈ 4.9e-4). Sum of errors random ~sqrt(128)*small. Output error relative ~1e-3 possibly. Budget E ≤ 0.001. Hmm, borderline.
 
-Wait, but does error really accumulate like that? Rounding to fp16 with |h|~1: ulp of 1 in fp16 is 0.000977 (~2^-10). Round-off error per step up to ~5e-4. Summed geometrically: 5e-4·100 = 0.05. That exceeds 0.003 significantly.
+Actually fp16 relative error 2^-11 ≈ 4.88e-4. Each p_i quantized with relative error ≤ 4.88e-4. Then y = sum p_i v_i; errors partially cancel (positive p errors weighted by random v). Expected relative error in output ~ 4.88e-4 * sqrt(sum p_i^2 v_i^2)/||y||. With centering construction, y = (1-center)*p@v roughly... v was modified so p@v is reduced by factor 0.5. Output norm reduced, error unchanged → relative error doubles ~1e-3? Hmm.
 
-Actually check magnitudes: h steady state = b/(1-a) = 0.01/0.01 = 1. h ~1. Yes fp16 eps for 1 is 2^-10=0.000977, half-ulp ~0.000488. Accumulated ~0.05 absolute vs reference norm ~ sqrt(896*32)*1 ≈ 169. Relative error E = 0.05*sqrt(896*32)/169 ≈ 0.05. Way over 0.003.
+Wait: v_new = v - 0.5*(p@v). Reference is computed with the same v_new and same p in float64 math, so the reference y is 0.5*(p@v_orig). Norm of reference ~0.5*||p@v_orig||. The fp16 error doesn't scale; relative error roughly doubles to ~1e-3 vs 5e-4. This is a deliberately adversarial test — the centering amplifies relative error. Likely the kernel fails budget. Hmm, but errors also partially cancel in the dot product.
 
-But wait—rounding errors are somewhat random, and errors also get multiplied only by 0.99. Still expected magnitude ~ sqrt(100)*5e-4/sqrt(N)... actually errors across d and t: relative error per element is ~e/h, with e~std accumulated. Random walk: std ~ 5e-4·sqrt(1/(1-0.99²))≈5e-4·7 ≈ 3.5e-3 relative. Hmm, that's borderline at 0.003! Let's compute more carefully.
+Estimate: error in y = sum δ_i v_i where δ_i ≤ 4.88e-4 * p_i. std of error ≈ 4.88e-4 * sqrt(3) * sqrt(sum p_i^2 * v_i^2) (uniform quantization error). Reference y = 0.5 * p@v_orig. If v random, sum p_i^2 v_i^2 vs (sum p_i v_i)^2: since p concentrated (scale 1.9, d=32, scores ~ N(0, 1.9^2)? scores = k·q/sqrt(d), k scale 1.9, q unit → each dot ~ sqrt(32)*1.9*1/sqrt(32)... variance of k·q per element 1.9^2, sum over 32: var = 32*1.9^2, /sqrt(32) → std ~ 1.9*sqrt(32)/sqrt(32)... wait scores std = 1.9*sqrt(32)/sqrt(32)? k·q std = 1.9*sqrt(32), divided by sqrt(32) → std 1.9. So softmax over 128 with std 1.9 scores: fairly peaked, effective ~ maybe 20 tokens.
 
-Error recurrence: e_t = 0.99 e_{t-1} + δ_t, δ_t uniform in ±u where u ≈ 2^-11 (half ulp for fp16 near 1 is 2^-11? ulp of numbers in [1,2) is 2^-10, half-ulp 2^-11 ≈ 4.88e-4). But |h| < 2 for h up to... h oscillates around 1 due to noise. Actually h is in [1,2) so ulp 2^-10. But some h might be in [0.5,1) with ulp 2^-11.
+Ratio sqrt(E[sum p^2 v^2]) / ||p@v||: if p spread over ~m tokens with roughly equal weights, numerator ~ sqrt(1/m)*||v||_rms*sqrt(d), denominator... for random v, p@v norm per output dim ~ sqrt(sum p^2)*1. So ratio ~ 1/1 = ... numerator per dim sqrt(sum p_i^2 E[v^2]) = sqrt(1/m), denominator per dim std sqrt(sum p_i^2) = sqrt(1/m). So ratio ~1! Random dot product doesn't grow relative error. So relative error ~ 4.88e-4/sqrt(3)*... ~ 3e-4, well within budget even after centering doubles it (~6e-4)... borderline but likely OK? Hmm 0.5 centering: relative error scales by 2 → ~6e-4 < 1e-3.
 
-Wait also there's the initial condition: h[0] = a[0]*0+b[0] — contract says h[0] = a[0]*0 + b[0], kernel does h = a*h+b starting h=0, fine.
+Hmm hard. Also denominator floor: ||y||_2 vs 0.001*sqrt(32)=0.0057. y norm: p@v per dim std sqrt(sum p^2). With peaked softmax sum p^2 maybe 0.1 → per-dim std 0.3, over 32 dims norm ~1.7, times 0.5 → 0.85. Fine.
 
-Variance of δ: uniform ±2^-11, var = (2^-11)²/3 ≈ 7.9e-8. Steady-state var of e: var·Σ0.99^(2k) = 7.9e-8/0.0199 ≈ 4e-6, std ≈ 2e-3. Relative to h≈1: ~2e-3 error per element RMS. E ≈ RMS error / RMS reference ≈ 2e-3 (since reference norm ~1 per element). Budget 0.003. Marginal!
+But wait — also the reference v modification used float64 exact p; the kernel computes p in fp32, differences tiny. Main issue fp16. Expected error: per-element quantization error uniform in ±2^-11 relative. Error in y_d = sum δ_i v_id. std ≈ (4.88e-4/sqrt(3)) * sqrt(sum p_i^2 v_id^2) ≈ 2.8e-4 * sqrt(sum p^2)*~1 per dim. Norm error over 32 dims: 2.8e-4*sqrt(sum p^2)*sqrt(32). Relative to ||y|| = 0.5*sqrt(sum p^2)*sqrt(32) (approx, since random). → 5.6e-4 relative. Within 1e-3 budget. But worst-case (not std) could exceed. Random sign cancellation likely keeps it under.
 
-But there's also the load/store: input a, b are float32; computation a*h+b in fp32 then round to fp16 — fine. Also mean error may not be zero? Rounding is round-to-nearest, roughly unbiased.
+This looks like a benchmark where the fp16 cast is a deliberate "reduced precision permitted if budget met". Given estimate 5.6e-4 < 1e-3, likely passes. But it's borderline; tail risk. Given the design (center=0.5 exactly halves), the designers likely tuned so this either passes or fails marginally. Hmm.
 
-Hmm, but also h is stored from the fp16-rounded value, and the next step's multiply a*h in fp32 — exact enough.
+Also fp16 subnormals: p values can be tiny (exp of -large), fine.
 
-Also there's a subtlety: does h stay near 1? b = noise*0.0001 + 0.01, a=0.99. h converges to ~1, from initial b[0]=0.01. Transient: h rises from 0.01 to 1 over ~few hundred steps (0.99^t). Reference norm: mean square of h ≈ close to 1, say ~0.9. sqrt over all elements.
+Another consideration: p quantized to fp16 individually, but sum of quantized p ≠ 1, that's included in the δ analysis. Also y computed in fp32, fine.
 
-Also note h < 1 mostly (rising toward 1 from below)? h_t = 0.99 h_{t-1} + 0.01(+noise). Steady state 1+noise stuff. h in [0.5,1): ulp 2^-11, half-ulp 2^-12 ≈ 2.44e-4. Then error std halves → ~1e-3. So actual E maybe ~1e-3-2e-3, under budget 0.003. Marginal.
-
-Hmm. Also errors correlated across t for the same d (random walk), so E over flattened: E = sqrt(mean over d of mean_t e²)/sqrt(mean h²). Random walk std per (d) sequence ~ 2e-3 as computed.
-
-But bias: round-to-nearest of fp16 conversion in Triton — .to(tl.float16) truncation vs round-nearest? Triton's .to does round-to-nearest-even typically (fp32→fp16 conversion instruction). If truncation, bias is negative systematically! Truncation toward zero of h positive → systematic downward bias δ mean ≈ -u/2 = -2.4e-4 per step, accumulating linearly for ~ first steps then steady state: e = mean·Σ0.99^k → -2.4e-4/0.01 = -0.024. That would be catastrophic. But Triton fp32→fp16 conversion uses cvt.rn (round to nearest). So unbiased.
-
-Hmm, but the intentional fp16 rounding — why would the author add it? These tasks typically insert a precision degradation that may or may not break budget. Need to judge. Let me estimate more carefully.
-
-Random walk: e_t = 0.99 e_{t-1} + δ_t, δ_t iid uniform(-2^-12, 2^-12) with h in [0.5,1) (so half-ulp = 2^-12? ulp for [0.5,1) is 2^-11, half-ulp 2^-12 ≈ 2.44e-4). var δ = (2.44e-4)²/3 = 2e-8. Steady var e = 2e-8/(1-0.9801)=1e-6, std e ≈ 1e-3. Mean h² ≈ ? reference RMS maybe 0.8. E ≈ 1e-3/0.8 ≈ 1.3e-3 < 0.003. Pass.
-
-But wait — some h might be exactly representable? Also noise makes h cross 1 sometimes (b noise 0.0001 scale, negligible). h stays in [0.5,1) mostly since it starts at 0.01 and converges to ~1 from below; never exceeds ~1.0005. Actually at h near 1 it could be in [1,2) with larger ulp → std 2e-3. Mixed.
-
-Also transient: early steps h tiny (0.01→...), ulp relative, errors tiny. Fine.
-
-So E estimate ~1.5e-3, under 0.003. Hmm but risky. Also there's a bias concern: is fp16 round-to-nearest of values like 0.99*h+b unbiased? Yes roughly.
-
-However, wait: also errors don't fully random-walk because rounding h to fp16 and then next step reference uses exact h — the error propagates as 0.99. Yes as modeled.
-
-Another consideration: the recurrence also done in fp32 within step: a*h fp32 exact-ish, + b fp32 rounding error 1e-7 negligible.
-
-So E ≈ 1–2e-3, passes. Confidence? Reasonably moderate. I'll say trust with ~0.6 confidence... Let me double-check std calc. Geometric sum Σ_{k=0}^∞ 0.99^{2k} = 1/(1-0.9801) = 50.25. var e = 50.25·var δ. If half-ulp u=2^-12: var δ = u²/3 = 1.98e-8 → var e = 1e-6 → std 1e-3. If h in [1,2), u = 2^-11: var δ=7.9e-8, var e = 4e-6, std 2e-3.
-
-Reference RMS: h rises from 0.01 with time constant 100; mean over t of h_t² ≈ 1 - 2·(1-0.99^t)... ∫: mean h ≈ 1 - (something ~0.9·0.01?) Let's compute: h_t = 1 - 0.99^t (ignoring noise, h0=0.01 → h_t = 1 - 0.99^t·(1-0.01) ≈ 1-0.99^{t+1}). Mean h² over t=0..895: ≈ 1 - 2·mean(0.99^t) + mean(0.99^{2t}). mean 0.99^t ≈ (1-0.99^896)/(896·0.01) ≈ 1/8.96 = 0.1116. mean 0.99^{2t} ≈ 1/(896·0.02)=0.0558. mean h² ≈ 1 - 0.223 + 0.056 = 0.833. RMS ref ≈ 0.913.
-
-Error: also during transient when h small, δ relative ulp small, and error contributes less. Effective var e around 1e-6–4e-6 depending on ulp region. E = std_e/RMS_ref. If h < 1 always (converges to 1-0.99^t <1, plus tiny noise): actually noise std 0.0001, negligible; h<1 strictly, in [0.5,1) once t>~70. So u = 2^-12, std e ≈ 1e-3, E ≈ 1.1e-3. Plus during [0.25,0.5) etc. smaller. So E ≈ 1e-3 < 0.003. Pass.
-
-Hmm but also: does rounding error include representation error of h relative to exact? Yes δ is that. Fine.
-
-One more check: enable_fp_fusion=False — fine. Kernel handles h[0] correctly. Output dtype float32 empty_like(b). Grid (1,) with D=32, T=896 — fine.
-
-Verdict: trust, confidence ~0.6-0.7. Actually, wait — also potential subtlety: rounding to fp16 could be round-to-nearest with ties; unbiased enough. I'll go trust, 0.65.
+My estimate says passes. I'll say trust with moderate confidence... but honestly needs_more_evidence could be argued. The estimate 5.6e-4 with ~random cancellation; probability of exceeding 1e-3 is low (needs ~2x bad luck). I'll go trust, confidence 0.55.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.65, "reason": "The kernel correctly implements the recurrence (h starts at 0, so h[0] = b[0]), and the per-step fp16 rounding introduces errors bounded by the fp16 half-ulp of h (~2^-12 in [0.5,1)). Since the recurrence is a contraction (a=0.99), accumulated error variance is var(δ)/(1-0.99²), giving RMS error ≈ 1e-3 versus a reference RMS of ≈0.9, so E ≈ 1e-3, comfortably within the 0.003 budget."}
+{"verdict": "trust", "confidence": 0.55, "reason": "The fp16 rounding of softmax weights introduces per-weight relative error ~4.9e-4, which after random cancellation across the value dot product yields an estimated relative output error ~5e-4 (the 0.5 centering doubles it but it stays under the 1e-3 budget), and all intermediate math (fp32 exp, max-subtraction) is numerically sound. The margin is somewhat tight, but the expected error remains within budget."}
 
 ## Verdict
 
 {
   "verdict": "trust",
-  "confidence": 0.65,
-  "reason": "The kernel correctly implements the recurrence (h starts at 0, so h[0] = b[0]), and the per-step fp16 rounding introduces errors bounded by the fp16 half-ulp of h (~2^-12 in [0.5,1)). Since the recurrence is a contraction (a=0.99), accumulated error variance is var(δ)/(1-0.99²), giving RMS error ≈ 1e-3 versus a reference RMS of ≈0.9, so E ≈ 1e-3, comfortably within the 0.003 budget."
+  "confidence": 0.55,
+  "reason": "The fp16 rounding of softmax weights introduces per-weight relative error ~4.9e-4, which after random cancellation across the value dot product yields an estimated relative output error ~5e-4 (the 0.5 centering doubles it but it stays under the 1e-3 budget), and all intermediate math (fp32 exp, max-subtraction) is numerically sound. The margin is somewhat tight, but the expected error remains within budget."
 }
 
 ## Usage and stop reason
@@ -179,22 +152,22 @@ Verdict: trust, confidence ~0.6-0.7. Actually, wait — also potential subtlety:
   "provider": "fireworks",
   "response": {
     "verdict": "trust",
-    "confidence": 0.65,
-    "reason": "The kernel correctly implements the recurrence (h starts at 0, so h[0] = b[0]), and the per-step fp16 rounding introduces errors bounded by the fp16 half-ulp of h (~2^-12 in [0.5,1)). Since the recurrence is a contraction (a=0.99), accumulated error variance is var(δ)/(1-0.99²), giving RMS error ≈ 1e-3 versus a reference RMS of ≈0.9, so E ≈ 1e-3, comfortably within the 0.003 budget."
+    "confidence": 0.55,
+    "reason": "The fp16 rounding of softmax weights introduces per-weight relative error ~4.9e-4, which after random cancellation across the value dot product yields an estimated relative output error ~5e-4 (the 0.5 centering doubles it but it stays under the 1e-3 budget), and all intermediate math (fp32 exp, max-subtraction) is numerically sound. The margin is somewhat tight, but the expected error remains within budget."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1293,
-    "output_tokens": 2742
+    "input_tokens": 1342,
+    "output_tokens": 1479
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 47.30591983301565,
-  "kernel_sha256": "3bcdd72924a654ae2a01b0d695fe587bd39bcef6ce6a468da12f18654372192c",
-  "problem_sha256": "22ce93754852e56cfecc79c77ac4de457f77a2f12fe87278b91b48e3475e10eb",
+  "elapsed_s": 28.611490749986842,
+  "kernel_sha256": "d88aad3f14404dfd7e9547fe132495e080255d359e37159eb9c78ce12e4dc47f",
+  "problem_sha256": "3ae6f5fe22e3e1d29bfba2617d6c5406f3386f21c6399601ac3cd79f9a1ec616",
   "prompt_variant": "original",
-  "estimated_usd": 0.013875,
+  "estimated_usd": 0.0083864,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

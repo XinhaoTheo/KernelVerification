@@ -1,165 +1,122 @@
 [
   {
-    "created_at": "2026-09-30T09:02:13Z",
+    "created_at": "2026-09-30T08:58:04Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T09:03:15Z",
+        "created_at": "2026-09-30T08:59:10Z",
         "data": {
-          "E": 0.17019111199798995,
-          "all_finite": true,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t12_probe.py",
-              "sha256": "b76ead13a04fe5b34ffe6f89ea650076564267524efc8c7468916bb7fa9c390e"
+              "sha256": "149499e08cb251b324ab613a278cef1ffdf3669ab062fc96b5c479ddc0130116"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t12_stdout.txt",
-              "sha256": "d07adda768ab929e2795233f8cac3c5cf69e592dbfc72024070152367a59e728"
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
               "path": "probes/t12_stderr.txt",
-              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            },
-            {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t12_json_result.json",
-              "sha256": "e8bac5b86080afe6edb6eb6291aa4a4d818edb641570f3e1ad3dd9c941ed294e"
+              "sha256": "492a363e5d597a26a21ecfa91b463a3783f4401909c03d30355e78565521ceca"
             }
           ],
-          "budget": 0.12,
-          "duration_s": 4.450719,
-          "err_norm": 2.5177088090207063,
-          "exit_code": 0,
-          "expected_signal": "E value on exact seeded workload vs 0.12 budget",
-          "json_parse_error": null,
-          "json_result": {
-            "E": 0.17019111199798995,
-            "all_finite": true,
-            "budget": 0.12,
-            "err_norm": 2.5177088090207063,
-            "metric": "relative_error_E",
-            "passes": false,
-            "per_row_abs_err_max": 0.7908530511966685,
-            "ref_norm": 14.793421227839687
-          },
-          "metric": "relative_error_E",
-          "passes": false,
-          "per_row_abs_err_max": 0.7908530511966685,
-          "ref_norm": 14.793421227839687,
-          "stderr": "",
-          "stdout": "{\"metric\": \"relative_error_E\", \"E\": 0.17019111199798995, \"budget\": 0.12, \"all_finite\": true, \"ref_norm\": 14.793421227839687, \"err_norm\": 2.5177088090207063, \"per_row_abs_err_max\": 0.7908530511966685, \"passes\": false}\n",
+          "duration_s": 5.57073,
+          "exit_code": 1,
+          "expected_signal": "E <= 0.003 (claim c1 rebutted) or E > 0.003 (confirmed)",
+          "failure": "NameError: name 'torch' is not defined - probe bug, no measurement taken",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/numerical_pilot/case_87/debate/probes/t12_probe.py\", line 13, in <module>\n    ref = torch.empty_like(bf)\n          ^^^^^\nNameError: name 'torch' is not defined\n",
+          "stdout": "",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "On the exact seeded workload (seed 1222, m=32, k=256, mix=0.75, residual=1.0), the Triton kernel's output has relative error E = 0.1702 against the float64 reference W@x, exceeding the 0.12 compliance budget; all 32 outputs are finite, so this is a pure budget violation (E=0.1702 > 0.12, passes=false).",
-        "supports": "confirmed",
+        "summary": "Probe failed with NameError: torch not imported (probe code bug, not a kernel result). No E measurement obtained.",
+        "supports": "inconclusive",
         "tool_event_id": "t12"
       }
     ],
     "id": "c1",
     "raised_by": "skeptic",
-    "rationale": "make_inputs deliberately adds the full normalized quantization-residual direction (residual=1.0) to x, aligning the input with the kernel's per-row quantization error, so the relative error is adversarially maximized and may exceed the 0.12 budget; only a runtime measurement of E on the exact seeded workload can decide.",
+    "rationale": "Line 13 rounds the carry to fp16 (~2^-11 relative) at every one of 768 steps with decay 0.999, so per-element absolute rounding error can reach ~0.005 near steady state (~10), and errors accumulate in the L2 norm across 24576 outputs; E could exceed 0.003 since the denominator max(||ref||_2, ~76.8) may be smaller than the accumulated fp16 error norm.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Compliance iff all outputs finite and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.12 on the single make_inputs workload; the workload is exactly make_inputs() with seed 1222, m=32, k=256, residual=1.0."
+        "summary": "Reference is float64 recurrence on same float32 inputs; pass iff all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, on exactly the make_inputs() workload."
       }
     ],
-    "scope_rationale": "The judged quantity is exactly E on the single make_inputs() workload (seed 1222, m=32, k=256, mix=0.75, residual=1.0), which x constructs to align with the kernel's per-row quantization error; problem.txt defines compliance as E <= 0.12 there, so whether the kernel exceeds that budget is directly the contract question.",
-    "statement": "On the exact seeded workload (seed 1222, m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row quantization produces E > 0.12 against the float64 reference W@x.",
-    "status": "confirmed",
-    "updated_at": "2026-09-30T09:03:15Z"
+    "scope_rationale": "The contract requires E <= 0.003 on exactly the make_inputs() workload (t=768, d=32, decay=0.999, bias=0.01) with a float64 reference; the per-step fp16 carry quantization at kernel.py line 13 directly determines whether that budget is met on this single in-scope workload.",
+    "statement": "On the fixed workload (seed 453, t=768, d=32, decay=0.999, bias=0.01), the per-step fp16 rounding of the carry (kernel.py line 13) accumulates error such that E exceeds the 0.003 budget.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:59:10Z"
   },
   {
-    "created_at": "2026-09-30T09:02:13Z",
+    "created_at": "2026-09-30T08:58:04Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T09:03:15Z",
+        "created_at": "2026-09-30T08:59:10Z",
         "data": {
-          "E_emulated_float32": 0.1701910429285432,
-          "E_emulated_float64": 0.170191049311073,
-          "E_triton_actual": 0.17019111199798995,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t13_probe.py",
-              "sha256": "967643b247a93d8ff50070374b486d800fcde433989f3e677d9d43ff14cd8ea6"
+              "sha256": "dd86830c829cbfff831821c2dcfca275b5106f9faab752aa030a470710a61879"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t13_stdout.txt",
-              "sha256": "93a77903b1bd02f55494a63d3df3e5e84162308c47c21b29d3478642f4bd172c"
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
               "path": "probes/t13_stderr.txt",
-              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            },
-            {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t13_json_result.json",
-              "sha256": "74290d3677cc0809bd5bdcce953910ac1bd8fb451510c16142dfc578435500e2"
+              "sha256": "b0436dae1170eaf8d76873f4d96c57714dba5fab7deed7ad12dcd1876687035a"
             }
           ],
-          "duration_s": 4.358587,
-          "exit_code": 0,
-          "expected_signal": "count of float32 vs float64 quantization code differences and shift in E",
-          "json_parse_error": null,
-          "json_result": {
-            "E_emulated_float32": 0.1701910429285432,
-            "E_emulated_float64": 0.170191049311073,
-            "E_triton_actual": 0.17019111199798995,
-            "budget": 0.12,
-            "max_abs_out_diff_triton_vs_emul64": 5.95689463978033e-07,
-            "metric": "quantization_code_comparison_and_E_shift",
-            "qi_code_differences_float32_vs_float64": 0,
-            "total_codes": 8192
-          },
-          "max_abs_out_diff_triton_vs_emul64": 5.95689463978033e-07,
-          "metric": "quantization_code_comparison_and_E_shift",
-          "qi_code_differences_float32_vs_float64": 0,
-          "stderr": "",
-          "stdout": "{\"metric\": \"quantization_code_comparison_and_E_shift\", \"qi_code_differences_float32_vs_float64\": 0, \"total_codes\": 8192, \"E_triton_actual\": 0.17019111199798995, \"E_emulated_float64\": 0.170191049311073, \"E_emulated_float32\": 0.1701910429285432, \"max_abs_out_diff_triton_vs_emul64\": 5.95689463978033e-07, \"budget\": 0.12}\n",
+          "duration_s": 5.68678,
+          "exit_code": 1,
+          "expected_signal": "launch succeeds with enable_fp_fusion kwarg and fusion on/off makes negligible or zero difference",
+          "failure": "NameError: name 'torch' is not defined - probe bug, no measurement taken",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/numerical_pilot/case_87/debate/probes/t13_probe.py\", line 18, in <module>\n    out2 = torch.empty_like(b)\n           ^^^^^\nNameError: name 'torch' is not defined\n",
+          "stdout": "",
           "timed_out": false,
-          "timeout_s": 60,
-          "total_codes": 8192
+          "timeout_s": 60
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "On the exact seeded workload, float32 vs float64 computation of scale and qi produces zero quantization code differences out of 8192 codes; the Triton output matches the float64-emulated quantized kernel to within 6e-7, and E is essentially identical across float32 emulation (0.17019104), float64 emulation (0.17019105), and actual Triton (0.17019111). No boundary code shifts occur and E is not meaningfully moved by precision effects.",
-        "supports": "rebutted",
+        "summary": "Probe failed with NameError: torch not imported (probe code bug, not a kernel result). No launch behavior measured.",
+        "supports": "inconclusive",
         "tool_event_id": "t13"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "make_inputs computes the residual using float64 (wf/scale in float64, floor, clip), but the Triton kernel computes scale and qi in float32; float32 division/rounding differences can shift boundary quantization codes relative to the residual direction x encodes, altering error magnitude in either direction.",
+    "rationale": "run() passes enable_fp_fusion=False as a launch kwarg (line 19) rather than a triton.Config option; if Triton 3.4.0 rejects it or silently ignores it, execution could fail or the a*h+b computation could be FMA-contracted, shifting accumulated rounding relative to the intended unfused evaluation.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The judged workload is exactly make_inputs(), whose x embeds a float64-derived quantization residual direction, and only the resulting E on that single workload matters."
+        "summary": "Environment fixed to Triton 3.4.0 on T4; compliance requires the kernel to run on the single workload and produce outputs with E <= 0.003."
       }
     ],
-    "scope_rationale": "The judged workload is exactly make_inputs(), whose adversarial x component encodes float64-computed quantization codes; any float32-induced qi shift in the kernel changes the error's interaction with that component and hence the measured E, which problem.txt defines as the sole compliance criterion.",
-    "statement": "Float32 rounding of scale = max(|w|)/7 inside the Triton kernel versus float64 in make_inputs may produce different quantization codes (qi) for boundary values, changing the error direction relative to the adversarial residual component of x and thereby shifting E.",
-    "status": "rebutted",
-    "updated_at": "2026-09-30T09:03:15Z"
+    "scope_rationale": "The contract fixes the environment to Triton 3.4.0 on T4 and requires the kernel to execute on the single make_inputs() workload producing finite outputs with E <= 0.003; a launch-kwarg incompatibility on this exact environment would break compliance.",
+    "statement": "The kernel's launch path may fail or produce a different result than intended on the specified environment because enable_fp_fusion is passed as a kernel launch kwarg, which may not be accepted by Triton 3.4.0 or may leave the a*h+b computation fused into an FMA, slightly shifting accumulated rounding relative to the unfused evaluation.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:59:10Z"
   }
 ]

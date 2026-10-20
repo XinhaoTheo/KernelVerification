@@ -5,6 +5,11 @@ import sys
 
 import modal
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.archive_paths import (
+    canonical_case_rows, frozen_case_rows,
+)
+
 ROOT = Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 PRIVATE = Path("private_data") / "correlation_pair"
 app = modal.App("kv-correlation-pair-eval")
@@ -50,16 +55,18 @@ def validate(names):
                            "triton":triton.__version__,"numpy":np.__version__},"cases":results}
 
 @app.local_entrypoint()
-def main(cases: str = "case_93,case_94"):
+def main(cases: str = "case_99,case_100"):
     names = [name.strip() for name in cases.split(",") if name.strip()]
     private = ROOT / PRIVATE
-    cpu = json.loads((private / "answer_key_cpu.json").read_text())
-    if not names or any(name not in cpu["cases"] for name in names):
-        raise ValueError("Pass validated case_93 and/or case_94 names")
+    cpu = canonical_case_rows(ROOT, "correlation_pair",
+        json.loads((private / "answer_key_cpu.json").read_text())["cases"])
+    if not names or any(name not in cpu for name in names):
+        raise ValueError("Pass validated case_99 and/or case_100 names")
     result = validate.remote(names)
     for name, row in result["cases"].items():
-        assert row["input_sha256"] == cpu["cases"][name]["input_sha256"]
-        assert row["ground_truth"] == cpu["cases"][name]["cpu_ground_truth"]
-    (private / "validation_gpu.json").write_text(json.dumps(result, indent=2))
+        assert row["input_sha256"] == cpu[name]["input_sha256"]
+        assert row["ground_truth"] == cpu[name]["cpu_ground_truth"]
+    stored = {**result, "cases": frozen_case_rows(ROOT, "correlation_pair", result["cases"])}
+    (private / "validation_gpu.json").write_text(json.dumps(stored, indent=2))
     for name, row in result["cases"].items():
         print(name, row["ground_truth"], row["errors"][0])

@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e05`
+- Entry: `case_y`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 25.588s across 5 calls | tokens: in=60352 out=1485 total=61837
+- LLM time: 18.04s across 5 calls | tokens: in=51145 out=1160 total=52305
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.98
+- Confidence: 0.97
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e05"
+    "entry": "case_y"
   }
   Output summary:
   {
-    "entry": "case_e05"
+    "entry": "case_y"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e05"
+    "entry": "case_y"
   }
   Output summary:
   {
-    "entry": "case_e05"
+    "entry": "case_y"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e05"
+    "entry": "case_y"
   }
   Output summary:
   {
-    "entry": "case_e05"
+    "entry": "case_y"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e05",
+    "entry": "case_y",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e05"
+    "entry": "case_y"
   }
 
-### Turn 2 - `solo` (5.207228154s, in=9045 out=278)
+### Turn 2 - `solo` (2.4089367230000107s, in=7676 out=184)
 
 Message:
 
 ```text
-The contract's decisive requirement is the 4th-order joint law, which the initial probe did not test. I'll record a claim and probe all C(8,4)=70 quadruples on the real GPU.
+I'll test the kernel's output against the contract's float64 reference on the fixed workload.
 ```
 
 Tool calls:
@@ -73,15 +73,15 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction could satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
+    "rationale": "The kernel uses float32 accumulation of the expanded distance identity, which can lose precision (query values ~16, squares ~256), possibly causing final normalized error > 0.05.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
+        "summary": "Error metric: ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05, reference in float64 on the fixed make_inputs workload."
       }
     ],
-    "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024."
+    "statement": "The kernel's output on the fixed make_inputs() workload has normalized error > 0.05 relative to the float64 reference."
   }
   Output summary:
   {
@@ -89,12 +89,12 @@ Tool calls:
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (3.9468915010000005s, in=9755 out=326)
+### Turn 3 - `solo` (2.795352136999952s, in=8245 out=220)
 
 Message:
 
 ```text
-I'll re-record the 4th-order joint law claim with the missing scope_rationale, then run the decisive probe.
+Record the claim with scope_rationale, then run probe.
 ```
 
 Tool calls:
@@ -102,33 +102,40 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
+    "rationale": "The kernel accumulates expanded-distance terms in float32 with values ~16 (squares ~256), and the resulting weight = exp(-16*d) errors are amplified by ~16 in the exponent, so the final normalized prediction could exceed the 0.05 error budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
+        "summary": "Error metric: ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, reference computed in float64."
       }
     ],
-    "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requiremen
-  ...[truncated 224 chars]
+    "scope_rationale": "The contract requires the final normalized prediction error <= 0.05 on the fixed make_inputs() float32 workload; a runtime comparison against the float64 reference directly decides this.",
+    "statement": "The kernel's output on the fixed make_inputs() workload
+  ...[truncated 66 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
+    "rationale": "The kernel accumulates expanded-distance terms in float32 with values ~16 (squares ~256), and the resulting weight = exp(-16*d) errors are amplified by ~16 in the exponent, so the final normalized prediction could exceed the 0.05 error budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
+        "summary": "Error metric: ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, reference computed in float64."
       }
     ],
-    "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.",
-    "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
+    "scope_rationale": "The contract requires the final normalized prediction error <= 0.05 on the fixed make_inputs() float32 workload; a runtime comparison against the float64 reference directly decides this.",
+    "statement": "The kernel's output on the fixed make_inputs() workload has normalized error > 0.05 relative to the float64 reference.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (7.411134050000001s, in=11189 out=434)
+### Turn 4 - `solo` (5.447251792999964s, in=9358 out=267)
+
+Message:
+
+```text
+I'll run the decisive probe comparing the kernel output against the float64 reference on the fixed workload.
+```
 
 Tool calls:
 
@@ -136,8 +143,9 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import json, itertools, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e05\")\nimport kernel\ninputs = kernel.make_inputs()\nbefore = [t.clone() for t in inputs]\ny = kernel.run(*inputs)\nv = y.detach().cpu().numpy()\nx = inputs[1].detach().cpu().numpy()\ninputs_unmod = all(torch.equal(a,b) for a,b in zip(inputs,before))\nallowed = np.logical_or(v==0, v==2*x[None,:]).all()\nB = (v != 0).astype(np.int64)\nworst = 0.0; worst_case = None\nfor quad in itertools.combinations(range(8),4):\n    codes = (B[:,quad[0]]*8 + B[:,quad[1]]*4 + B[:,quad[2]]*2 + B[:,quad[3]])\n    counts = np.bincount(codes, minlength=16)\n    err = float(np.max(np.abs(counts/1024 - 1/16)))\n    if err > worst:\n        worst = err; worst_case = quad\n    if err > 
-  ...[truncated 549 chars]
+    "code": "import numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_y\")\nfrom kernel import make_inputs, run\n\nq, a, v = make_inputs()\nout = run(q, a, v)\nq64 = q.cpu().numpy().astype(np.float64)\na64 = a.cpu().numpy().astype(np.float64)\nv64 = v.cpu().numpy().astype(np.float64)\nd = ((a64 - q64)**2).sum(axis=1)\nw = np.exp(-16.0 * d)\nref = (w * v64).sum() / w.sum()\no = out.cpu().item()\nerr = abs(o - ref) / max(abs(ref), 0.05)\nprint(np.round(np.array([o, ref, err]), 8).tolist())\nimport json\nprint(json.dumps({\"output\": o, \"reference\": ref, \"normalized_error\": err, \"finite\": bool(np.isfinite(o)), \"shape\": tuple(out.shape)}))\n",
+    "expected_signal": "normalized_error > 0.05 indicates contract violation"
+  }
   Output summary:
   {
     "artifacts": [
@@ -145,13 +153,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
+        "sha256": "d8c478bf3cc1e779e7eb0efba8ff737bff0a2b0a68f061cd56b1a92997be9982"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
+        "sha256": "215c0f6ff8a13a9b1ee33a0cefc43574ad2005157f8833baaf47cefa4e20a565"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -163,20 +171,24 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t7_json_result.json",
-        "sha256": "ac5450fdbba68d905d7fec4ac9e1509ff14b9876541b0aab63b01107cd2ec370"
+        "sha256": "9575f41fe9b94f897de3ee7aff92506abe3b15f6984003606b172b8b858b4de4"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
-    "duration_s": 6.2437
-  ...[truncated 3007 chars]
+    "claim_statement": "The kernel's output on the fixed make_inputs() workload has normalized error > 0.05 relative to the float64 reference.",
+    "duration_s": 5.292641,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+    
+  ...[truncated 2472 chars]
 
-### Turn 5 - `solo` (4.1663634049999985s, in=13696 out=186)
+### Turn 5 - `solo` (3.391614840999978s, in=11400 out=240)
 
 Message:
 
 ```text
-The 4th-order probe passed with zero error across all 70 quadruples. Finalizing the claim and recording the verdict.
+The probe ran successfully: output 0.299754 vs reference 0.299711, normalized error 0.000142, far below the 0.05 budget. I'll finalize the evidence and record a trust verdict.
 ```
 
 Tool calls:
@@ -185,13 +197,17 @@ Tool calls:
   Args:
   {
     "data": {
-      "max_4th_order_error": 0.0,
-      "passes_contract": true,
-      "tolerance": 0.0009765625
+      "finite": true,
+      "normalized_error": 0.00014222208321505462,
+      "output": 0.29975396394729614,
+      "reference": 0.2997113383763891,
+      "shape": [
+        1
+      ]
     },
     "event_id": "t7",
     "status": "rebutted",
-    "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
+    "summary": "Kernel output on fixed make_inputs() workload: 0.29975396 vs float64 reference 0.29971134; normalized error 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,).",
     "supports": "rebutted"
   }
   Output summary:
@@ -199,17 +215,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
+    "summary": "Kernel output on fixed make_inputs() workload: 0.29975396 vs float64 reference 0.29971134; normalized error 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,).",
     "supports": "rebutted",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (4.856389365000002s, in=16667 out=261)
+### Turn 6 - `solo` (3.99692410199998s, in=14466 out=249)
 
 Message:
 
 ```text
-The decisive claim is resolved with strong evidence: the 4th-order joint law holds exactly (error 0.0 across all 70 quadruples × 16 patterns), with shape/dtype/allowed values and input immutability all passing. No further claims would change the verdict.
+The only in-scope claim (c1, error > 0.05) was rebutted by the runtime probe: normalized error 1.42e-4 on the fixed workload, finite output of shape (1,). No further lines of inquiry would change the verdict. Recording the verdict.
 ```
 
 Tool calls:
@@ -217,20 +233,20 @@ Tool calls:
 - `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.98,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
+    "reason": "Ran the kernel on the contract's only in-scope workload (make_inputs(), fixed seed) and compared against the float64 reference defined in problem.txt (tool event t7). Output 0.29975396 vs reference 0.29971134; normalized error ||out-ref||/max(||ref||,0.05) = 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,), satisfying the contract's shape/finiteness requirement. The float32 accumulation and expanded-distance identity deviations the contract itself acknowledges do not push error anywhere near budget on the fixed workload.",
     "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.98,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
+    "reason": "Ran the kernel on the contract's only in-scope workload (make_inputs(), fixed seed) and compared against the float64 reference defined in problem.txt (tool event t7). Output 0.29975396 vs reference 0.29971134; normalized error ||out-ref||/max(||ref||,0.05) = 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,), satisfying the contract's shape/finiteness requirement. The float32 accumulation and expanded-distance identity deviations the contract itself acknowledges do not push error anywhere near budget on the fixed workload.",
     "verdict": "trust"
   }
 
@@ -242,44 +258,44 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.
+Statement: The kernel's output on the fixed make_inputs() workload has normalized error > 0.05 relative to the float64 reference.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.
+Scope rationale: The contract requires the final normalized prediction error <= 0.05 on the fixed make_inputs() float32 workload; a runtime comparison against the float64 reference directly decides this.
 
 Scope evidence:
-- `problem.txt`: for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024
+- `problem.txt`: Error metric: ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, reference computed in float64.
 
-Rationale: The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.
+Rationale: The kernel accumulates expanded-distance terms in float32 with values ~16 (squares ~256), and the resulting weight = exp(-16*d) errors are amplified by ~16 in the exponent, so the final normalized prediction could exceed the 0.05 error budget.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: Kernel output on fixed make_inputs() workload: 0.29975396 vs float64 reference 0.29971134; normalized error 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e05"
+  "entry": "case_y"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e05"
+  "entry": "case_y"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e05"
+  "entry": "case_y"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e05"
+  "entry": "case_y"
 }
 
 ### t5 - record_claim - error
@@ -293,16 +309,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "The initial probe only verified marginal (order-1) and pair (order-2) histograms; the fold-parity construction can satisfy low orders while failing a 4-way independence condition for some quadruple of channels.",
+  "rationale": "The kernel accumulates expanded-distance terms in float32 with values ~16 (squares ~256), and the resulting weight = exp(-16*d) errors are amplified by ~16 in the exponent, so the final normalized prediction could exceed the 0.05 error budget.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4, abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024"
+      "summary": "Error metric: ||output-reference||_2 / max(||reference||_2, 0.05) <= 0.05 on the fixed make_inputs() workload, reference computed in float64."
     }
   ],
-  "scope_rationale": "The contract requires the 4th-order joint dropout law exactly: for every quadruple of distinct channels and every 4-bit pattern, the pattern count over all 1024 seeds divided by 1024 must be within 1/1024 of 1/16. The initial probe only checked orders 1 and 2, so this requirement is untested.",
-  "statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
+  "scope_rationale": "The contract requires the final normalized prediction error <= 0.05 on the fixed make_inputs() float32 workload; a runtime comparison against the float64 reference directly decides this.",
+  "statement": "The kernel's output on the fixed make_inputs() workload has normalized error > 0.05 relative to the float64 reference.",
   "status": "open"
 }
 
@@ -314,13 +330,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
+      "sha256": "d8c478bf3cc1e779e7eb0efba8ff737bff0a2b0a68f061cd56b1a92997be9982"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
+      "sha256": "215c0f6ff8a13a9b1ee33a0cefc43574ad2005157f8833baaf47cefa4e20a565"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -332,12 +348,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t7_json_result.json",
-      "sha256": "ac5450fdbba68d905d7fec4ac9e1509ff14b9876541b0aab63b01107cd2ec370"
+      "sha256": "9575f41fe9b94f897de3ee7aff92506abe3b15f6984003606b172b8b858b4de4"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's keep bits B[s,j] fail the contract's 4th-order joint law: some quadruple of distinct channels and 4-bit pattern has pattern count/1024 deviating from 1/16 by more than 1/1024.",
-  "duration_s": 6.243777,
+  "claim_statement": "The kernel's output on the fixed make_inputs() workload has normalized error > 0.05 relative to the float64 reference.",
+  "duration_s": 5.292641,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -347,20 +363,23 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "6dbb1660799cc5dd2eae55df2ac8c9aa15a545bb18ad859091815fa9b238bc87"
+          "sha256": "d8c478bf3cc1e779e7eb0efba8ff737bff0a2b0a68f061cd56b1a92997be9982"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "d40ce981bc4cb50125786cc964dea8e9e672439d0ad848712faab99d97eed968"
+          "sha256": "215c0f6ff8a13a9b1ee33a0cefc43574ad2005157f8833baaf47cefa4e20a565"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb
-...[truncated 2207 chars]
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "d
+...[truncated 1672 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
@@ -368,7 +387,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "All 70 quadruples x 16 patterns have exactly 64 counts (error 0.0 vs 1/16, tolerance 1/1024); shape/dtype/finite, allowed values, and input immutability all pass. The 4th-order joint law holds exactly.",
+  "summary": "Kernel output on fixed make_inputs() workload: 0.29975396 vs float64 reference 0.29971134; normalized error 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,).",
   "supports": "rebutted",
   "tool_event_id": "t7"
 }
@@ -376,22 +395,22 @@ Evidence:
 ### t9 - record_verdict - ok
 
 {
-  "confidence": 0.98,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
+  "reason": "Ran the kernel on the contract's only in-scope workload (make_inputs(), fixed seed) and compared against the float64 reference defined in problem.txt (tool event t7). Output 0.29975396 vs reference 0.29971134; normalized error ||out-ref||/max(||ref||,0.05) = 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,), satisfying the contract's shape/finiteness requirement. The float32 accumulation and expanded-distance identity deviations the contract itself acknowledges do not push error anywhere near budget on the fixed workload.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.98,
-  "created_at": "2026-09-24T06:38:03Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-24T01:02:27Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The only untested contract requirement beyond the initial probe was the exact 4th-order joint dropout law. I ran a GPU probe (tool event t7) over the full fixed workload (1024 seeds, all C(8,4)=70 channel quadruples \u00d7 16 patterns) using make_inputs(): max |count/1024 - 1/16| = 0.0 (tolerance 1/1024), every pattern exactly 64 occurrences. Shape (1024,8), float32, finite, all values exactly 0 or 2*X[j], and inputs unmodified all verified. The hypothesis that the fold-parity construction fails 4-way independence (claim c1) is rebutted; the contract is fully satisfied.",
+  "reason": "Ran the kernel on the contract's only in-scope workload (make_inputs(), fixed seed) and compared against the float64 reference defined in problem.txt (tool event t7). Output 0.29975396 vs reference 0.29971134; normalized error ||out-ref||/max(||ref||,0.05) = 1.42e-4, far below the 0.05 threshold. Output is finite with shape (1,), satisfying the contract's shape/finiteness requirement. The float32 accumulation and expanded-distance identity deviations the contract itself acknowledges do not push error anywhere near budget on the fixed workload.",
   "verdict": "trust"
 }

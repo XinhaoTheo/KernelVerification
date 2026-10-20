@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_q`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_k`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 18.303s across 4 calls | tokens: in=47686 out=1062 total=48748
+- LLM time: 23.452s across 5 calls | tokens: in=52570 out=1532 total=54102
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.98
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,153 +25,184 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_q",
+    "entry": "case_k",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 
-### Turn 2 - `solo` (3.843211738000001s, in=7594 out=300)
+### Turn 2 - `solo` (7.019123583999999s, in=7510 out=471)
 
 Message:
 
 ```text
-I'll record the key claim — that the quantized route picks a different nearest neighbor than the float64 reference, potentially exceeding the 0.1 relative-error tolerance — and probe it on the fixed workload.
+The kernel runs 64 Richardson iterations; convergence depends on the smallest eigenvalue 0.03125, so it's borderline. I'll record a claim and run a probe computing the actual relative L2 error.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+    "rationale": "Richardson iteration converges slowly along the eigen-direction with \u03bb=0.03125 (factor 1-\u03bb=0.96875 per step; 0.96875^64 \u2248 0.135 residual factor), so the 64-step output may not meet the \u22640.08 relative L2 contract for the fixed supplied inputs.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+        "summary": "Output must be finite shape (16,) with relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the float64 exact solution; only make_inputs() tensors are in scope."
       }
     ],
-    "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
-    "statement": "The kernel's quantized neare
-  ...[truncated 173 chars]
+    "statement": "run(*make_inputs()) produces output with relative L2 error exceeding 0.08 against the float64 exact solution."
+  }
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 3 - `solo` (3.819826734000003s, in=8242 out=308)
+
+Message:
+
+```text
+Re-record claim with scope_rationale, then run probe. Actually I can record claim and then run probe — dependent, so sequential. But claim_id unknown until recorded. Let me record claim first.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "Richardson iteration with unit step converges slowly along the eigen-direction with eigenvalue 0.03125 (per-step factor 1-0.03125=0.96875; 0.96875^64 \u2248 0.13), so the 64-step output may not reach the \u22640.08 relative L2 error the contract requires for the fixed supplied inputs.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Output must be finite shape (16,) with relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the float64 exact solution of matrix @ x = rhs; only make_inputs() tensors are in scope."
+      }
+    ],
+    "scope_rationale": "The contract requires relative L2 error \u2264 0.08 against the float64 exact solution for the specific make_inputs() workload; this claim te
+  ...[truncated 209 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+    "rationale": "Richardson iteration with unit step converges slowly along the eigen-direction with eigenvalue 0.03125 (per-step factor 1-0.03125=0.96875; 0.96875^64 \u2248 0.13), so the 64-step output may not reach the \u22640.08 relative L2 error the contract requires for the fixed supplied inputs.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+        "summary": "Output must be finite shape (16,) with relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the float64 exact solution of matrix @ x = rhs; only make_inputs() tensors are in scope."
       }
     ],
-    "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
-    "statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
+    "scope_rationale": "The contract requires relative L2 error \u2264 0.08 against the float64 exact solution for the specific make_inputs() workload; this claim tests whether the 64-step Richardson iteration output violates that error bound.",
+    "statement": "run(*make_inputs()) produces output with relative L2 error exceeding 0.08 against the float64 exact solution.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (5.463227746000005s, in=8803 out=344)
+### Turn 4 - `solo` (4.054493766s, in=9666 out=245)
 
 Message:
 
 ```text
-I'll run the fixed workload through the kernel and compare against the float64 reference selection.
+I'll run the probe on the actual kernel to compute the relative L2 error against the float64 exact solution.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json, torch, numpy as np\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nimport kernel\n\nq, c, e = kernel.make_inputs(\"cuda\")\nout = kernel.run(q, c, e)\n\n# float64 reference\nd = ((c.double() - q.double())**2).sum(dim=1)\nref_idx = int(torch.argmin(d))\nref = e[ref_idx].double()\nrel = ((out.double() - ref).norm() / max(ref.norm().item(), 1e-12)).item()\n\n# quantized winner index (simulate kernel logic)\nqf = q.float(); cf = c.float()\nqq = torch.floor(qf*8+0.5)*0.125\ncq = torch.floor(cf*8+0.5)*0.125\nqd = ((cq-qq)**2).float().sum(dim=1)\nkern_idx = int(torch.argmin(qd))\n\nprint(json.dumps({\n  \"kernel_output\": out.cpu().tolist(),\n  \"reference_idx\": ref_idx, \"quantized_idx\": kern_idx,\n  \"ref_distances\": d.cpu().tolist(),
-  ...[truncated 246 chars]
+    "code": "import numpy as np, torch, sys, os\nsys.path.insert(0, \"/root/numerical_cases/case_k\")\nimport kernel\nm, r = kernel.make_inputs(\"cuda\")\nout = kernel.run(m, r)\ntorch.cuda.synchronize()\no = out.cpu().numpy().astype(np.float64)\nM = m.cpu().numpy().astype(np.float64)\nb = r.cpu().numpy().astype(np.float64)\nx = np.linalg.solve(M, b)\nerr = np.linalg.norm(o - x)\nden = max(np.linalg.norm(x), 0.001*np.sqrt(16))\nrel = err/den\nprint(\"norm_x\", np.linalg.norm(x), \"err\", err, \"rel\", rel, \"finite\", bool(np.all(np.isfinite(o))), \"shape\", o.shape)\nimport json\nprint(json.dumps({\"rel_l2\": rel, \"pass\": rel <= 0.08, \"finite\": bool(np.all(np.isfinite(o)))}))\n"
+  }
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+        "path": "probes/t7_probe.py",
+        "sha256": "77ec55dc5f967a61d5773ab2bab57fe316272297526a48923945c8deecf5769e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "47de729dc4f50604c92d1a04d4cf1ab332b53707159e1910890f8f9a05fe51cf"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "5f70dc2648435d630c9c3b194662b749d1c1f6272f9b3213bf3643e34d892cc6"
+        "path": "probes/t7_stderr.txt",
+        "sha256": "84d19d6e18ca806af0d338935111ee65b3c1083b2b2fba28b88c7f6cb650e410"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
-    "duration_
-  ...[truncated 5548 chars]
+    "claim_statement": "run(*make_inputs()) produces output with relative L2 error exceeding 0.08 against the float64 exact solution.",
+    "duration_s": 5.604063,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "77ec55dc5f967a61d5773ab2bab57fe316272297526a48923
+  ...[truncated 2936 chars]
 
-### Turn 4 - `solo` (5.039891155999996s, in=12839 out=215)
+### Turn 5 - `solo` (4.277038051000005s, in=11864 out=279)
 
 Message:
 
 ```text
-The probe on the fixed workload shows the quantized kernel picks the same winner (index 6) as the float64 reference, with relative L2 error 0.0 and a finite output — the claim is rebutted.
+The probe ran successfully (only the final JSON print failed due to numpy bool serialization). The measured relative L2 error is 0.0236, well within the 0.08 bound, and the output is finite. I'll finalize this as rebutted evidence and record a trust verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "kernel_output_finite": true,
-      "passes_0.1": true,
-      "quantized_idx": 6,
-      "reference_idx": 6,
-      "relative_l2_error": 0.0
+      "finite": true,
+      "norm_x": 3.930916535805517,
+      "rel_l2": 0.023636854556236472,
+      "shape": "(16,)"
     },
-    "event_id": "t6",
+    "event_id": "t7",
     "status": "rebutted",
-    "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+    "summary": "Kernel run(*make_inputs()) on GPU produced a finite (16,) output with relative L2 error 0.0236 against the float64 exact solution (norm_x=3.93, abs err=0.0929), well within the 0.08 contract bound. The probe's exit-code error was only a numpy bool_ JSON serialization issue in the final print line; the metrics line printed correctly.",
     "supports": "rebutted"
   }
   Output summary:
@@ -179,38 +210,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+    "summary": "Kernel run(*make_inputs()) on GPU produced a finite (16,) output with relative L2 error 0.0236 against the float64 exact solution (norm_x=3.93, abs err=0.0929), well within the 0.08 contract bound. The probe's exit-code error was only a numpy bool_ JSON serialization issue in the final print line; the metrics line printed correctly.",
     "supports": "rebutted",
-    "tool_event_id": "t6"
+    "tool_event_id": "t7"
   }
 
-### Turn 5 - `solo` (3.9563144910000005s, in=18450 out=203)
+### Turn 6 - `solo` (4.281955357000001s, in=15288 out=229)
 
 Message:
 
 ```text
-The single in-scope claim is resolved: the kernel matches the float64 reference exactly on the fixed workload (winner index 6, relative L2 error 0.0, finite output). No further lines of inquiry could change the verdict.
+The claim is resolved: the measured relative L2 error is 0.0236, well within the 0.08 contract bound, and the output is finite with shape (16,). I'll record a trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.98,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+    "reason": "Probe t7 ran kernel.run(*make_inputs()) on the GPU and compared against the float64 exact solution (np.linalg.solve). Output was finite, shape (16,), with relative L2 error 0.0236 (norm_x=3.93, abs err=0.0929), comfortably within the contract bound of 0.08. The probe's nonzero exit code was only a numpy bool_ JSON serialization error in the final print; the metrics line printed correctly. The in-scope claim that the error bound is violated is rebutted.",
     "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.98,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+    "reason": "Probe t7 ran kernel.run(*make_inputs()) on the GPU and compared against the float64 exact solution (np.linalg.solve). Output was finite, shape (16,), with relative L2 error 0.0236 (norm_x=3.93, abs err=0.0929), comfortably within the contract bound of 0.08. The probe's nonzero exit code was only a numpy bool_ JSON serialization error in the final print; the metrics line printed correctly. The in-scope claim that the error bound is violated is rebutted.",
     "verdict": "trust"
   }
 
@@ -222,96 +253,97 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).
+Statement: run(*make_inputs()) produces output with relative L2 error exceeding 0.08 against the float64 exact solution.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.
+Scope rationale: The contract requires relative L2 error ≤ 0.08 against the float64 exact solution for the specific make_inputs() workload; this claim tests whether the 64-step Richardson iteration output violates that error bound.
 
 Scope evidence:
-- `problem.txt`: Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1.
+- `problem.txt`: Output must be finite shape (16,) with relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the float64 exact solution of matrix @ x = rhs; only make_inputs() tensors are in scope.
 
-Rationale: Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.
+Rationale: Richardson iteration with unit step converges slowly along the eigen-direction with eigenvalue 0.03125 (per-step factor 1-0.03125=0.96875; 0.96875^64 ≈ 0.13), so the 64-step output may not reach the ≤0.08 relative L2 error the contract requires for the fixed supplied inputs.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: Kernel run(*make_inputs()) on GPU produced a finite (16,) output with relative L2 error 0.0236 against the float64 exact solution (norm_x=3.93, abs err=0.0929), well within the 0.08 contract bound. The probe's exit-code error was only a numpy bool_ JSON serialization issue in the final print line; the metrics line printed correctly.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Candidates are all query plus unit offsets with radii ~1, so the quantized (1/8 grid) distances may reorder the ranking relative to the float64 reference; if a different embedding is selected, the relative L2 error could exceed the contract's 0.1 threshold.",
+  "rationale": "Richardson iteration with unit step converges slowly along the eigen-direction with eigenvalue 0.03125 (per-step factor 1-0.03125=0.96875; 0.96875^64 \u2248 0.13), so the 64-step output may not reach the \u22640.08 relative L2 error the contract requires for the fixed supplied inputs.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract fixes the workload from make_inputs(), reference selection via float64 distances with smallest-index tie-break, and requires ||output-reference||_2 / ||reference||_2 <= 0.1."
+      "summary": "Output must be finite shape (16,) with relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the float64 exact solution of matrix @ x = rhs; only make_inputs() tensors are in scope."
     }
   ],
-  "scope_rationale": "The contract requires relative L2 error <= 0.1 between kernel output and the float64 reference nearest-neighbor embedding on the fixed make_inputs() workload.",
-  "statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
+  "scope_rationale": "The contract requires relative L2 error \u2264 0.08 against the float64 exact solution for the specific make_inputs() workload; this claim tests whether the 64-step Richardson iteration output violates that error bound.",
+  "statement": "run(*make_inputs()) produces output with relative L2 error exceeding 0.08 against the float64 exact solution.",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+      "path": "probes/t7_probe.py",
+      "sha256": "77ec55dc5f967a61d5773ab2bab57fe316272297526a48923945c8deecf5769e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "47de729dc4f50604c92d1a04d4cf1ab332b53707159e1910890f8f9a05fe51cf"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "5f70dc2648435d630c9c3b194662b749d1c1f6272f9b3213bf3643e34d892cc6"
+      "path": "probes/t7_stderr.txt",
+      "sha256": "84d19d6e18ca806af0d338935111ee65b3c1083b2b2fba28b88c7f6cb650e410"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's quantized nearest-neighbor selection on the fixed make_inputs() workload returns an embedding whose relative L2 error vs the float64 reference exceeds 0.1 (or the winner index differs).",
-  "duration_s": 6.353487,
-  "event_id": "t6",
+  "claim_statement": "run(*make_inputs()) produces output with relative L2 error exceeding 0.08 against the float64 exact solution.",
+  "duration_s": 5.604063,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -319,52 +351,60 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "36f49d6b8c1e8b89006706cc4459be73800cd0a948b577f81c46e52de93e5b5b"
+          "path": "probes/t7_probe.py",
+          "sha256": "77ec55dc5f967a61d5773ab2bab57fe316272297526a48923945c8deecf5769e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "f7a8224a9cdbe138d3664d805589736d0c7aa6c1702269a0f8822dd640f08ace"
+          "path": "probes/t7_stdout.txt",
+          "sha256": "47de729dc4f50604c92d1a04d4cf1ab332b53707159e1910890f8f9a05fe51cf"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
-          "sha256": "e3b0c44298fc1c149af
-...[truncated 4748 chars]
+          "path": "probes/t7_stderr.txt",
+          "sha256": "84d19d6e18ca806af0d338935111ee65b3c1083b2b2fba28b88c7f6cb650e410"
+        }
+      ],
+      "duration_s": 5.604063,
+      "exit_code": 1,
+      "expected_signal": null,
+      "json_parse_error": "last stdout line is not JSON: Expecting value",
+      "json_result": null,
+      "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/extensio
+...[truncated 2136 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload, kernel output matches the float64 reference embedding exactly: winner index 6 in both cases, relative L2 error 0.0 <= 0.1, output finite of shape (8,). No reorder or error above threshold.",
+  "summary": "Kernel run(*make_inputs()) on GPU produced a finite (16,) output with relative L2 error 0.0236 against the float64 exact solution (norm_x=3.93, abs err=0.0929), well within the 0.08 contract bound. The probe's exit-code error was only a numpy bool_ JSON serialization issue in the final print line; the metrics line printed correctly.",
   "supports": "rebutted",
-  "tool_event_id": "t6"
+  "tool_event_id": "t7"
 }
 
-### t8 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.98,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+  "reason": "Probe t7 ran kernel.run(*make_inputs()) on the GPU and compared against the float64 exact solution (np.linalg.solve). Output was finite, shape (16,), with relative L2 error 0.0236 (norm_x=3.93, abs err=0.0929), comfortably within the contract bound of 0.08. The probe's nonzero exit code was only a numpy bool_ JSON serialization error in the final print; the metrics line printed correctly. The in-scope claim that the error bound is violated is rebutted.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.98,
-  "created_at": "2026-09-24T01:06:15Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T00:16:00Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 ran the kernel on the fixed make_inputs() workload and compared against the float64 reference (smallest-index tie-break argmin of squared Euclidean distances). Kernel winner index 6 equals reference index 6, output is finite of shape (8,), and relative L2 error is 0.0, well within the contract's 0.1 threshold. Claim c1 (that quantized routing would pick a different neighbor or exceed tolerance) is rebutted by in-scope runtime evidence.",
+  "reason": "Probe t7 ran kernel.run(*make_inputs()) on the GPU and compared against the float64 exact solution (np.linalg.solve). Output was finite, shape (16,), with relative L2 error 0.0236 (norm_x=3.93, abs err=0.0929), comfortably within the contract bound of 0.08. The probe's nonzero exit code was only a numpy bool_ JSON serialization error in the final print; the metrics line printed correctly. The in-scope claim that the error bound is violated is rebutted.",
   "verdict": "trust"
 }

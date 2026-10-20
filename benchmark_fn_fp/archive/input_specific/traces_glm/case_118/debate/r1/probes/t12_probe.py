@@ -1,45 +1,26 @@
-import sys, json
-sys.path.insert(0, "/root/numerical_cases/case_z")
-import numpy as np, torch, kernel
-
-q, a, v = kernel.make_inputs()
-out = kernel.run(q, a, v)
-
-# float64 reference from stored float32 values
-q64 = q.cpu().numpy().astype(np.float64)
-a64 = a.cpu().numpy().astype(np.float64)
-v64 = v.cpu().numpy().astype(np.float64)
-d_true = ((a64 - q64) ** 2).sum(axis=1)
-w_true = np.exp(-16.0 * d_true)
-ref = (w_true * v64).sum() / w_true.sum()
-
-# emulate kernel's fp32 expanded-distance arithmetic exactly
-def fp32(x): return np.float32(x)
-d_comp = np.zeros(16, dtype=np.float32)
-for i in range(16):
-    an = np.float32(0.0); qn = np.float32(0.0); dot = np.float32(0.0)
-    for k in range(32):
-        aa = fp32(a64[i, k]); qq = fp32(q64[k])
-        an = fp32(an + fp32(aa * aa))
-        qn = fp32(qn + fp32(qq * qq))
-        dot = fp32(dot + fp32(aa * qq))
-    ns = fp32(an + qn); td = fp32(2.0 * dot)
-    raw = np.float32(ns - td)
-    d_comp[i] = max(raw, np.float32(0.0))
-
-kernel_out = float(out.item())
-err = abs(kernel_out - ref) / max(abs(ref), 0.05)
-num_clamped = int(((a64**2).sum(1) + (q64**2).sum() - 2*(a64*q64).sum(1) < 0).sum())
-print(json.dumps({
-    "kernel_output": kernel_out,
-    "reference": float(ref),
-    "contract_error": float(err),
-    "tolerance": 0.05,
-    "passes_contract": bool(err <= 0.05),
-    "true_distances": [float(x) for x in d_true],
-    "computed_distances_emulated": [float(x) for x in d_comp],
-    "max_distance_abs_err": float(np.max(np.abs(d_comp - d_true))),
-    "negative_raw_count": num_clamped,
-    "all_computed_zero": bool(np.all(d_comp == 0)),
-    "finite_output": bool(np.isfinite(kernel_out)),
-}))
+import numpy as np, torch, json, importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/numerical_cases/case_t/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+a, f, p = k.make_inputs_numpy()
+A = a.astype(np.float64); F = f.astype(np.float64); P = p.astype(np.float64)
+# float64 closed-form reference
+ref = 1.0 + np.sum(A*(np.cos(P)-np.cos(P+F))/F, axis=1)
+# exact float64 32-point midpoint rule (emulates kernel's math in high precision)
+pts = (np.arange(32)+0.5)/32.0
+mid = 1.0 + np.sum(np.sum(A*np.sin(F[None,:,:]*pts[:,None,None]+P[None,:,:],axis=2),axis=1),axis=0)/32.0
+mid = 1.0 + (A[:,None,:]*np.sin(F[:,None,:]*pts[None,:,None]+P[:,None,:])).sum(axis=(1,2))/32.0
+rel_mid = np.linalg.norm(mid-ref)/max(np.linalg.norm(ref),1e-12)
+# actual kernel run
+try:
+    out = k.run(*k.make_inputs()).cpu().numpy()
+    rel_k = np.linalg.norm(out.astype(np.float64)-ref)/max(np.linalg.norm(ref),1e-12)
+    rel_k_mid = np.linalg.norm(out.astype(np.float64)-mid)/max(np.linalg.norm(mid),1e-12)
+    finite = bool(np.all(np.isfinite(out)))
+except Exception as e:
+    out = None; rel_k = None; rel_k_mid = None; finite = None; print("kernel error:", e)
+print(json.dumps({"reference": ref.tolist(), "midpoint_f64": mid.tolist(),
+ "kernel_out": None if out is None else out.tolist(),
+ "rel_err_midpoint_vs_ref": float(rel_mid), "rel_err_kernel_vs_ref": None if rel_k is None else float(rel_k),
+ "rel_err_kernel_vs_midpoint": None if rel_k_mid is None else float(rel_k_mid),
+ "tolerance": 0.035, "kernel_finite": finite,
+ "frequencies": F.tolist()}))

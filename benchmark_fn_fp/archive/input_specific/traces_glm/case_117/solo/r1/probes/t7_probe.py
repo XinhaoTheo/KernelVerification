@@ -1,17 +1,19 @@
-import numpy as np, torch, sys
-sys.path.insert(0, "/root/numerical_cases/case_y")
-from kernel import make_inputs, run
+import json, numpy as np, torch, sys
+sys.path.insert(0, "/root/numerical_cases/case_s")
+import kernel
 
-q, a, v = make_inputs()
-out = run(q, a, v)
-q64 = q.cpu().numpy().astype(np.float64)
-a64 = a.cpu().numpy().astype(np.float64)
-v64 = v.cpu().numpy().astype(np.float64)
-d = ((a64 - q64)**2).sum(axis=1)
-w = np.exp(-16.0 * d)
-ref = (w * v64).sum() / w.sum()
-o = out.cpu().item()
-err = abs(o - ref) / max(abs(ref), 0.05)
-print(np.round(np.array([o, ref, err]), 8).tolist())
-import json
-print(json.dumps({"output": o, "reference": ref, "normalized_error": err, "finite": bool(np.isfinite(o)), "shape": tuple(out.shape)}))
+amp, freq, ph = kernel.make_inputs()
+out = kernel.run(amp, freq, ph).cpu().numpy()
+
+a = amp.cpu().numpy().astype(np.float64)
+f = freq.cpu().numpy().astype(np.float64)
+p = ph.cpu().numpy().astype(np.float64)
+ref = 1.0 + (a * (np.cos(p) - np.cos(p + f)) / f).sum(axis=1)
+
+err = np.linalg.norm(out.astype(np.float64) - ref) / max(np.linalg.norm(ref), 1e-12)
+print(json.dumps({
+    "output": out.tolist(), "reference": ref.tolist(),
+    "rel_l2": err, "tolerance": 0.035,
+    "max_freq": float(f.max()), "finite": bool(np.isfinite(out).all()),
+    "passes_contract": bool(err <= 0.035)
+}))

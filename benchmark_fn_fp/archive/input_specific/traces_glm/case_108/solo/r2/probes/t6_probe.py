@@ -1,25 +1,22 @@
-import json, sys, numpy as np, torch
-sys.path.insert(0, "/root/numerical_cases/case_p")
-import kernel
 
-u, b = kernel.make_inputs("cuda")
-out = kernel.run(u, b)
-torch.cuda.synchronize()
+import sys, json
+sys.path.insert(0, "/root/numerical_cases/case_j")
+import torch, numpy as np
+from kernel import make_inputs, run
 
-u64 = u.cpu().numpy().astype(np.float64)
-b64 = b.cpu().numpy().astype(np.float64)
-alpha = (u64*b64).sum() / (u64*u64).sum()
-res = b64 - alpha*u64
-ref = res / np.linalg.norm(res)
+x = make_inputs()[0]
+out = run(x)
 
-o = out.cpu().numpy().astype(np.float64)
-err = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)
-print(json.dumps({
-  "shape": list(out.shape),
-  "finite": bool(np.isfinite(o).all()),
-  "relative_l2": float(err),
-  "tolerance": 0.01,
-  "passes": bool(err <= 0.01 and out.shape == (32,) and np.isfinite(o).all()),
-  "alpha": float(alpha),
-  "resid_norm": float(np.linalg.norm(res))
-}))
+xf = x.to(torch.float64)
+mean = xf.sum() / 128
+var = ((xf - mean) ** 2).sum() / 128
+ref = (xf - mean) / np.sqrt(var + 1e-5)
+
+num = (out.to(torch.float64) - ref).norm().item()
+den = max(ref.norm().item(), 0.001 * np.sqrt(128))
+err = num / den
+res = {"shape": list(out.shape), "dtype": str(out.dtype), "finite": bool(torch.isfinite(out).all().item()),
+       "rel_l2_error": err, "bound": 0.02, "passes": bool(err <= 0.02),
+       "max_abs_err": (out.to(torch.float64) - ref).abs().max().item(),
+       "max_rel_err": ((out.to(torch.float64) - ref).abs() / ref.abs().clamp(min=1e-12)).max().item()}
+print(json.dumps(res))

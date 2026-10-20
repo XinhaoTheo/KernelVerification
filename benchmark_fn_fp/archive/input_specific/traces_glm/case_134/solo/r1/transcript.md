@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e16`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_e10`
+- Turns: 7
+- Tool events: 10
 - Claims: 1
 - Description updates: 0
-- LLM time: 38.467s across 5 calls | tokens: in=60157 out=2329 total=62486
+- LLM time: 39.933s across 6 calls | tokens: in=83722 out=2575 total=86297
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.99
+- Confidence: 0.97
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e16"
+    "entry": "case_e10"
   }
   Output summary:
   {
-    "entry": "case_e16"
+    "entry": "case_e10"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e16"
+    "entry": "case_e10"
   }
   Output summary:
   {
-    "entry": "case_e16"
+    "entry": "case_e10"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e16"
+    "entry": "case_e10"
   }
   Output summary:
   {
-    "entry": "case_e16"
+    "entry": "case_e10"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e16",
+    "entry": "case_e10",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e16"
+    "entry": "case_e10"
   }
 
-### Turn 2 - `solo` (16.298588071s, in=8585 out=1042)
+### Turn 2 - `solo` (7.861582567999989s, in=9349 out=529)
 
 Message:
 
 ```text
-The contract's target is the *exact real* sum of the stored values (which equals the sum of the small interior values, since the ±2^80 and ±2^30 pairs cancel exactly) — not the float64 sequential result of 0 shown in the initial probe. I'll record a claim that the kernel's final row sums miss that exact target, then run a probe computing the exact target with exact rational arithmetic.
+The kernel's `step()` returns `weights.view(N)` — a view of the same storage it keeps mutating in place. Since the contract's caller retains the six returned tensors and observes them only after all six updates, every retained row would read as `w[6]`, not `w[t+1]`. I'll record this claim and test it directly.
 ```
 
 Tool calls:
@@ -73,28 +73,31 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel uses float32 Kahan-style compensation, which can lose the small interior values when adding against 2^80 partial sums; the recorded initial probe already shows nonzero outputs while the exact row sums are the sums of the low interior values.",
+    "rationale": "step() returns weights.view(N), a view aliasing the in-place-mutated state; the contract's caller retains the six returned tensors and stacks them only after all six updates, so H would be w[6] replicated six times, not the per-step w[t+1].",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "target[r] is the exact real-number sum of the stored X[r,j]; acceptance requires ||output-target||_2/max(||target||_2,1e-12) <= 1e-5 evaluated in float64 against the mathematical target."
+        "summary": "The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Storage aliasing itself is neither forbidden nor a failure: only the stated numerical values at the stated observation time ... determine acceptance."
       }
-    ],
-    "statement": "The kernel's final row sums do not match the exact real-number sums of the stored inputs within the required 1e-5 relative L2 tolerance."
-  }
+    ]
+  ...[truncated 191 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (6.336523233999998s, in=9289 out=334)
+### Turn 3 - `solo` (6.022402309s, in=10150 out=335)
 
 Message:
 
 ```text
-I'll re-record the claim with the required scope_rationale, then run a probe comparing the kernel output against the exact rational-integer target.
+I'll re-record the aliasing claim with the missing scope_rationale, then test it.
 ```
 
 Tool calls:
@@ -102,37 +105,45 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The kernel uses float32 Kahan compensation; when adding values against a 2^80 partial sum, even the compensation terms lose the small interior values entirely (2^80 vs ~1.0 has ulp 2^53), so the small sums cannot survive. The recorded initial probe already shows outputs around 0.72-1.34 while the exact targets are the sums of the low interior values.",
+    "rationale": "step() returns weights.view(N), a view aliasing the in-place-mutated state; the caller retains the six returned tensors and observes them only after all six updates, so H would read as w[6] replicated six times, not the per-step w[t+1].",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "target[r] = exact real-number sum of stored X[r,j] for j=0..11; acceptance iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 against the mathematical target."
+        "summary": "The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025."
       }
     ],
-    "scope_rationale": "The contract requires run(X) to return the exact real-number row sums of the fixed (4,12) float32 array f
-  ...[truncated 406 chars]
+    "scope_rationale": "The contract requires H (values of the six retained retu
+  ...[truncated 409 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel uses float32 Kahan compensation; when adding values against a 2^80 partial sum, even the compensation terms lose the small interior values entirely (2^80 vs ~1.0 has ulp 2^53), so the small sums cannot survive. The recorded initial probe already shows outputs around 0.72-1.34 while the exact targets are the sums of the low interior values.",
+    "rationale": "step() returns weights.view(N), a view aliasing the in-place-mutated state; the caller retains the six returned tensors and observes them only after all six updates, so H would read as w[6] replicated six times, not the per-step w[t+1].",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "target[r] = exact real-number sum of stored X[r,j] for j=0..11; acceptance iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 against the mathematical target."
+        "summary": "The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025."
       }
     ],
-    "scope_rationale": "The contract requires run(X) to return the exact real-number row sums of the fixed (4,12) float32 array from make_inputs() within 1e-5 relative L2 tolerance; the \u00b12^80 first/last elements cancel exactly, so the target is the sum of the remaining 10 small values. A kernel that fails this metric on the declared fixed workload violates the contract.",
-    "statement": "The kernel's final row sums do not match the exact real-number sums of the stored inputs within the required 1e-5 relat
-  ...[truncated 40 chars]
+    "scope_rationale": "The contract requires H (values of the six retained returned tensors observed after all six updates) to match the per-step w[t+1] targets within relative Frobenius error 0.025; if the returned tensors alias the mutated weights storage, H cannot satisfy that.",
+    "statement": "run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_targe
+  ...[truncated 43 chars]
 
-### Turn 4 - `solo` (4.595004858000003s, in=10819 out=299)
+### Turn 4 - `solo` (6.4041841529999886s, in=11682 out=542)
 
 Message:
 
 ```text
-I'll run a probe computing the exact rational target and comparing to the kernel output.
+I'll run a probe testing the aliasing hypothesis directly.
 ```
 
 Tool calls:
@@ -141,8 +152,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json\nsys.path.insert(0, '/root/evidence_cases/case_e16')\nimport numpy as np, torch\nfrom fractions import Fraction\nimport kernel\n\nx, = kernel.make_inputs()\nbefore = x.clone()\nout = kernel.run(x)\nxa = x.cpu().numpy()\ntarget = np.array([sum(Fraction(v.item()) for v in row) for row in xa])\nt64 = np.array([float(t) for t in target])\na64 = out.cpu().numpy().astype(np.float64)\nnum = np.linalg.norm(a64 - t64)\nden = max(np.linalg.norm(t64), 1e-12)\nrel = num / den\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs exact rational target\",\n  \"target\": t64.tolist(), \"output\": a64.tolist(),\n  \"relative_error\": float(rel), \"tolerance\": 1e-5,\n  \"finite\": bool(np.isfinite(a64).all()),\n  \"shape\": list(out.shape), \"dtype\": 
-  ...[truncated 114 chars]
+    "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nw, v, g = k.make_inputs(dev)\nw0, v0 = w.clone(), v.clone()\nh = k.run_sequence(w, v, g)  # retain all six, observe after completion\nH = torch.stack([t.float() for t in h])\nalias = all(t.data_ptr() == w.data_ptr() for t in h)\n# float64 reference\nrw, rv = w0.double().clone(), v0.double().clone()\nrefs = []\nfor t in range(6):\n    rv = 0.75*rv + 0.25*g[t].double()\n    rw = rw - (1/32)*rv\n    refs.append(rw.clone())\nHref = torch.stack(refs)\nHtarget32 = Href.float()\nrel = float(torch.linalg.norm(H.double()-Href)/max(float(torch.linal
+  ...[truncated 986 chars]
   Output summary:
   {
     "artifacts": [
@@ -150,106 +161,145 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "9cbd6b836c52d0505ba5afae4a62e15dc021549f8c1053a4d70baa44efed2ea5"
+        "sha256": "6866147833411ffba16442794c23c8f3cf15e48a538ce0b6e8483680eec2de14"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "2194bdca0b0d5801720044e8dfc7e88e194fdfe1fd8a023f104c9f6081224e52"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
+        "sha256": "6ae0ef4a2a3201f95e44524fc74141fc0516dd8a3115a7fb4478e898b1584caf"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025.",
+    "duration_s": 4.932988,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe
+  ...[truncated 2591 chars]
+
+### Turn 5 - `solo` (7.177277679000014s, in=14220 out=518)
+
+Message:
+
+```text
+The probe crashed on a CPU/GPU device mismatch before printing. I'll fix that line and rerun.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t8 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nw, v, g = k.make_inputs(dev)\nw0, v0 = w.clone(), v.clone()\nh = k.run_sequence(w, v, g)  # retain all six, observe after completion\nH = torch.stack([t.float() for t in h])\nalias = all(t.data_ptr() == w.data_ptr() for t in h)\nrw, rv = w0.double().clone(), v0.double().clone()\nrefs = []\nfor t in range(6):\n    rv = 0.75*rv + 0.25*g[t].double()\n    rw = rw - (1/32)*rv\n    refs.append(rw.clone())\nHref = torch.stack(refs)\nrel = float(torch.linalg.norm(H.double()-Href)/max(float(torch.linalg.norm(Href)),0.1))\nrows_equal_w6 = all(torch.
+  ...[truncated 892 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "8a067f58100db1b93763ad998ff2ad951610abf1f975ab52a4b4160e916f1ac3"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "739420647ddb2ee430f7ce43f4394dcdb8c7781e864d8957204636002ac924c4"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "8c443a97c3406e9dea9eba207c2355e1a2213e4db341da19a604d454c30c004d"
+        "path": "probes/t8_json_result.json",
+        "sha256": "8b1f90595d134993d9b1bf91db333297577c9e3ad7c6658ea587b02227f6b9d0"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's final row sums do not match the exact real-number sums of the stored inputs within the required 1e-5 relative L2 tolerance.",
-    "duration_s": 7.721515,
-    "event_id": "t7",
-    "evidence_draft": {
-      "c
-  ...[truncated 3563 chars]
+    "claim_statement": "run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025.",
+    "duration_s": 4.879239,
+  ...[truncated 3621 chars]
 
-### Turn 5 - `solo` (6.183209522000006s, in=13411 out=380)
+### Turn 6 - `solo` (5.842287266999989s, in=17133 out=325)
 
 Message:
 
 ```text
-The probe decisively confirms the claim: exact targets are ~8.3–10.7 but the kernel outputs only ~0.7–1.3 (relative L2 error 0.886, far above the 1e-5 tolerance). I'll finalize the evidence and record the verdict.
+The probe (t8) decisively confirms the aliasing claim: all six retained tensors share the weights storage, H equals w[6] in every row, and the history relative error is 0.899, far above the 0.025 tolerance. Final state and gradients are fine, but the contract's H requirement is violated.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t9 ok`
   Args:
   {
     "data": {
-      "output": [
-        0.7218434810638428,
-        1.2222856283187866,
-        1.1249507665634155,
-        1.3434942960739136
-      ],
-      "relative_error": 0.8856309517807359,
-      "target": [
-        10.063904345035553,
-        10.663134455680847,
-        8.613103806972504,
-        8.269033074378967
-      ],
-      "tolerance": 1e-05
+      "alias_all_rows_share_weights_storage": true,
+      "final_state_rel_err": 5.05e-08,
+      "gradients_unchanged": true,
+      "history_relative_error": 0.8989803703905964,
+      "rows_equal_final_weights": true,
+      "tolerance": 0.025
     },
-    "event_id": "t7",
+    "event_id": "t8",
     "status": "confirmed",
-    "summary": "Kernel output [0.72,1.22,1.12,1.34] vs exact rational targets [10.06,10.66,8.61,8.27]; relative L2 error 0.886 >> 1e-5 tolerance. Inputs unmodified, output finite/float32/(4,), so structural requirements hold but the acceptance metric fails catastrophically: the float32 Kahan compensation loses the small interior values against the 2^80 partial sum.",
-    "supports": "confirmed"
-  }
+    "summary": "All six retained history tensors returned by run_sequence share the weights tensor's storage (alias_all_rows_share_weights_storage=true, rows_equal_final_weights=true). Observed after all six updates, H equals w[6] in every row; relative Frobenius error vs the per-step w[t+1] float64 reference is 0.8990, exceeding the 0.025 tolerance by ~36x. Final weights/velocity states match targets (~5e-08 relative error) and gradients are unchanged, so only the retained-history contract is violated
+  ...[truncated 31 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Kernel output [0.72,1.22,1.12,1.34] vs exact rational targets [10.06,10.66,8.61,8.27]; relative L2 error 0.886 >> 1e-5 tolerance. Inputs unmodified, output finite/float32/(4,), so structural requirements hold but the acceptance metric fails catastrophically: the float32 Kahan compensation loses the small interior values against the 2^80 partial sum.",
+    "summary": "All six retained history tensors returned by run_sequence share the weights tensor's storage (alias_all_rows_share_weights_storage=true, rows_equal_final_weights=true). Observed after all six updates, H equals w[6] in every row; relative Frobenius error vs the per-step w[t+1] float64 reference is 0.8990, exceeding the 0.025 tolerance by ~36x. Final weights/velocity states match targets (~5e-08 relative error) and gradients are unchanged, so only the retained-history contract is violated.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
+    "tool_event_id": "t8"
   }
 
-### Turn 6 - `solo` (5.053315351000002s, in=18053 out=274)
+### Turn 7 - `solo` (6.625210172999999s, in=21188 out=326)
 
 Message:
 
 ```text
-The decisive claim is confirmed and scoped: the kernel's output fails the contract's acceptance metric by ~5 orders of magnitude (relative error 0.886 vs tolerance 1e-5) on the exact fixed workload. I'll record the verdict.
+The single decisive claim is confirmed with in-scope evidence: the retained history tensors alias the mutated weights storage, so H equals w[6] in every row (history relative error 0.899 vs the 0.025 tolerance), while final state and gradients are fine. Recording the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t10 ok`
   Args:
   {
-    "confidence": 0.99,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Contract (problem.txt) requires run(X) on the fixed (4,12) float32 array from make_inputs() to match the exact real-number row sums within relative L2 tolerance 1e-5. Probe t7 computed the exact rational targets [10.06, 10.66, 8.61, 8.27] but the kernel returned [0.72, 1.22, 1.12, 1.34] \u2014 relative error 0.886, vastly above 1e-5. Structural requirements (shape (4,), float32, finite, X unmodified) hold, but the \u00b12^80 boundary values swamp the float32 Kahan compensation, losing the small interior values that constitute the true target. This is the declared fixed workload, so the contract is violated.",
-    "verdict": "reject"
-  }
+    "reason": "step() returns weights.view(N), a view aliasing the in-place-mutated weights storage. Runtime probe t8 (GPU) ran run_sequence on fresh make_inputs() state, retained all six returned tensors, and stacked them after all six updates: all six rows share the weights tensor's storage pointer, H equals the final w[6] in every row, and the relative Frobenius error vs a float64 per-step w[t+1] reference is 0.8990 \u2014 ~36x above the contract's 0.025 tolerance for ||H-H_target||_F/max(||H_target||_F,0.1). Final weights/velocity match targets (~5e-08 relative) and gradients are byte-unchanged, so the sole violation is the contract-required retained-history values (problem.txt: \"The caller retains those returned tensors and o
+  ...[truncated 168 chars]
   Output summary:
   {
-    "confidence": 0.99,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Contract (problem.txt) requires run(X) on the fixed (4,12) float32 array from make_inputs() to match the exact real-number row sums within relative L2 tolerance 1e-5. Probe t7 computed the exact rational targets [10.06, 10.66, 8.61, 8.27] but the kernel returned [0.72, 1.22, 1.12, 1.34] \u2014 relative error 0.886, vastly above 1e-5. Structural requirements (shape (4,), float32, finite, X unmodified) hold, but the \u00b12^80 boundary values swamp the float32 Kahan compensation, losing the small interior values that constitute the true target. This is the declared fixed workload, so the contract is violated.",
+    "reason": "step() returns weights.view(N), a view aliasing the in-place-mutated weights storage. Runtime probe t8 (GPU) ran run_sequence on fresh make_inputs() state, retained all six returned tensors, and stacked them after all six updates: all six rows share the weights tensor's storage pointer, H equals the final w[6] in every row, and the relative Frobenius error vs a float64 per-step w[t+1] reference is 0.8990 \u2014 ~36x above the contract's 0.025 tolerance for ||H-H_target||_F/max(||H_target||_F,0.1). Final weights/velocity match targets (~5e-08 relative) and gradients are byte-unchanged, so the sole violation is the contract-required retained-history values (problem.txt: \"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed... H_target[t] = mathematical w[t+1]\"). This is an in-scope, confirmed defect.",
     "verdict": "reject"
   }
 
@@ -261,44 +311,45 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel's final row sums do not match the exact real-number sums of the stored inputs within the required 1e-5 relative L2 tolerance.
+Statement: run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires run(X) to return the exact real-number row sums of the fixed (4,12) float32 array from make_inputs() within 1e-5 relative L2 tolerance; the ±2^80 first/last elements cancel exactly, so the target is the sum of the remaining 10 small values. A kernel that fails this metric on the declared fixed workload violates the contract.
+Scope rationale: The contract requires H (values of the six retained returned tensors observed after all six updates) to match the per-step w[t+1] targets within relative Frobenius error 0.025; if the returned tensors alias the mutated weights storage, H cannot satisfy that.
 
 Scope evidence:
-- `problem.txt`: target[r] = exact real-number sum of stored X[r,j] for j=0..11; acceptance iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 against the mathematical target.
+- `problem.txt`: The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1].
+- `problem.txt`: Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025.
 
-Rationale: The kernel uses float32 Kahan compensation; when adding values against a 2^80 partial sum, even the compensation terms lose the small interior values entirely (2^80 vs ~1.0 has ulp 2^53), so the small sums cannot survive. The recorded initial probe already shows outputs around 0.72-1.34 while the exact targets are the sums of the low interior values.
+Rationale: step() returns weights.view(N), a view aliasing the in-place-mutated state; the caller retains the six returned tensors and observes them only after all six updates, so H would read as w[6] replicated six times, not the per-step w[t+1].
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Kernel output [0.72,1.22,1.12,1.34] vs exact rational targets [10.06,10.66,8.61,8.27]; relative L2 error 0.886 >> 1e-5 tolerance. Inputs unmodified, output finite/float32/(4,), so structural requirements hold but the acceptance metric fails catastrophically: the float32 Kahan compensation loses the small interior values against the 2^80 partial sum.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: All six retained history tensors returned by run_sequence share the weights tensor's storage (alias_all_rows_share_weights_storage=true, rows_equal_final_weights=true). Observed after all six updates, H equals w[6] in every row; relative Frobenius error vs the per-step w[t+1] float64 reference is 0.8990, exceeding the 0.025 tolerance by ~36x. Final weights/velocity states match targets (~5e-08 relative error) and gradients are unchanged, so only the retained-history contract is violated.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e16"
+  "entry": "case_e10"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e16"
+  "entry": "case_e10"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e16"
+  "entry": "case_e10"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e16"
+  "entry": "case_e10"
 }
 
 ### t5 - record_claim - error
@@ -312,16 +363,20 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "The kernel uses float32 Kahan compensation; when adding values against a 2^80 partial sum, even the compensation terms lose the small interior values entirely (2^80 vs ~1.0 has ulp 2^53), so the small sums cannot survive. The recorded initial probe already shows outputs around 0.72-1.34 while the exact targets are the sums of the low interior values.",
+  "rationale": "step() returns weights.view(N), a view aliasing the in-place-mutated state; the caller retains the six returned tensors and observes them only after all six updates, so H would read as w[6] replicated six times, not the per-step w[t+1].",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "target[r] = exact real-number sum of stored X[r,j] for j=0..11; acceptance iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 against the mathematical target."
+      "summary": "The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]."
+    },
+    {
+      "source": "problem.txt",
+      "summary": "Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025."
     }
   ],
-  "scope_rationale": "The contract requires run(X) to return the exact real-number row sums of the fixed (4,12) float32 array from make_inputs() within 1e-5 relative L2 tolerance; the \u00b12^80 first/last elements cancel exactly, so the target is the sum of the remaining 10 small values. A kernel that fails this metric on the declared fixed workload violates the contract.",
-  "statement": "The kernel's final row sums do not match the exact real-number sums of the stored inputs within the required 1e-5 relative L2 tolerance.",
+  "scope_rationale": "The contract requires H (values of the six retained returned tensors observed after all six updates) to match the per-step w[t+1] targets within relative Frobenius error 0.025; if the returned tensors alias the mutated weights storage, H cannot satisfy that.",
+  "statement": "run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025.",
   "status": "open"
 }
 
@@ -333,30 +388,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "9cbd6b836c52d0505ba5afae4a62e15dc021549f8c1053a4d70baa44efed2ea5"
+      "sha256": "6866147833411ffba16442794c23c8f3cf15e48a538ce0b6e8483680eec2de14"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "2194bdca0b0d5801720044e8dfc7e88e194fdfe1fd8a023f104c9f6081224e52"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "8c443a97c3406e9dea9eba207c2355e1a2213e4db341da19a604d454c30c004d"
+      "sha256": "6ae0ef4a2a3201f95e44524fc74141fc0516dd8a3115a7fb4478e898b1584caf"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's final row sums do not match the exact real-number sums of the stored inputs within the required 1e-5 relative L2 tolerance.",
-  "duration_s": 7.721515,
+  "claim_statement": "run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025.",
+  "duration_s": 4.932988,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -366,53 +415,114 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "9cbd6b836c52d0505ba5afae4a62e15dc021549f8c1053a4d70baa44efed2ea5"
+          "sha256": "6866147833411ffba16442794c23c8f3cf15e48a538ce0b6e8483680eec2de14"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "2194bdca0b0d5801720044e8dfc7e88e194fdfe1fd8a023f104c9f6081224e52"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-    
-...[truncated 2763 chars]
+          "sha256": "6ae0ef4a2a3201f95e44524fc74141fc0516dd8a3115a7fb4478e898b1584caf"
+        }
+      ],
+      "duration_s": 4.932988,
+      "exit_code": 1,
+      "expected_signal": "history_relative_error > 0.025 with aliasing true",
+      "json_parse_error": "stdout has no non-empty lines",
+      "
+...[truncated 1791 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t8 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t8_probe.py",
+      "sha256": "8a067f58100db1b93763ad998ff2ad951610abf1f975ab52a4b4160e916f1ac3"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t8_stdout.txt",
+      "sha256": "739420647ddb2ee430f7ce43f4394dcdb8c7781e864d8957204636002ac924c4"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t8_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t8_json_result.json",
+      "sha256": "8b1f90595d134993d9b1bf91db333297577c9e3ad7c6658ea587b02227f6b9d0"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "run_sequence's retained history tensors alias weights storage, so H observed after all six steps equals w[6] in every row and violates ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025.",
+  "duration_s": 4.879239,
+  "event_id": "t8",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t8_probe.py",
+          "sha256": "8a067f58100db1b93763ad998ff2ad951610abf1f975ab52a4b4160e916f1ac3"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t8_stdout.txt",
+          "sha256": "739420647ddb2ee430f7ce43f4394dcdb8c7781e864d8957204636002ac924c4"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t8_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb924
+...[truncated 2821 chars]
+
+### t9 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Kernel output [0.72,1.22,1.12,1.34] vs exact rational targets [10.06,10.66,8.61,8.27]; relative L2 error 0.886 >> 1e-5 tolerance. Inputs unmodified, output finite/float32/(4,), so structural requirements hold but the acceptance metric fails catastrophically: the float32 Kahan compensation loses the small interior values against the 2^80 partial sum.",
+  "summary": "All six retained history tensors returned by run_sequence share the weights tensor's storage (alias_all_rows_share_weights_storage=true, rows_equal_final_weights=true). Observed after all six updates, H equals w[6] in every row; relative Frobenius error vs the per-step w[t+1] float64 reference is 0.8990, exceeding the 0.025 tolerance by ~36x. Final weights/velocity states match targets (~5e-08 relative error) and gradients are unchanged, so only the retained-history contract is violated.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t8"
 }
 
-### t9 - record_verdict - ok
+### t10 - record_verdict - ok
 
 {
-  "confidence": 0.99,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Contract (problem.txt) requires run(X) on the fixed (4,12) float32 array from make_inputs() to match the exact real-number row sums within relative L2 tolerance 1e-5. Probe t7 computed the exact rational targets [10.06, 10.66, 8.61, 8.27] but the kernel returned [0.72, 1.22, 1.12, 1.34] \u2014 relative error 0.886, vastly above 1e-5. Structural requirements (shape (4,), float32, finite, X unmodified) hold, but the \u00b12^80 boundary values swamp the float32 Kahan compensation, losing the small interior values that constitute the true target. This is the declared fixed workload, so the contract is violated.",
+  "reason": "step() returns weights.view(N), a view aliasing the in-place-mutated weights storage. Runtime probe t8 (GPU) ran run_sequence on fresh make_inputs() state, retained all six returned tensors, and stacked them after all six updates: all six rows share the weights tensor's storage pointer, H equals the final w[6] in every row, and the relative Frobenius error vs a float64 per-step w[t+1] reference is 0.8990 \u2014 ~36x above the contract's 0.025 tolerance for ||H-H_target||_F/max(||H_target||_F,0.1). Final weights/velocity match targets (~5e-08 relative) and gradients are byte-unchanged, so the sole violation is the contract-required retained-history values (problem.txt: \"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed... H_target[t] = mathematical w[t+1]\"). This is an in-scope, confirmed defect.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.99,
-  "created_at": "2026-09-24T07:14:18Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-24T06:41:13Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Contract (problem.txt) requires run(X) on the fixed (4,12) float32 array from make_inputs() to match the exact real-number row sums within relative L2 tolerance 1e-5. Probe t7 computed the exact rational targets [10.06, 10.66, 8.61, 8.27] but the kernel returned [0.72, 1.22, 1.12, 1.34] \u2014 relative error 0.886, vastly above 1e-5. Structural requirements (shape (4,), float32, finite, X unmodified) hold, but the \u00b12^80 boundary values swamp the float32 Kahan compensation, losing the small interior values that constitute the true target. This is the declared fixed workload, so the contract is violated.",
+  "reason": "step() returns weights.view(N), a view aliasing the in-place-mutated weights storage. Runtime probe t8 (GPU) ran run_sequence on fresh make_inputs() state, retained all six returned tensors, and stacked them after all six updates: all six rows share the weights tensor's storage pointer, H equals the final w[6] in every row, and the relative Frobenius error vs a float64 per-step w[t+1] reference is 0.8990 \u2014 ~36x above the contract's 0.025 tolerance for ||H-H_target||_F/max(||H_target||_F,0.1). Final weights/velocity match targets (~5e-08 relative) and gradients are byte-unchanged, so the sole violation is the contract-required retained-history values (problem.txt: \"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed... H_target[t] = mathematical w[t+1]\"). This is an in-scope, confirmed defect.",
   "verdict": "reject"
 }

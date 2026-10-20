@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_t`
-- Turns: 11
-- Tool events: 18
+- Entry: `case_n`
+- Turns: 12
+- Tool events: 17
 - Claims: 2
 - Description updates: 2
-- LLM time: 101.522s across 10 calls | tokens: in=237362 out=6878 total=244240
+- LLM time: 106.061s across 11 calls | tokens: in=265974 out=6221 total=272195
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_t",
+    "entry": "case_n",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 
-### Turn 2 - `describer` (15.259886613999996s, in=4892 out=1123)
+### Turn 2 - `describer` (14.080666487999991s, in=4963 out=1010)
 
 Message:
 
 ```text
-I've reviewed the full kernel and problem text. The kernel computes a 32-point midpoint quadrature per row, while the contract defines the reference as the exact continuous integral in float64 — the main risk surface is quadrature error for frequencies up to 220 rad/s, which far exceeds the Nyquist limit of the 32-point grid. I'll record the structured description model now.
+I have the full context. The kernel is a straightforward degree-48 Horner evaluation in float32 with FP fusion disabled, on an adversarially constructed workload (catastrophic cancellation: coefficients[0] cancels the higher-degree terms at the anchor point). I'll record the description model now.
 ```
 
 Tool calls:
@@ -75,38 +75,33 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the given closed form (cos p - cos(p+f))/f.",
-      "Only the fixed float32 inputs from make_inputs() (seed 711076; a~N(0,0.1), f~U(0.5,220), p~U(-pi,pi)) are in scope.",
-      "Output: finite float32 tensor of shape (4,).",
-      "Numeric contract: relative L2 error ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035.",
-      "FP multiply/add fusion is disabled by the launch, so the implementation's float32 arithmetic path is fixed."
-    ],
-    "kernel_model": [
-      "Each of 4 Triton programs handles one row; samples t_i=(i+0.5)/32 for i in 0..31, evaluates f_r(t_i) in float32, and stores the mean as the integral estimate (lines 10-22).",
-  ...[truncated 2521 chars]
+      "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
+      "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
+      "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
+      "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
+      "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construc
+  ...[truncated 3273 chars]
   Output summary:
   {
     "contract_model": [
-      "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the given closed form (cos p - cos(p+f))/f.",
-      "Only the fixed float32 inputs from make_inputs() (seed 711076; a~N(0,0.1), f~U(0.5,220), p~U(-pi,pi)) are in scope.",
-      "Output: finite float32 tensor of shape (4,).",
-      "Numeric contract: relative L2 error ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035.",
-      "FP multiply/add fusion is disabled by the launch, so the implementation's float32 arithmetic path is fixed."
+      "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
+      "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
+      "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
+      "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
+      "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construction + 0.003 offset), making the reference value small (~0.003 plus perturbation terms) relative to intermediate Horner magnitudes."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Each of 4 Triton programs handles one row; samples t_i=(i+0.5)/32 for i in 0..31, evaluates f_r(t_i) in float32, and stores the mean as the integral estimate (lines 10-22).",
-      "The 32-point midpoint sum is an approximation method; the contract reference is the exact integral, so discretization error counts against the tolerance.",
-      "run() allocates a float32 (4,) output on the input device and launches grid (4,) with num_warps=1, TERMS=8, GRID=32, enable_fp_fusion=False (lines 25-29).",
-      "Inputs are read as float32 scalars per (row,k
-  ...[truncated 2221 chars]
+      "Single Triton program (grid (1,), BLOCK=32, N=8) handles all 8 rows in one block with masking; one thread lane per row is not required -- arange(0,32) with mask row<8.",
+      "Degree-48 Horner scheme: result star
+  ...[truncated 2973 chars]
 
-### Turn 3 - `skeptic` (9.547851047999984s, in=11901 out=737)
+### Turn 3 - `skeptic` (11.141415835999993s, in=12706 out=737)
 
 Message:
 
 ```text
-The central testable risk is whether the 32-point midpoint quadrature, evaluated in float32, stays within the 0.035 relative-L2 tolerance against the float64 continuous-integral reference for the fixed seed-711076 workload. I'll record that as an in-scope claim, plus a secondary claim about float32 evaluation of sin at large angles contributing rounding on top of quadrature error.
+The main attack surface is clear: engineered catastrophic cancellation against a tight 2e-4 relative-L2 float64-reference tolerance. I'll record the decisive claims.
 ```
 
 Tool calls:
@@ -114,12 +109,12 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "Frequencies up to 220 rad/s (~35 cycles over [0,1]) approach or exceed the resolution of a 32-point midpoint grid (sample spacing 1/32, ~1 sample per cycle at f\u22482\u03c0\u00b732\u2248201), so individual sine terms may be severely aliased; per-term quadrature error can be O(amplitude) with amplitudes ~0.1 and 8 terms per row, potentially pushing the relative L2 error past the 0.035 bound. This is a numeric question requiring an experiment.",
+    "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09 (1.015625^48). Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement of ||output-reference||_2 vs max(||reference||_2, 0.001*sqrt(8)).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The reference is the exact continuous integral in float64 with closed form (cos p - cos(p+f))/f, and the 32-point grid is only an approximation method; the contract is ||output-reference||_2/max(||reference||_2,1e-12) <= 0.035 for th
+        "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' 
   ...[truncated 634 chars]
   Output summary:
   {
@@ -129,28 +124,28 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "The kernel computes value = 1 + sum(a*sin(f*t+p)) in float32 at angles up to ~220+\u03c0, where tl.sin's argument reduction and float32 rounding add error on the order of 1e-6\u20131e-4 per sample; this is small compared to expected quadrature error but could matter if quadrature error happens to be near the 0.035 boundary.",
+    "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly close to sqrt(8)*0.003 \u2248 0.0085 (plus perturbation terms from point noise 4e-5 times derivative scale, which could be small or large). If ||reference||_2 is below 0.0028, the floor denominator looser/tighter changes whether the 2e-4 bound is on absolute error ~5.6e-7 vs relative error. The exact reference norm must be measured to interpret any error measurement correctly.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract requires finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload; the launch explicitly disables FP fusion, so the float32 arithmetic path (including sin evaluation) is fixed and its rounding is part of the measured error."
+        "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
       }
     ],
-    "statement": "Float32 evaluation inside the kernel (tl.sin at argum
-  ...[truncated 202 chars]
+    "sta
+  ...[truncated 282 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (7.298900900999996s, in=13725 out=734)
+### Turn 4 - `skeptic` (12.478403997999976s, in=14593 out=778)
 
 Message:
 
 ```text
-Both prior claim attempts failed for missing `scope_rationale`; I'll re-record them properly.
+The previous two claim attempts were rejected for missing scope_rationale. I'll re-send them with the required field filled in.
 ```
 
 Tool calls:
@@ -158,67 +153,64 @@ Tool calls:
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "Frequencies up to 220 rad/s (~35 cycles over [0,1]) approach the Nyquist limit of a 32-point grid (~1 sample per cycle at f\u22482\u03c0\u00b732\u2248201), so sine terms may be severely aliased; per-term quadrature error can be O(amplitude) with amplitudes ~0.1 and 8 terms per row, potentially pushing relative L2 error past 0.035. Numeric question requiring an experiment.",
+    "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is the exact float64 continuous integral with closed form (cos p - cos(p+f))/f; the 32-point grid is only an approximation method, and the contract is relative L2 error <= 0.035 for the fixed make_inputs() workload, so discretization error counts against the tolerance."
-      },
-      {
-        "sour
-  ...[truncated 860 chars]
+        "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) wit
+  ...[truncated 830 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Frequencies up to 220 rad/s (~35 cycles over [0,1]) approach the Nyquist limit of a 32-point grid (~1 sample per cycle at f\u22482\u03c0\u00b732\u2248201), so sine terms may be severely aliased; per-term quadrature error can be O(amplitude) with amplitudes ~0.1 and 8 terms per row, potentially pushing relative L2 error past 0.035. Numeric question requiring an experiment.",
+    "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference is the exact float64 continuous integral with closed form (cos p - cos(p+f))/f; the 32-point grid is only an approximation method, and the contract is relative L2 error <= 0.035 for the fixed make_inputs() workload, so discretization error counts against the tolerance."
+        "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) with float64 reference. 'Arbitrary alternative coefficients or points are outside the scope.'"
       },
       {
-        "source": "kernel.py make_inputs",
-        "summary": "In-scope inputs draw frequencies from U(0.5, 220) with amplitudes ~N(0, 0.1), exactly the undersampled regime for a 32-point grid."
+        "source": "kernel.py make_inputs_numpy",
+        "summary": "coefficients[:,0] is constructed in float64 to cancel sum of coefficients[:,1:]*anchor^k plus 0.003 offset, and points are anchor \u00b1 4e-5 noise -- a designed near-cancellation workload."
       }
     ],
-    "scope_rationale": "The contract defines the reference as the exact continuous integral in float64 and requires relative L2 error <= 0.035 for the fixed make_inputs() (seed 711076) workload, wh
-  ...[truncated 494 chars]
+    "scope_ratio
+  ...[truncated 464 chars]
 - `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "The kernel evaluates sin at arguments up to ~220+\u03c0 in float32; tl.sin argument reduction and float32 accumulation over 32 samples and 8 terms add rounding error (order 1e-6\u20131e-4 per sample). Small compared to expected quadrature error, but decisive if the quadrature result is near the 0.035 boundary.",
+    "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 \u2248 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract requires finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, and the launch disables FP fusion, so the float32 arithmetic path including sin evaluation is fixed and its rounding is part of the measured error."
+        "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
       }
     ],
-    "scope_rationale": "The contract mandates a finite float32 output within 0.035 relative L2
-  ...[truncated 431 chars]
+    "scope_rationale": "Interpreting the contract's error metric ma
+  ...[truncated 487 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "The kernel evaluates sin at arguments up to ~220+\u03c0 in float32; tl.sin argument reduction and float32 accumulation over 32 samples and 8 terms add rounding error (order 1e-6\u20131e-4 per sample). Small compared to expected quadrature error, but decisive if the quadrature result is near the 0.035 boundary.",
+    "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 \u2248 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract requires finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, and the launch disables FP fusion, so the float32 arithmetic path including sin evaluation is fixed and its rounding is part of the measured error."
+        "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
       }
     ],
-    "scope_rationale": "The contract mandates a finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, so any float32 rounding contribution that could push a near-boundary result across the threshold is in scope.",
-    "statement": "Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary re
-  ...[truncated 65 chars]
+    "scope_rationale": "Interpreting the contract's error metric max(||reference||_2, 0.001*sqrt(8)) requires knowing the actual reference norm on the fixed workload; this directly determines whether the 2e-4 tolerance is effectively relative or absolute for the sole in-scope input.",
+    "statement": "The reference L2 norm ||reference||_2 on this workload is below or near the 0.001*sqrt(8) \u2248 0.00283 floor, so the tolerance is effectively an abso
+  ...[truncated 121 chars]
 
-### Turn 5 - `describer` (15.814744947000008s, in=15436 out=1152)
+### Turn 5 - `describer` (17.860461082s, in=16466 out=1186)
 
 Message:
 
 ```text
-The description model is already recorded and no description tasks are open. I'll add one refinement that helps the Experimenter design probes: the per-term midpoint-quadrature error for a sine term has an exact aliasing characterization (the midpoint sum of sin(f t + p) equals (sin(p' stuff)/...)), which lets the error be decomposed per row/term rather than treated as opaque.
+The description model is already recorded and no description tasks are open. One quantitative refinement is worth adding to guide the Experimenter: the reference value is not just the 0.003 offset — point noise of 4e-5 multiplied by the polynomial's derivative at the anchor (which scales like sum k·coeff·anchor^(k-1), plausibly O(100–500) for degree 48 with N(0,1) coefficients) contributes perturbations of order 0.004–0.02 per row, comparable to or larger than the 0.003 offset. This affects both open claims and I should record it.
 ```
 
 Tool calls:
@@ -227,69 +219,60 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the closed form (cos p - cos(p+f))/f.",
-      "Only the fixed float32 inputs from make_inputs() (seed 711076; a~N(0,0.1), f~U(0.5,220), p~U(-pi,pi)) are in scope.",
-      "Output: finite float32 tensor of shape (4,).",
-      "Numeric contract: relative L2 error <= 0.035 with denominator max(||reference||_2, 1e-12)."
+      "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
+      "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
     ],
-    "impact_on_claims": [
-      "Supports c1: per-term aliasing error can be computed exactly from the input values in float64, so the quadrature component of c1 is decidable deterministically before any GPU run.",
-      "Bounds c2: any observed float32-vs-float64-midpoint discrepancy much smaller than the aliasing term indicates c
-  ...[truncated 2946 chars]
+    "kernel_model": [
+      "Unchanged: single-block float32 Horner, degree 48, enable_fp_fusion=False, masked store of 8 rows."
+    ],
+    "open_questions": [
+      "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
+      "What relative L2 error does the float32 Horner kernel actually achieve on this w
+  ...[truncated 2304 chars]
   Output summary:
   {
     "contract_model": [
-      "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the closed form (cos p - cos(p+f))/f.",
-      "Only the fixed float32 inputs from make_inputs() (seed 711076; a~N(0,0.1), f~U(0.5,220), p~U(-pi,pi)) are in scope.",
-      "Output: finite float32 tensor of shape (4,).",
-      "Numeric contract: relative L2 error <= 0.035 with denominator max(||reference||_2, 1e-12)."
+      "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
+      "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
     ],
-    "impact_on_claims": [
-      "Supports c1: per-term aliasing error can be computed exactly from the input values in float64, so the quadrature component of c1 is decidable deterministically before any GPU run.",
-      "Bounds c2: any observed float32-vs-float64-midpoint discrepancy much smaller than the aliasing term indicates c2 is not decisive for this workload."
-    ],
+    "impact_on_claims": [],
     "kernel_model": [
-      "Each of 4 Triton programs handles one row; it samples t_i=(i+0.5)/32, accumulates value=1+sum_k a*sin(f*t+p) in float32, and stores tl.sum(value)/32 (kernel.py lines 10-22).",
-      "For a single term, the exact 32-point midpoint sum has closed form: sum_{i=0}^{31} sin(f*(i+0.5)/32 + p) = sin(p) * sin(32*f/64)/sin(f/64) with the mid
-  ...[truncated 2610 chars]
+      "Unchanged: single-block float32 Horner, degree 48, enable_fp_fusion=False, masked store of 8 rows."
+    ],
+    "open_questions": [
+      "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
+      "What relative L2 error does the float32 Horner kernel actually achieve on this workload (needs Experimenter run)?",
+      "Does Triton with enable_fp_fusion=False round each multiply and add exactly as assumed?",
+      "What is the empirical scale of P'(a) per row (needed to decide whether the eps*P'(a) perturbation dominates the 0.003 offset in the reference) and the corresponding per-row error scale?"
+    ],
+    "resolved_tasks": [],
+    "risk_map": [
+      "R
+  ...[truncated 1994 chars]
 
-### Turn 6 - `skeptic` (7.441982153999987s, in=23768 out=251)
+### Turn 6 - `skeptic` (3.8449684450000063s, in=24129 out=88)
 
 Message:
 
 ```text
-Both in-scope claims (c1: aliasing/quadrature error; c2: float32 rounding near boundary) already capture the highest-risk testable hypotheses, and the description model now provides the exact per-term closed-form decomposition the Experimenter can use. No additional distinct failure surfaces remain for this fixed workload.
+Both decisive claims (c1, c2) are already recorded and await runtime measurement. Before deciding whether anything new is needed, I'll check whether the Experimenter has produced any probe results yet.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t11 ok`
-  Args:
-  {
-    "reason": "The two open in-scope claims c1 and c2 fully cover the decidable failure surfaces for this fixed-seed workload: quadrature/aliasing error of the 32-point midpoint rule against the float64 continuous-integral reference (decidable deterministically via the per-term closed form), and float32/tl.sin arithmetic rounding on top of it. The kernel has no other contract-relevant behaviors (single fixed workload, shape hardcoded, no dtype/config variation in scope). No new evidence has arrived that exposes an uncovered, testable in-scope problem.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
+- `retrieve_experiment_history -> t11 ok`
   Output summary:
   {
-    "decision": "no_new_claims",
-    "reason": "The two open in-scope claims c1 and c2 fully cover the decidable failure surfaces for this fixed-seed workload: quadrature/aliasing error of the 32-point midpoint rule against the float64 continuous-integral reference (decidable deterministically via the per-term closed form), and float32/tl.sin arithmetic rounding on top of it. The kernel has no other contract-relevant behaviors (single fixed workload, shape hardcoded, no dtype/config variation in scope). No new evidence has arrived that exposes an uncovered, testable in-scope problem.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 10,
-    "turn": 6
+    "exists": false,
+    "source": "/root/trace_runs/extension_low32_r2/numerical_challenges/case_n/debate/tool_events.jsonl"
   }
 
-### Turn 7 - `experimenter` (9.714963329s, in=24884 out=870)
+### Turn 7 - `experimenter` (8.130114902000003s, in=24585 out=466)
 
 Message:
 
 ```text
-I'll launch two independent probes: c1 runs the kernel on the fixed seed workload and compares to the float64 closed-form continuous integral; c2 isolates float32 arithmetic error by comparing the kernel output against a float64 evaluation of the same 32-point midpoint rule.
+I'll launch one probe that runs the kernel on the exact make_inputs() workload, computes the float64 reference, and reports the reference norm and the relative L2 error — enough to settle both c1 and c2. I'll run it as a c1 claim probe (the error measurement), then use the same data to record c2's norm measurement.
 ```
 
 Tool calls:
@@ -298,8 +281,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import numpy as np, torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/numerical_cases/case_t/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nA, F, P = k.make_inputs()\nout = k.run(A, F, P).cpu().numpy().astype(np.float64)\n\na = A.cpu().numpy().astype(np.float64)\nf = F.cpu().numpy().astype(np.float64)\np = P.cpu().numpy().astype(np.float64)\nref = 1.0 + np.sum(a*(np.cos(p)-np.cos(p+f))/f, axis=1)\n\nrel = np.linalg.norm(out-ref)/max(np.linalg.norm(ref),1e-12)\nprint(json.dumps({\n \"kernel_output\": out.tolist(),\n \"reference\": ref.tolist(),\n \"relative_l2\": rel,\n \"tolerance\": 0.035,\n \"exceeds\": bool(rel > 0.035),\n \"per_row_abs_err\": (out-ref).tolist(),\n \"fre
-  ...[truncated 320 chars]
+    "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_n\")\nimport kernel as K\n\ncoefficients, points = K.make_inputs(\"cuda\")\nout = K.run(coefficients, points)\ntorch.cuda.synchronize()\n\n# float64 reference from stored float32 values\nc64 = coefficients.detach().cpu().numpy().astype(np.float64)\np64 = points.detach().cpu().numpy().astype(np.float64)\nref = np.array([np.sum(c64[i] * p64[i] ** np.arange(49)) for i in range(8)])\n\noutn = out.detach().cpu().numpy().astype(np.float64)\nerr_norm = np.linalg.norm(outn - ref)\nref_norm = np.linalg.norm(ref)\nfloor = 0.001 * np.sqrt(8)\ndenom = max(ref_norm, floor)\nrel = err_norm / denom\nresult = {\n    \"per_row_reference\": ref.tolist(),\n    \"per_row_kernel\": outn.tolist
+  ...[truncated 575 chars]
   Output summary:
   {
     "artifacts": [
@@ -307,13 +290,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t12_probe.py",
-        "sha256": "e1a9625dbd15f8b062fcb2f874c51151140916d71d4513cf037091d55db46b8d"
+        "sha256": "ca520dd3ec7e9d1d4f3a4e47be06797edd52d8be98a56a719fa6e07c2589b713"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t12_stdout.txt",
-        "sha256": "847fca8d84884704c143fbd17ed15b9d0994b9fb82ef6331c24acfbea44f6c47"
+        "sha256": "9c0ea33c5ff73fd5e97eaa71e39019238f4503b2cbeccbb1ef11fd668c1a6fe5"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -325,192 +308,142 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t12_json_result.json",
-        "sha256": "31c1406d000ff40d4a35080af3e28a987ad5e6df2be358d4144fbc9f680de581"
+        "sha256": "9de5913cf2670959aab9f757d45317d98365b72267702a08c7dcf388e6e1ddf4"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For the fixed make_inputs() workload (seed 711076), the 32-point midpoint-rule quadrature in _integrate produces an output whose relative L2 error against the float64 closed-form continuous integral exceeds 0.
-  ...[truncated 4402 chars]
-- `run_claim_probe -> t13 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import numpy as np, torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/numerical_cases/case_t/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nA, F, P = k.make_inputs()\nout = k.run(A, F, P).cpu().numpy().astype(np.float64)\n\na = A.cpu().numpy().astype(np.float64)\nf = F.cpu().numpy().astype(np.float64)\np = P.cpu().numpy().astype(np.float64)\nt = (np.arange(32)+0.5)/32.0\nmid64 = 1.0 + (a[:,None,:]*np.sin(f[:,None,:]*t[None,:,None]+p[:,None,:])).sum(axis=2).mean(axis=1)\n\n# float64 closed-form reference and its relative error, to see how close to boundary\nref = 1.0 + np.sum(a*(np.cos(p)-np.cos(p+f))/f, axis=1)\nrel_vs_ref = np.linalg.norm(out-ref)/max(np.linalg.norm(ref),1
-  ...[truncated 674 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t13_probe.py",
-        "sha256": "52573bb225bc54be5823e16f111c50ce1bdf8f8dbae1c8163fc04a38e48497cb"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t13_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t13_stderr.txt",
-        "sha256": "c7da874d67fce18090949996dc4de070248558450086081e32ec320a2309570d"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary result across the 0.035 tolerance threshold.",
-    "duration_s": 4.742237,
-    "event_id": "t13",
-    "evidence_draft": {
-      "claim_id": "c2",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtim
-  ...[truncated 2095 chars]
+    "claim_statement": "On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.",
+    "duration_s": 5.334492,
+    "event_id": "t12",
+  
+  ...[truncated 5707 chars]
 
-### Turn 8 - `experimenter` (11.320100529000001s, in=29071 out=930)
+### Turn 8 - `experimenter` (11.14058511799999s, in=28825 out=672)
 
 Message:
 
 ```text
-Finalizing c1 (relative L2 = 0.1189 > 0.035, contract violated) and relaunching a fixed c2 probe — the previous one crashed on a variable name typo.
+The probe results are in: relative L2 error is 4.73e-4, above the 2e-4 tolerance (confirms c1), and ||reference||_2 = 0.0158, well above the 0.00283 floor (rebuts c2). I'll finalize c1's evidence and record the same measurement as evidence against c2.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t14 ok`
+- `finalize_probe_evidence -> t13 ok`
   Args:
   {
     "data": {
-      "exceeds": true,
-      "freqs_gt_100": 21,
-      "freqs_gt_150": 15,
-      "kernel_output": [
-        1.1304664611816406,
-        0.7976996898651123,
-        0.9610635042190552,
-        0.9959263205528259
-      ],
-      "max_amp": 0.21128395199775696,
+      "all_finite": true,
+      "denominator": 0.01581703756880129,
+      "err_L2": 7.480275918007203e-06,
+      "exceeds_tolerance": true,
+      "floor_0p001sqrt8": 0.0028284271247461905,
+      "floor_active": false,
+      "max_abs_row_err": 5.79933538968902e-06,
       "per_row_abs_err": [
-        0.11961456700746065,
-        -0.20251898633021437,
-        -0.03782474081449838,
-        -0.001905000850737748
+        5.876572273244562e-07,
+        -5.935299292048057e-07,
+        -8.360940446650034e-07,
+        -3.5024364757885174e-06,
+        1.0896153870287861e-06,
+        5.79933538968902e-06,
+        2.950964317349758e-07,
+        -2.717381081041026e-06
       ],
-      "reference": [
-        1.01085189417418,
-        1.0002186761953267,
-        0.9988882450335536,
-        0.9978313214035637
-      ],
-      "relative_l2": 0.11888436797488026,
-      "tolerance": 0.035
+      "ref_L2": 0.01581703756880129,
+      "relative_L2": 0.0004729252165880834,
+      "tolerance": 0.0002
     },
     "event_id": "t12",
     "status": "confirmed",
-    "summary": "Ran the kernel on the fixed seed-711076 workload and compared to the float64 closed-form continuous integral: relative L2 error = 0.11888, far above t
-  ...[truncated 269 chars]
+    "summary": "Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored
+  ...[truncated 406 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Ran the kernel on the fixed seed-711076 workload and compared to the float64 closed-form continuous integral: relative L2 error = 0.11888, far above the 0.035 tolerance (3.4x). 21 of 32 frequencies exceed 100 rad/s (15 exceed 150), confirming high-frequency aliasing as predicted. Output is finite float32 of shape (4,); the error is a quadrature/aliasing failure, not a shape/dtype issue.",
+    "summary": "Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored float32 inputs. Relative L2 error = 4.729e-4, which exceeds the 2e-4 tolerance by ~2.4x. ||output-reference||_2 = 7.48e-6, denominator = ||reference||_2 = 0.015817 (floor not active). All outputs finite, shape (8,). The catastrophic-cancellation concern is realized: float32 Horner per-row absolute errors of 6e-7 to 5.8e-6 against reference values of 3e-5 to 9e-3 magnitude.",
     "supports": "confirmed",
     "tool_event_id": "t12"
   }
-- `run_claim_probe -> t15 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import numpy as np, torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/numerical_cases/case_t/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nA, F, P = k.make_inputs()\nout = k.run(A, F, P).cpu().numpy().astype(np.float64)\n\na = A.cpu().numpy().astype(np.float64)\nf = F.cpu().numpy().astype(np.float64)\np = P.cpu().numpy().astype(np.float64)\nt = (np.arange(32)+0.5)/32.0\nmid64 = 1.0 + (a[:,None,:]*np.sin(f[:,None,:]*t[None,:,None]+p[:,None,:])).sum(axis=2).mean(axis=1)\n\nref = 1.0 + np.sum(a*(np.cos(p)-np.cos(p+f))/f, axis=1)\nrel_vs_ref = np.linalg.norm(out-ref)/max(np.linalg.norm(ref),1e-12)\ndiff = out - mid64\nrel_fp32 = np.linalg.norm(diff)/max(np.linalg.norm(mid64),1
-  ...[truncated 649 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t15_probe.py",
-        "sha256": "ffef5968bd7ba14122f090c2fce98e2daf75082db13e1975863a90de00e7fbdf"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t15_stdout.txt",
-        "sha256": "e835ad33f599ca879ab862e44d5c4fcad49ba7d8c39e6a13dfd0078312048714"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t15_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t15_json_result.json",
-        "sha256": "a18f2a23828de1f651b5a9243659d662e86178b69a57e442dbc3d3c7c65b6115"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary r
-  ...[truncated 3862 chars]
 
-### Turn 9 - `experimenter` (13.35902172500002s, in=36322 out=491)
+### Turn 9 - `experimenter` (8.94195757899999s, in=34642 out=477)
 
 Message:
 
 ```text
-The fixed c2 probe (event t15) succeeded. The float32 arithmetic error (kernel vs float64 evaluation of the same midpoint rule) is tiny: max absolute 3.3e-7, relative component 2e-7, just 1.7e-6 of the total error, and the total error (0.1189) is nowhere near the 0.035 boundary — so float32 rounding is decisively not a boundary-shifting factor. This rebuts c2. After that, all claims are covered and I can yield to the Judge.
+The t12 probe already measured ||reference||_2 = 0.015817, well above the 0.00283 floor (floor_active=false), which rebuts c2. I'll attach that evidence and update the claim status.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t16 ok`
+- `append_evidence -> t14 ok`
   Args:
   {
+    "claim_id": "c2",
     "data": {
-      "fp32_component_decisive": false,
-      "fp32_component_fraction_of_total": 1.6709175556052667e-06,
-      "max_abs_fp32_arith_err": 3.27387229326348e-07,
-      "rel_fp32_component": 1.9864597753626398e-07,
-      "rel_quadrature_component": 0.11888437366881217,
-      "rel_total_vs_ref": 0.11888436797488026,
-      "tolerance": 0.035
+      "denominator": 0.01581703756880129,
+      "floor_0p001sqrt8": 0.0028284271247461905,
+      "floor_active": false,
+      "per_row_reference": [
+        0.003171035095915986,
+        0.00777876125453858,
+        -0.0028239472311506475,
+        0.0069309926708507885,
+        0.0015410017542418775,
+        -3.822426214750152e-05,
+        -0.009263333731685641,
+        -0.005951071376243178
+      ],
+      "ratio_ref_over_floor": 5.591,
+      "ref_L2": 0.01581703756880129
     },
-    "event_id": "t15",
-    "status": "rebutted",
-    "summary": "Isolated float32 arithmetic error by comparing the kernel output to a float64 evaluation of the same 32-point midpoint rule: max absolute discrepancy 3.3e-7, relative fp32 component 2.0e-7 \u2014 only 1.7e-6 of the total relative error (0.1189), which itself is 3.4x the 0.035 tolerance, not near the boundary. Float32/tl.sin rounding therefore cannot shift this workload's result across the toler
-  ...[truncated 100 chars]
+    "kind": "runtime_probe",
+    "summary": "Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. T
+  ...[truncated 277 chars]
   Output summary:
   {
-    "claim_id": "c2",
-    "claim_status": "rebutted",
-    "evidence_id": "c2.e1",
-    "summary": "Isolated float32 arithmetic error by comparing the kernel output to a float64 evaluation of the same 32-point midpoint rule: max absolute discrepancy 3.3e-7, relative fp32 component 2.0e-7 \u2014 only 1.7e-6 of the total relative error (0.1189), which itself is 3.4x the 0.035 tolerance, not near the boundary. Float32/tl.sin rounding therefore cannot shift this workload's result across the tolerance threshold; the failure is entirely quadrature/aliasing error (c1).",
-    "supports": "rebutted",
-    "tool_event_id": "t15"
+    "id": "c2.e1",
+    "summary": "Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. This contradicts c2's claim that the reference norm is below or near the floor. Per-row reference values range from -3.8e-5 to 0.00926, confirming the eps*P'(a) derivative-scale perturbation dominates over the 0.003 offset.",
+    "supports": "rebutted"
   }
 
-### Turn 10 - `skeptic` (6.032807314000024s, in=39899 out=272)
+### Turn 10 - `experimenter` (3.8994973439999967s, in=35339 out=74)
 
 Message:
 
 ```text
-The evidence is decisive: c1 is confirmed (relative L2 = 0.1189, 3.4× the 0.035 tolerance, on the fixed in-scope workload), and c2 was cleanly rebutted with a decomposition probe. No uncovered, testable in-scope problem remains.
+The c2 evidence is already attached; I just need to update its status to reflect the rebutting evidence, then all claims are covered.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t17 ok`
+- `update_claim_status -> t15 ok`
   Args:
   {
-    "reason": "Final review: the two claims cover all contract-relevant failure surfaces for the fixed seed-711076 workload. c1 is confirmed by probe t12 \u2014 the kernel's 32-point midpoint estimate has relative L2 error 0.1189 versus the float64 closed-form continuous integral, well above the 0.035 tolerance, with 21/32 frequencies above 100 rad/s confirming aliasing as the cause. c2 was rebutted by probe t15 \u2014 float32/tl.sin arithmetic error is ~3e-7 (1.7e-6 of total error), decisively not boundary-shifting. The output is finite float32 of shape (4,), so shape/dtype obligations are met. No new evidence exposes an uncovered, material, testable in-scope problem.",
+    "claim_id": "c2",
+    "status": "rebutted"
+  }
+  Output summary:
+  {
+    "id": "c2",
+    "status": "rebutted"
+  }
+
+### Turn 11 - `skeptic` (5.347648781000004s, in=34904 out=257)
+
+Message:
+
+```text
+The decisive evidence is in: c1 is confirmed — the kernel's relative L2 error (4.73e-4) exceeds the contractual 2e-4 tolerance on the sole in-scope workload, with the floor inactive. c2 is rebutted. Both claims are fully evidenced with scope ties to problem.txt; the probe used the exact make_inputs() inputs and a float64 reference as the contract requires. No new material issues remain.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t16 ok`
+  Args:
+  {
+    "reason": "Final review: the only in-scope contract requirement (relative L2 <= 0.0002 on the fixed make_inputs() workload vs float64 reference) is directly measured by probe t12 as violated (4.729e-4, floor inactive, all finite, shape (8,)). Claim c1 is confirmed with in-scope evidence; c2 is rebutted. The evidence already covers every stated contract element (finiteness, shape, error metric, denominator floor, float64 reference from stored float32 inputs), so no additional testable in-scope claims are warranted.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -519,41 +452,41 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the two claims cover all contract-relevant failure surfaces for the fixed seed-711076 workload. c1 is confirmed by probe t12 \u2014 the kernel's 32-point midpoint estimate has relative L2 error 0.1189 versus the float64 closed-form continuous integral, well above the 0.035 tolerance, with 21/32 frequencies above 100 rad/s confirming aliasing as the cause. c2 was rebutted by probe t15 \u2014 float32/tl.sin arithmetic error is ~3e-7 (1.7e-6 of total error), decisively not boundary-shifting. The output is finite float32 of shape (4,), so shape/dtype obligations are met. No new evidence exposes an uncovered, material, testable in-scope problem.",
+    "reason": "Final review: the only in-scope contract requirement (relative L2 <= 0.0002 on the fixed make_inputs() workload vs float64 reference) is directly measured by probe t12 as violated (4.729e-4, floor inactive, all finite, shape (8,)). Claim c1 is confirmed with in-scope evidence; c2 is rebutted. The evidence already covers every stated contract element (finiteness, shape, error metric, denominator floor, float64 reference from stored float32 inputs), so no additional testable in-scope claims are warranted.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 16,
-    "turn": 10
+    "reviewed_tool_event_count": 15,
+    "turn": 11
   }
 
-### Turn 11 - `judge` (5.731323563000018s, in=37464 out=318)
+### Turn 12 - `judge` (9.195622062000012s, in=34822 out=476)
 
 Message:
 
 ```text
-The evidence is decisive: c1 is confirmed with in-scope scope evidence (the probe ran the exact fixed make_inputs() workload), showing relative L2 error of 0.1189 versus the 0.035 tolerance. The failure is quadrature/aliasing error, which the contract explicitly counts against the tolerance. c2 is rebutted. The Skeptic has signed off, no open claims remain.
+The decisive evidence is clear: probe t12 ran the exact sole in-scope workload (make_inputs()) through kernel.run(), computed the contractually correct float64 reference from the stored float32 inputs, and measured relative L2 error = 4.729e-4 — over 2x the contractual 2e-4 tolerance. The denominator floor is inactive (ref norm 0.0158 > 0.00283), outputs are finite and correctly shaped, so the only basis to excuse the deviation would be a declared tolerance the contract doesn't have. The contract explicitly requires ≤ 0.0002, so this is a defect. Claim c1 is confirmed and in-scope; c2 is rebutted; the Skeptic signed off with no new claims.
 ```
 
 Tool calls:
 
-- `record_verdict -> t18 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Confirmed in-scope claim c1 is decisive: on the fixed make_inputs() workload (seed 711076), the kernel's 32-point midpoint-rule estimate yields relative L2 error 0.1189 against the float64 closed-form continuous integral \u2014 3.4x the contract's 0.035 tolerance. The problem.txt contract explicitly states the 32-point grid is an approximation method, not the reference, so this discretization/aliasing error is a contract violation, not a tolerated approximation. A decomposition probe (t15) isolated the float32 arithmetic component to ~3e-7 (1.7e-6 of total error), rebutting the alternative explanation (c2) and confirming the failure is purely quadrature error. Output meets shape/dtype/finite requirements, but the num
-  ...[truncated 167 chars]
+    "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually as
+  ...[truncated 356 chars]
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Confirmed in-scope claim c1 is decisive: on the fixed make_inputs() workload (seed 711076), the kernel's 32-point midpoint-rule estimate yields relative L2 error 0.1189 against the float64 closed-form continuous integral \u2014 3.4x the contract's 0.035 tolerance. The problem.txt contract explicitly states the 32-point grid is an approximation method, not the reference, so this discretization/aliasing error is a contract violation, not a tolerated approximation. A decomposition probe (t15) isolated the float32 arithmetic component to ~3e-7 (1.7e-6 of total error), rebutting the alternative explanation (c2) and confirming the failure is purely quadrature error. Output meets shape/dtype/finite requirements, but the numeric contract is violated. Scope evidence cites both problem.txt and the kernel's own make_inputs() domain, which is the stated input domain.",
+    "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually assumed. This is not an excusable rounding/accumulation deviation: the contract explicitly fixes a numeric tolerance and this is a ~2.4x violation of it on the fixed workload the contract defines as the entire scope. Finiteness and shape requirements pass, but the accuracy requirement \u2014 the core of this contract \u2014 fails.",
     "verdict": "reject"
   }
 
@@ -561,114 +494,109 @@ Tool calls:
 
 {
   "contract_model": [
-    "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the given closed form (cos p - cos(p+f))/f.",
-    "Only the fixed float32 inputs from make_inputs() (seed 711076; a~N(0,0.1), f~U(0.5,220), p~U(-pi,pi)) are in scope.",
-    "Output: finite float32 tensor of shape (4,).",
-    "Numeric contract: relative L2 error ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035.",
-    "FP multiply/add fusion is disabled by the launch, so the implementation's float32 arithmetic path is fixed.",
-    "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the closed form (cos p - cos(p+f))/f.",
-    "Numeric contract: relative L2 error <= 0.035 with denominator max(||reference||_2, 1e-12)."
+    "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
+    "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
+    "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
+    "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
+    "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construction + 0.003 offset), making the reference value small (~0.003 plus perturbation terms) relative to intermediate Horner magnitudes.",
+    "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
+    "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
   ],
   "kernel_model": [
-    "Each of 4 Triton programs handles one row; samples t_i=(i+0.5)/32 for i in 0..31, evaluates f_r(t_i) in float32, and stores the mean as the integral estimate (lines 10-22).",
-    "The 32-point midpoint sum is an approximation method; the contract reference is the exact integral, so discretization error counts against the tolerance.",
-    "run() allocates a float32 (4,) output on the input device and launches grid (4,) with num_warps=1, TERMS=8, GRID=32, enable_fp_fusion=False (lines 25-29).",
-    "Inputs are read as float32 scalars per (row,k); no dtype promotion to float64 occurs inside the kernel.",
-    "Each of 4 Triton programs handles one row; it samples t_i=(i+0.5)/32, accumulates value=1+sum_k a*sin(f*t+p) in float32, and stores tl.sum(value)/32 (kernel.py lines 10-22).",
-    "For a single term, the exact 32-point midpoint sum has closed form: sum_{i=0}^{31} sin(f*(i+0.5)/32 + p) = sin(p) * sin(32*f/64)/sin(f/64) with the midpoint phase convention, i.e. aliasing depends only on f mod (128*pi); the quadrature error per term is (a/f)*(cos p - cos(p+f)) - (a/32)*that sum, computable 
-...[truncated 3894 chars]
+    "Single Triton program (grid (1,), BLOCK=32, N=8) handles all 8 rows in one block with masking; one thread lane per row is not required -- arange(0,32) with mask row<8.",
+    "Degree-48 Horner scheme: result starts at coefficient DEGREE=48, then static_range loop multiplies by point and adds coefficient k from 48 down to 0 -- algebraically the standard Horner recurrence.",
+    "All loads cast to float32; result is float32 throughout; store to preallocated float32 output tensor of shape (8,).",
+    "Launch disables FP fusion (enable_fp_fusion=False), matching the contract's pe
+...[truncated 4326 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_t: 32-point midpoint-rule Triton kernel integrating 4 rows of 8-term sinusoid sums versus a float64 continuous-integral reference; key risk is quadrature/aliasing error at frequencies up to 220 against the 0.035 relative-L2 tolerance.
-- `du2` tasks=`initial`: Refined case_t description: added an exact per-term midpoint-sum closed form so the quadrature/aliasing component of the error can be computed deterministically in float64, decoupling it from float32 GPU arithmetic (claims c1 and c2).
+- `du1` tasks=`initial`: Described case_n: degree-48 float32 Horner polynomial evaluation on a fixed adversarial near-cancellation workload, with a 2e-4 relative-L2 float64-reference tolerance contract.
+- `du2` tasks=`initial`: Refined description of case_n: the reference value per row is 0.003 plus a float32 rounding residual plus eps_i*P'(anchor) perturbation; the derivative-scale term likely dominates and determines whether the norm floor is active and how tight the 2e-4 relative tolerance is. Recorded to guide Experimenter probes for claims c1/c2.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For the fixed make_inputs() workload (seed 711076), the 32-point midpoint-rule quadrature in _integrate produces an output whose relative L2 error against the float64 closed-form continuous integral exceeds 0.035, because high-frequency terms (frequencies up to 220 rad/s) are aliased by the coarse grid.
+Statement: On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.
 
 Scope: `in_scope`
 
-Scope rationale: The contract defines the reference as the exact continuous integral in float64 and requires relative L2 error <= 0.035 for the fixed make_inputs() (seed 711076) workload, whose frequencies span up to 220 rad/s; quadrature/aliasing error of the 32-point midpoint rule against that reference is therefore directly in scope.
+Scope rationale: The claim tests the exact contract requirement that the kernel's relative L2 error on the sole in-scope workload (make_inputs() tensors) be <= 0.0002 against the float64 reference; problem.txt states this is the numerical contract for this fixed workload.
 
 Scope evidence:
-- `problem.txt`: Reference is the exact float64 continuous integral with closed form (cos p - cos(p+f))/f; the 32-point grid is only an approximation method, and the contract is relative L2 error <= 0.035 for the fixed make_inputs() workload, so discretization error counts against the tolerance.
-- `kernel.py make_inputs`: In-scope inputs draw frequencies from U(0.5, 220) with amplitudes ~N(0, 0.1), exactly the undersampled regime for a 32-point grid.
+- `problem.txt`: Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) with float64 reference. 'Arbitrary alternative coefficients or points are outside the scope.'
+- `kernel.py make_inputs_numpy`: coefficients[:,0] is constructed in float64 to cancel sum of coefficients[:,1:]*anchor^k plus 0.003 offset, and points are anchor ± 4e-5 noise -- a designed near-cancellation workload.
 
-Rationale: Frequencies up to 220 rad/s (~35 cycles over [0,1]) approach the Nyquist limit of a 32-point grid (~1 sample per cycle at f≈2π·32≈201), so sine terms may be severely aliased; per-term quadrature error can be O(amplitude) with amplitudes ~0.1 and 8 terms per row, potentially pushing relative L2 error past 0.035. Numeric question requiring an experiment.
+Rationale: make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Ran the kernel on the fixed seed-711076 workload and compared to the float64 closed-form continuous integral: relative L2 error = 0.11888, far above the 0.035 tolerance (3.4x). 21 of 32 frequencies exceed 100 rad/s (15 exceed 150), confirming high-frequency aliasing as predicted. Output is finite float32 of shape (4,); the error is a quadrature/aliasing failure, not a shape/dtype issue.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored float32 inputs. Relative L2 error = 4.729e-4, which exceeds the 2e-4 tolerance by ~2.4x. ||output-reference||_2 = 7.48e-6, denominator = ||reference||_2 = 0.015817 (floor not active). All outputs finite, shape (8,). The catastrophic-cancellation concern is realized: float32 Horner per-row absolute errors of 6e-7 to 5.8e-6 against reference values of 3e-5 to 9e-3 magnitude.
 
 ### c2 - `rebutted`
 
-Statement: Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary result across the 0.035 tolerance threshold.
+Statement: The reference L2 norm ||reference||_2 on this workload is below or near the 0.001*sqrt(8) ≈ 0.00283 floor, so the tolerance is effectively an absolute-error bound; pass/fail depends sensitively on the measured reference norm and per-row errors.
 
 Scope: `in_scope`
 
-Scope rationale: The contract mandates a finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, so any float32 rounding contribution that could push a near-boundary result across the threshold is in scope.
+Scope rationale: Interpreting the contract's error metric max(||reference||_2, 0.001*sqrt(8)) requires knowing the actual reference norm on the fixed workload; this directly determines whether the 2e-4 tolerance is effectively relative or absolute for the sole in-scope input.
 
 Scope evidence:
-- `problem.txt`: The contract requires finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, and the launch disables FP fusion, so the float32 arithmetic path including sin evaluation is fixed and its rounding is part of the measured error.
+- `problem.txt`: Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload.
 
-Rationale: The kernel evaluates sin at arguments up to ~220+π in float32; tl.sin argument reduction and float32 accumulation over 32 samples and 8 terms add rounding error (order 1e-6–1e-4 per sample). Small compared to expected quadrature error, but decisive if the quadrature result is near the 0.035 boundary.
+Rationale: The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 ≈ 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t15: Isolated float32 arithmetic error by comparing the kernel output to a float64 evaluation of the same 32-point midpoint rule: max absolute discrepancy 3.3e-7, relative fp32 component 2.0e-7 — only 1.7e-6 of the total relative error (0.1189), which itself is 3.4x the 0.035 tolerance, not near the boundary. Float32/tl.sin rounding therefore cannot shift this workload's result across the tolerance threshold; the failure is entirely quadrature/aliasing error (c1).
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t12: Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. This contradicts c2's claim that the reference norm is below or near the floor. Per-row reference values range from -3.8e-5 to 0.00926, confirming the eps*P'(a) derivative-scale perturbation dominates over the 0.003 offset.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the given closed form (cos p - cos(p+f))/f.",
-    "Only the fixed float32 inputs from make_inputs() (seed 711076; a~N(0,0.1), f~U(0.5,220), p~U(-pi,pi)) are in scope.",
-    "Output: finite float32 tensor of shape (4,).",
-    "Numeric contract: relative L2 error ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035.",
-    "FP multiply/add fusion is disabled by the launch, so the implementation's float32 arithmetic path is fixed."
+    "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
+    "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
+    "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
+    "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
+    "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construction + 0.003 offset), making the reference value small (~0.003 plus perturbation terms) relative to intermediate Horner magnitudes."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Each of 4 Triton programs handles one row; samples t_i=(i+0.5)/32 for i in 0..31, evaluates f_r(t_i) in float32, and stores the mean as the integral estimate (lines 10-22).",
-    "The 32-point midpoint sum is an approximation method; the contract reference is the exact integral, so discretization error counts against the tolerance.",
-    "run() allocates a float32 (4,) output on the input device and launches grid (4,) with num_warps=1, TERMS=8, GRID=32, enable_fp_fusion=False (lines 25-29).",
-    "Inputs are read as float32 scalars per (row,k); no dtype promotion to float64 occurs inside the kernel."
+    "Single Triton program (grid (1,), BLOCK=32, N=8) handles all 8 rows in one block with masking; one thread lane per row is not required -- arange(0,32) with mask row<8.",
+    "Degree-48 Horner scheme: result starts at coefficient DEGREE=48, then static_range loop multiplies by point and adds coefficient k from 48 down to 0 -- algebraically the standard Horner recurrence.",
+    "All loads cast to float32; result is float32 throughout; store to preallocated float32 output tensor of shape (8,).",
+    "Launch disables FP fusion (enable_fp_fusion=False), matching the contract's per-operation float32 rounding assumption.",
+    "run() assumes inputs already on the right device and contiguous (flat pointer arithmetic `row*(DEGREE+1)+k` assumes row-major contiguous coefficients)."
   ],
   "open_questions": [
-    "What is the actual relative L2 error of the 32-point midpoint estimate versus the float64 closed-form reference for this exact seed (needs Experimenter run)?",
-    "Are the sampled frequencies concentrated high enough for aliasing error to dominate, or do most fall below the ~Nyquist-relevant range (f << 32*pi ~ 100)?",
-    "Does tl.sin in Triton match torch/numpy sin closely enough in float32 that the error is dominated by quadrature, not by transcendental-implementation differences?"
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Quadrature/aliasing error: frequencies up to 220 rad/s (~35 cycles over [0,1]) versus a 32-point midpoint grid (~1 sample per cycle at the top frequency). The sin term
-...[truncated 1421 chars]
+    "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
+    "What relative L2 error does the float32 Horner kernel actually achieve on this workload (needs Experimenter run)?",
+  
+...[truncated 2173 chars]
 
 ### t6 - record_claim - error
 
@@ -688,20 +616,20 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Frequencies up to 220 rad/s (~35 cycles over [0,1]) approach the Nyquist limit of a 32-point grid (~1 sample per cycle at f\u22482\u03c0\u00b732\u2248201), so sine terms may be severely aliased; per-term quadrature error can be O(amplitude) with amplitudes ~0.1 and 8 terms per row, potentially pushing relative L2 error past 0.035. Numeric question requiring an experiment.",
+  "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Reference is the exact float64 continuous integral with closed form (cos p - cos(p+f))/f; the 32-point grid is only an approximation method, and the contract is relative L2 error <= 0.035 for the fixed make_inputs() workload, so discretization error counts against the tolerance."
+      "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) with float64 reference. 'Arbitrary alternative coefficients or points are outside the scope.'"
     },
     {
-      "source": "kernel.py make_inputs",
-      "summary": "In-scope inputs draw frequencies from U(0.5, 220) with amplitudes ~N(0, 0.1), exactly the undersampled regime for a 32-point grid."
+      "source": "kernel.py make_inputs_numpy",
+      "summary": "coefficients[:,0] is constructed in float64 to cancel sum of coefficients[:,1:]*anchor^k plus 0.003 offset, and points are anchor \u00b1 4e-5 noise -- a designed near-cancellation workload."
     }
   ],
-  "scope_rationale": "The contract defines the reference as the exact continuous integral in float64 and requires relative L2 error <= 0.035 for the fixed make_inputs() (seed 711076) workload, whose frequencies span up to 220 rad/s; quadrature/aliasing error of the 32-point midpoint rule against that reference is therefore directly in scope.",
-  "statement": "For the fixed make_inputs() workload (seed 711076), the 32-point midpoint-rule quadrature in _integrate produces an output whose relative L2 error against the float64 closed-form continuous integral exceeds 0.035, because high-frequency terms (frequencies up to 220 rad/s) are aliased by the coarse grid.",
+  "scope_rationale": "The claim tests the exact contract requirement that the kernel's relative L2 error on the sole in-scope workload (make_inputs() tensors) be <= 0.0002 against the float64 reference; problem.txt states this is the numerical contract for this fixed workload.",
+  "statement": "On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.",
   "status": "open"
 }
 
@@ -709,16 +637,16 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "The kernel evaluates sin at arguments up to ~220+\u03c0 in float32; tl.sin argument reduction and float32 accumulation over 32 samples and 8 terms add rounding error (order 1e-6\u20131e-4 per sample). Small compared to expected quadrature error, but decisive if the quadrature result is near the 0.035 boundary.",
+  "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 \u2248 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The contract requires finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, and the launch disables FP fusion, so the float32 arithmetic path including sin evaluation is fixed and its rounding is part of the measured error."
+      "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
     }
   ],
-  "scope_rationale": "The contract mandates a finite float32 output within 0.035 relative L2 of a float64 reference for the fixed workload, so any float32 rounding contribution that could push a near-boundary result across the threshold is in scope.",
-  "statement": "Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary result across the 0.035 tolerance threshold.",
+  "scope_rationale": "Interpreting the contract's error metric max(||reference||_2, 0.001*sqrt(8)) requires knowing the actual reference norm on the fixed workload; this directly determines whether the 2e-4 tolerance is effectively relative or absolute for the sole in-scope input.",
+  "statement": "The reference L2 norm ||reference||_2 on this workload is below or near the 0.001*sqrt(8) \u2248 0.00283 floor, so the tolerance is effectively an absolute-error bound; pass/fail depends sensitively on the measured reference norm and per-row errors.",
   "status": "open"
 }
 
@@ -726,36 +654,31 @@ Evidence:
 
 {
   "contract_model": [
-    "Reference is the exact continuous integral over [0,1] of f_r(t)=1+sum_k a[r,k]*sin(f[r,k]*t+p[r,k]), evaluated in float64 with the closed form (cos p - cos(p+f))/f.",
-    "Only the fixed float32 inputs from make_inputs() (seed 711076; a~N(0,0.1), f~U(0.5,220), p~U(-pi,pi)) are in scope.",
-    "Output: finite float32 tensor of shape (4,).",
-    "Numeric contract: relative L2 error <= 0.035 with denominator max(||reference||_2, 1e-12)."
+    "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
+    "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
   ],
-  "impact_on_claims": [
-    "Supports c1: per-term aliasing error can be computed exactly from the input values in float64, so the quadrature component of c1 is decidable deterministically before any GPU run.",
-    "Bounds c2: any observed float32-vs-float64-midpoint discrepancy much smaller than the aliasing term indicates c2 is not decisive for this workload."
-  ],
+  "impact_on_claims": [],
   "kernel_model": [
-    "Each of 4 Triton programs handles one row; it samples t_i=(i+0.5)/32, accumulates value=1+sum_k a*sin(f*t+p) in float32, and stores tl.sum(value)/32 (kernel.py lines 10-22).",
-    "For a single term, the exact 32-point midpoint sum has closed form: sum_{i=0}^{31} sin(f*(i+0.5)/32 + p) = sin(p) * sin(32*f/64)/sin(f/64) with the midpoint phase convention, i.e. aliasing depends only on f mod (128*pi); the quadrature error per term is (a/f)*(cos p - cos(p+f)) - (a/32)*that sum, computable exactly in float64 from the fixed inputs.",
-    "Frequencies near multiples of 128*pi (~402 rad/s) are aliased to near-DC; frequencies near odd multiples of 64*pi (~201 rad/s) are aliased to the Nyquist frequency, where the midpoint sum nearly cancels. In-scope frequencies (0.5-220) hit the Nyquist-adjacent band 150-220 hardest.",
-    "run() hardcodes shape (4,), grid (4,), TERMS=8, GRID=32, num_warps=1, enable_fp_fusion=False (lines 25-29); output dtype is float32 regardless of input dtype."
+    "Unchanged: single-block float32 Horner, degree 48, enable_fp_fusion=False, masked store of 8 rows."
   ],
   "open_questions": [
-    "Actual relative L2 error for seed 711076 still needs an Experimenter run (kernel output plus float64 reference).
-...[truncated 1810 chars]
+    "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
+    "What relative L2 error does the float32 Horner kernel actually achieve on this workload (needs Experimenter run)?",
+    "Does Triton with enable_fp_fusion=False round each multiply and add exactly as assumed?",
+    "What is the empirical scale of P'(a) per row (needed to decide whether the eps*P'(a) perturbation dominates the 0.003 offset in the reference) and the corresponding per-row error scale?"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Refinement for claims c1/c2: the reference is NOT simply ~0.003 per row. The derivative-scale perturbation eps_i*P'(a) (eps ~ 4e-5, P'(a) plausibly O(100-500) for degree 48 with N(0,1) coefficients) can contribute 0.004-0.02 per row, likely pushing ||reference||_2 well above the 0.00283 floor and making the tolerance genuinely relative.",
+    "That same large derivative also amplifies point sensitivity: a relative ulp error (~6e-8) in intermediate Horner values of magnitude comparable to |P'(a)|*a-terms can yield absolute output errors ~1e-5 or more; against a reference norm possibly ~0.02-0.06 this lands near the 2e-4 threshold -- the outcome is genuinely borderline and only a runtime measurement can settle it.",
+    "Float32 rounding residual in the stored coefficients[:,0] (ulp of the ~O
+...[truncated 1194 chars]
 
-### t11 - record_no_new_claims - ok
+### t11 - retrieve_experiment_history - ok
 
 {
-  "decision": "no_new_claims",
-  "reason": "The two open in-scope claims c1 and c2 fully cover the decidable failure surfaces for this fixed-seed workload: quadrature/aliasing error of the 32-point midpoint rule against the float64 continuous-integral reference (decidable deterministically via the per-term closed form), and float32/tl.sin arithmetic rounding on top of it. The kernel has no other contract-relevant behaviors (single fixed workload, shape hardcoded, no dtype/config variation in scope). No new evidence has arrived that exposes an uncovered, testable in-scope problem.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 10,
-  "turn": 6
+  "exists": false,
+  "source": "/root/trace_runs/extension_low32_r2/numerical_challenges/case_n/debate/tool_events.jsonl"
 }
 
 ### t12 - run_claim_probe - ok
@@ -766,13 +689,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t12_probe.py",
-      "sha256": "e1a9625dbd15f8b062fcb2f874c51151140916d71d4513cf037091d55db46b8d"
+      "sha256": "ca520dd3ec7e9d1d4f3a4e47be06797edd52d8be98a56a719fa6e07c2589b713"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t12_stdout.txt",
-      "sha256": "847fca8d84884704c143fbd17ed15b9d0994b9fb82ef6331c24acfbea44f6c47"
+      "sha256": "9c0ea33c5ff73fd5e97eaa71e39019238f4503b2cbeccbb1ef11fd668c1a6fe5"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -784,12 +707,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t12_json_result.json",
-      "sha256": "31c1406d000ff40d4a35080af3e28a987ad5e6df2be358d4144fbc9f680de581"
+      "sha256": "9de5913cf2670959aab9f757d45317d98365b72267702a08c7dcf388e6e1ddf4"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For the fixed make_inputs() workload (seed 711076), the 32-point midpoint-rule quadrature in _integrate produces an output whose relative L2 error against the float64 closed-form continuous integral exceeds 0.035, because high-frequency terms (frequencies up to 220 rad/s) are aliased by the coarse grid.",
-  "duration_s": 4.837553,
+  "claim_statement": "On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.",
+  "duration_s": 5.334492,
   "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
@@ -799,182 +722,79 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t12_probe.py",
-          "sha256": "e1a9625dbd15f8b062fcb2f874c51151140916d71d4513cf037091d55db46b8d"
+          "sha256": "ca520dd3ec7e9d1d4f3a4e47be06797edd52d8be98a56a719fa6e07c2589b713"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t12_stdout.txt",
-          "sha256": "847fca8d84884704c143fbd17ed15b9d0994b9fb82ef6331c24acfbea44f6c47"
-        },
-        {
-          "description": "Captured stderr from the probe process.
-...[truncated 3602 chars]
-
-### t13 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t13_probe.py",
-      "sha256": "52573bb225bc54be5823e16f111c50ce1bdf8f8dbae1c8163fc04a38e48497cb"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t13_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t13_stderr.txt",
-      "sha256": "c7da874d67fce18090949996dc4de070248558450086081e32ec320a2309570d"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary result across the 0.035 tolerance threshold.",
-  "duration_s": 4.742237,
-  "event_id": "t13",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t13_probe.py",
-          "sha256": "52573bb225bc54be5823e16f111c50ce1bdf8f8dbae1c8163fc04a38e48497cb"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t13_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "9c0ea33c5ff73fd5e97eaa71e39019238f4503b2cbeccbb1ef11fd668c1a6fe5"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t13_stderr.txt",
-          "sha256": "c7da874d67fce18090949996dc4de070248558450086081e32ec320a2309570d"
-        }
-      ],
-      "duration_s": 4.742237,
-      "exit_code": 1,
-      "expected_signal": "float32 arithmetic error (kernel vs float64 
-...[truncated 1295 chars]
+          "path": "probes/t12_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca4
+...[truncated 4907 chars]
 
-### t14 - finalize_probe_evidence - ok
+### t13 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Ran the kernel on the fixed seed-711076 workload and compared to the float64 closed-form continuous integral: relative L2 error = 0.11888, far above the 0.035 tolerance (3.4x). 21 of 32 frequencies exceed 100 rad/s (15 exceed 150), confirming high-frequency aliasing as predicted. Output is finite float32 of shape (4,); the error is a quadrature/aliasing failure, not a shape/dtype issue.",
+  "summary": "Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored float32 inputs. Relative L2 error = 4.729e-4, which exceeds the 2e-4 tolerance by ~2.4x. ||output-reference||_2 = 7.48e-6, denominator = ||reference||_2 = 0.015817 (floor not active). All outputs finite, shape (8,). The catastrophic-cancellation concern is realized: float32 Horner per-row absolute errors of 6e-7 to 5.8e-6 against reference values of 3e-5 to 9e-3 magnitude.",
   "supports": "confirmed",
   "tool_event_id": "t12"
 }
 
-### t15 - run_claim_probe - ok
+### t14 - append_evidence - ok
 
 {
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t15_probe.py",
-      "sha256": "ffef5968bd7ba14122f090c2fce98e2daf75082db13e1975863a90de00e7fbdf"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t15_stdout.txt",
-      "sha256": "e835ad33f599ca879ab862e44d5c4fcad49ba7d8c39e6a13dfd0078312048714"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t15_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t15_json_result.json",
-      "sha256": "a18f2a23828de1f651b5a9243659d662e86178b69a57e442dbc3d3c7c65b6115"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "Float32 evaluation inside the kernel (tl.sin at arguments up to ~220 rad, and float32 accumulation over 32 samples and 8 terms) adds rounding error on top of quadrature error that could shift a near-boundary result across the 0.035 tolerance threshold.",
-  "duration_s": 5.845548,
-  "event_id": "t15",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t15_probe.py",
-          "sha256": "ffef5968bd7ba14122f090c2fce98e2daf75082db13e1975863a90de00e7fbdf"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t15_stdout.txt",
-          "sha256": "e835ad33f599ca879ab862e44d5c4fcad49ba7d8c39e6a13dfd0078312048714"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "pr
-...[truncated 3062 chars]
-
-### t16 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "Isolated float32 arithmetic error by comparing the kernel output to a float64 evaluation of the same 32-point midpoint rule: max absolute discrepancy 3.3e-7, relative fp32 component 2.0e-7 \u2014 only 1.7e-6 of the total relative error (0.1189), which itself is 3.4x the 0.035 tolerance, not near the boundary. Float32/tl.sin rounding therefore cannot shift this workload's result across the tolerance threshold; the failure is entirely quadrature/aliasing error (c1).",
-  "supports": "rebutted",
-  "tool_event_id": "t15"
+  "id": "c2.e1",
+  "summary": "Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. This contradicts c2's claim that the reference norm is below or near the floor. Per-row reference values range from -3.8e-5 to 0.00926, confirming the eps*P'(a) derivative-scale perturbation dominates over the 0.003 offset.",
+  "supports": "rebutted"
 }
 
-### t17 - record_no_new_claims - ok
+### t15 - update_claim_status - ok
+
+{
+  "id": "c2",
+  "status": "rebutted"
+}
+
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the two claims cover all contract-relevant failure surfaces for the fixed seed-711076 workload. c1 is confirmed by probe t12 \u2014 the kernel's 32-point midpoint estimate has relative L2 error 0.1189 versus the float64 closed-form continuous integral, well above the 0.035 tolerance, with 21/32 frequencies above 100 rad/s confirming aliasing as the cause. c2 was rebutted by probe t15 \u2014 float32/tl.sin arithmetic error is ~3e-7 (1.7e-6 of total error), decisively not boundary-shifting. The output is finite float32 of shape (4,), so shape/dtype obligations are met. No new evidence exposes an uncovered, material, testable in-scope problem.",
+  "reason": "Final review: the only in-scope contract requirement (relative L2 <= 0.0002 on the fixed make_inputs() workload vs float64 reference) is directly measured by probe t12 as violated (4.729e-4, floor inactive, all finite, shape (8,)). Claim c1 is confirmed with in-scope evidence; c2 is rebutted. The evidence already covers every stated contract element (finiteness, shape, error metric, denominator floor, float64 reference from stored float32 inputs), so no additional testable in-scope claims are warranted.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 16,
-  "turn": 10
+  "reviewed_tool_event_count": 15,
+  "turn": 11
 }
 
-### t18 - record_verdict - ok
+### t17 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Confirmed in-scope claim c1 is decisive: on the fixed make_inputs() workload (seed 711076), the kernel's 32-point midpoint-rule estimate yields relative L2 error 0.1189 against the float64 closed-form continuous integral \u2014 3.4x the contract's 0.035 tolerance. The problem.txt contract explicitly states the 32-point grid is an approximation method, not the reference, so this discretization/aliasing error is a contract violation, not a tolerated approximation. A decomposition probe (t15) isolated the float32 arithmetic component to ~3e-7 (1.7e-6 of total error), rebutting the alternative explanation (c2) and confirming the failure is purely quadrature error. Output meets shape/dtype/finite requirements, but the numeric contract is violated. Scope evidence cites both problem.txt and the kernel's own make_inputs() domain, which is the stated input domain.",
+  "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually assumed. This is not an excusable rounding/accumulation deviation: the contract explicitly fixes a numeric tolerance and this is a ~2.4x violation of it on the fixed workload the contract defines as the entire scope. Finiteness and shape requirements pass, but the accuracy requirement \u2014 the core of this contract \u2014 fails.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-24T01:09:28Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T00:19:11Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Confirmed in-scope claim c1 is decisive: on the fixed make_inputs() workload (seed 711076), the kernel's 32-point midpoint-rule estimate yields relative L2 error 0.1189 against the float64 closed-form continuous integral \u2014 3.4x the contract's 0.035 tolerance. The problem.txt contract explicitly states the 32-point grid is an approximation method, not the reference, so this discretization/aliasing error is a contract violation, not a tolerated approximation. A decomposition probe (t15) isolated the float32 arithmetic component to ~3e-7 (1.7e-6 of total error), rebutting the alternative explanation (c2) and confirming the failure is purely quadrature error. Output meets shape/dtype/finite requirements, but the numeric contract is violated. Scope evidence cites both problem.txt and the kernel's own make_inputs() domain, which is the stated input domain.",
+  "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually assumed. This is not an excusable rounding/accumulation deviation: the contract explicitly fixes a numeric tolerance and this is a ~2.4x violation of it on the fixed workload the contract defines as the entire scope. Finiteness and shape requirements pass, but the accuracy requirement \u2014 the core of this contract \u2014 fails.",
   "verdict": "reject"
 }

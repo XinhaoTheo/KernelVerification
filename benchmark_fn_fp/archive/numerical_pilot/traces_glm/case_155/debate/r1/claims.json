@@ -1,25 +1,25 @@
 [
   {
-    "created_at": "2026-09-30T09:05:37Z",
+    "created_at": "2026-09-30T09:01:52Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T09:06:54Z",
+        "created_at": "2026-09-30T09:02:40Z",
         "data": {
-          "E": 0.0011270422258975712,
-          "all_finite": true,
+          "E": 0.006828079903557321,
+          "E_within_budget": false,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t12_probe.py",
-              "sha256": "cac31e8da9b922c6ca7a843d8689c0478921934829c96ca3420106f2c697b210"
+              "sha256": "e71338615174d649464ff02389c28a886fdf0bae95b0f4fec6ae9326c6e4da6b"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t12_stdout.txt",
-              "sha256": "e9eccd3bba1100f95b094d9b61e33ab273acfc478319356edd949ebd16c3e9d9"
+              "sha256": "10a9a43989ba6ec3079e3b1360dac17230ac2f570b5d5bb045af28686c1c4d43"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -31,76 +31,78 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t12_json_result.json",
-              "sha256": "b10199974d4a9b7500b779542b708b62d7af61540a01d033b695501c0faea099"
+              "sha256": "c8c8e891f358807c1feb8771a4dc8e677e6930364012300b275c0b0ae9350042"
             }
           ],
           "budget": 0.003,
-          "duration_s": 5.024219,
-          "exceeds_budget": false,
+          "duration_s": 4.515293,
+          "err_norm": 2.1547299611284787,
           "exit_code": 0,
-          "expected_signal": "E value on exact workload vs 0.003 budget",
+          "expected_signal": "E computed on exact workload; decisive if E > 0.003 (confirmed) or E <= 0.003 (rebutted)",
           "json_parse_error": null,
           "json_result": {
-            "E": 0.0011270422258975712,
+            "E": 0.006828079903557321,
+            "E_within_budget": false,
             "all_finite": true,
             "budget": 0.003,
-            "exceeds_budget": false,
-            "max_abs_err": 0.005229335578440963,
-            "max_rel_err": 0.005200665081950547,
-            "metric": "E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) on exact workload",
-            "num_norm": 0.14138027827159863,
-            "ref_norm": 125.44363913162529
+            "dtype": "torch.float32",
+            "err_norm": 2.1547299611284787,
+            "max_abs_err": 0.0532769692090187,
+            "ref_norm": 315.5689434750022,
+            "shape": [
+              512,
+              32
+            ]
           },
-          "max_abs_err": 0.005229335578440963,
-          "max_rel_err": 0.005200665081950547,
-          "num_norm": 0.14138027827159863,
-          "ref_norm": 125.44363913162529,
+          "max_abs_err": 0.0532769692090187,
+          "ref_norm": 315.5689434750022,
           "stderr": "",
-          "stdout": "{\"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) on exact workload\", \"E\": 0.0011270422258975712, \"budget\": 0.003, \"num_norm\": 0.14138027827159863, \"ref_norm\": 125.44363913162529, \"all_finite\": true, \"max_abs_err\": 0.005229335578440963, \"max_rel_err\": 0.005200665081950547, \"exceeds_budget\": false}\n",
+          "stdout": "{\"E\": 0.006828079903557321, \"budget\": 0.003, \"E_within_budget\": false, \"ref_norm\": 315.5689434750022, \"err_norm\": 2.1547299611284787, \"max_abs_err\": 0.0532769692090187, \"all_finite\": true, \"shape\": [512, 32], \"dtype\": \"torch.float32\"}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "Direct measurement on the exact workload (make_inputs, seed 452): E = 0.001127 against the fp64 reference, well below the 0.003 budget; all outputs finite. The per-step fp16 rounding does NOT push E above budget, so the claim's budget-violation hypothesis is rebutted (max per-element rel err 0.0052 but norm-level relative error stays at ~0.11%).",
-        "supports": "rebutted",
+        "summary": "On the exact specified workload (seed 451, t=512, d=32), the kernel output vs the fp64 reference on the same fp32 inputs gives E = 0.00683, which exceeds the 0.003 contract budget (err_norm 2.155 vs ref_norm 315.57, denom floor 0.128 not binding). The per-step fp16 rounding of the carried state accumulates beyond budget, so the claim that E exceeds 0.003 is confirmed.",
+        "supports": "confirmed",
         "tool_event_id": "t12"
       }
     ],
     "id": "c1",
     "raised_by": "skeptic",
-    "rationale": "Per-step fp16 rounding gives ~2^-11 relative error; with decay 0.99 the induced error steady-state can reach ulp/(1-0.99) in a correlated/biased case, which is near or above the 0.003 relative budget \u2014 requires empirical E measurement on the exact workload.",
+    "rationale": "At steady state h\u224810, fp16 spacing near 10 is ~0.0078, so each of the 512 steps injects up to ~0.0039 absolute error per element that is both stored and carried forward; whether the cumulative error over 512x32 elements keeps the L2 ratio E below 0.003 must be measured, not assumed from the describer's ~0.0002 estimate.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Compliance is defined as E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 with the float64 reference on the exact make_inputs() workload; the fp16 state rounding (kernel.py line 13) may push E above 0.003."
+        "summary": "Pass criterion is all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(16384)) <= 0.003 for the exact make_inputs() workload (seed 451, t=512, d=32); reference is fp64 recurrence on the same fp32 inputs."
       }
     ],
-    "scope_rationale": "The contract requires E <= 0.003 on the exact make_inputs() workload (seed 452, t=640, d=32) against a float64 reference; a claim that the fp16 state rounding pushes E above that budget tests the stated compliance criterion directly.",
-    "statement": "On the exact fixed workload (seed 452, t=640, d=32, decay 0.99, b\u22480.01+0.001\u00b7N(0,1)), the per-step fp16 rounding of the running state (kernel.py line 13) causes accumulated error such that E exceeds the 0.003 budget against the float64 reference.",
-    "status": "rebutted",
-    "updated_at": "2026-09-30T09:06:54Z"
+    "scope_rationale": "The contract defines compliance for exactly this workload as E = ||out - fp64_ref||_2 / max(||ref||_2, 0.001*sqrt(16384)) <= 0.003; a claim that per-step fp16 quantization pushes E over 0.003 on this exact input is directly a contract-compliance question.",
+    "statement": "On the exact specified workload (seed 451, t=512, d=32, a=0.999, b=N(0,1e-4)+0.01), the kernel's per-step fp16 rounding of the carried state h (h.to(fp16).to(fp32) at every t) accumulates enough quantization error that the contract metric E = ||out - fp64_ref||_2 / max(||ref||_2, 0.128) exceeds the 0.003 budget.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T09:02:40Z"
   },
   {
-    "created_at": "2026-09-30T09:05:37Z",
+    "created_at": "2026-09-30T09:01:52Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T09:06:54Z",
+        "created_at": "2026-09-30T09:02:40Z",
         "data": {
+          "all_finite": true,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t13_probe.py",
-              "sha256": "313694757a46f5760025cb9480a2c67de36a7e8d07c2b5cd28f3710c19cb76e1"
+              "sha256": "ecc33de2d206dd796d461d2902de5f3353767580fb39a1487959983a1869556d"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t13_stdout.txt",
-              "sha256": "b4039c556f112408f41bb8df1a0349596722c0110d3d51714d9e19bf0f01f435"
+              "sha256": "e279a724ecc3f25205722fd3539fe3d8270345c121c90d65808174262e2b48e5"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -112,61 +114,52 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t13_json_result.json",
-              "sha256": "a41402a8a99ff6f4da4c46a917ccb13ecdbd40013157de8a8bad7c7260a37c2a"
+              "sha256": "c4f3969ae2fbf7fe07e0d57d333ad808c9ffda43542f9afeafc1263d02eaa67a"
             }
           ],
-          "bitwise_match_to_cpu_sim": true,
-          "duration_s": 4.443765,
-          "err_norm_early_t0_400": 0.0929,
-          "err_norm_late_t400_640": 0.1066,
+          "duration_s": 4.650142,
           "exit_code": 0,
-          "expected_signal": "late-time error fraction and sign bias / fixed-point attractor behavior",
+          "expected_signal": "all_finite true -> rebutted; nonfinite values present -> confirmed",
           "json_parse_error": null,
           "json_result": {
-            "bitwise_match_to_cpu_sim": true,
-            "err_norm_early_t0_400": 0.09290193367722949,
-            "err_norm_late_t400_640": 0.10657210612156597,
-            "late_fraction": 0.7537975411028375,
-            "late_states_dominate": true,
-            "mean_sign_out_last100": -0.24,
-            "metric": "per-timestep ||out[t]-ref[t]|| vs late-time fraction; bitwise CPU fp16-round sim match",
-            "per_t_err_first": 1.1605418449557927e-05,
-            "per_t_err_last": 0.00800501372958842,
-            "per_t_err_max": 0.009986617795669587,
-            "per_t_err_max_t": 589,
-            "per_t_err_mid": 0.004876863255613507
+            "all_finite": true,
+            "dtype": "torch.float32",
+            "max_abs": 3.99609375,
+            "min_abs": 0.00982666015625,
+            "nonfinite_count": 0,
+            "shape": [
+              512,
+              32
+            ]
           },
-          "late_fraction": 0.7538,
-          "mean_sign_out_last100": -0.24,
-          "per_t_err_last": 0.008005,
-          "per_t_err_max": 0.009987,
-          "per_t_err_max_t": 589,
-          "per_t_err_mid": 0.004877,
+          "max_abs": 3.99609375,
+          "min_abs": 0.00982666015625,
+          "nonfinite_count": 0,
           "stderr": "",
-          "stdout": "{\"metric\": \"per-timestep ||out[t]-ref[t]|| vs late-time fraction; bitwise CPU fp16-round sim match\", \"err_norm_early_t0_400\": 0.09290193367722949, \"err_norm_late_t400_640\": 0.10657210612156597, \"late_fraction\": 0.7537975411028375, \"per_t_err_first\": 1.1605418449557927e-05, \"per_t_err_mid\": 0.004876863255613507, \"per_t_err_last\": 0.00800501372958842, \"per_t_err_max\": 0.009986617795669587, \"per_t_err_max_t\": 589, \"mean_sign_out_last100\": -0.24, \"bitwise_match_to_cpu_sim\": true, \"late_states_dominate\": true}\n",
+          "stdout": "{\"all_finite\": true, \"nonfinite_count\": 0, \"max_abs\": 3.99609375, \"min_abs\": 0.00982666015625, \"shape\": [512, 32], \"dtype\": \"torch.float32\"}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "Mechanism confirmed: late-time (t>400) states carry 75.4% of the total error norm (0.1066 vs 0.0929 early), per-timestep error grows with t (last t norm 0.0080, max 0.00999 at t=589) rather than averaging out, and there is a mild persistent negative sign bias (mean sign -0.24 over the last 100 steps). Kernel output matches a bitwise CPU simulation of the fp32-compute/fp16-round recurrence, confirming round-to-nearest-even semantics. However, the resulting error stays far below the E budget (E=0.00113 from the c1 probe), so this attractor bias does not violate compliance \u2014 Judge must weigh it accordingly.",
-        "supports": "confirmed",
+        "summary": "All 512x32 output elements are finite (nonfinite_count = 0, max |out| \u2248 3.996, far below fp16 overflow), so the claim of possible non-finite output is rebutted.",
+        "supports": "rebutted",
         "tool_event_id": "t13"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "0.99h+b near h\u22481.01 maps values toward nearby fp16 grid points (ulp 2^-10 \u2248 9.77e-4 there); a quantized fixed point or limit cycle can hold a systematic ~ulp/2 offset per element, so late-time error does not average out and could dominate E.",
+    "rationale": "The contract explicitly requires all outputs finite; fp16 overflow requires |h|>65504, which should not occur with h bounded near ~10, but a runtime isfinite check is cheap and closes this contract clause either way.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract defines compliance solely via E <= 0.003 against the float64 reference over all 640x32 returned states on this fixed workload; a biased fp16 attractor error would violate the stated tolerance criterion."
+        "summary": "The implementation satisfies the contract iff all outputs are finite and E <= 0.003; finiteness is an explicit pass condition."
       }
     ],
-    "scope_rationale": "The contract requires all 640x32 returned states to satisfy E <= 0.003 vs the float64 reference on the exact fixed workload; a persistent biased late-time error from an fp16 attractor directly tests that stated requirement.",
-    "statement": "The fp16-quantized recurrence forms a fixed-point/limit-cycle attractor near h\u2248b/(1-0.99)\u22481.01 whose per-element error relative to the float64 recurrence persists at up to ~half an fp16 ulp in a biased direction, so late-time (t>~400) states dominate the norm error rather than averaging out.",
-    "status": "confirmed",
-    "updated_at": "2026-09-30T09:06:54Z"
+    "scope_rationale": "The contract explicitly conditions compliance on \"all outputs are finite\" for this single workload, so finiteness of the output on that workload is an in-scope testable claim.",
+    "statement": "The kernel output on the specified workload may contain non-finite values, violating the contract's \"all outputs are finite\" requirement (e.g. via fp16 overflow or an unexpected dtype/conversion issue), even though h is expected to stay near ~10.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T09:02:40Z"
   }
 ]

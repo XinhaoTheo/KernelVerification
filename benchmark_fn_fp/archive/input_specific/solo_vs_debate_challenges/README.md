@@ -1,12 +1,12 @@
-# Solo vs 多角色 debate：case_119–case_138
+# Solo vs 多角色 debate：case_125–case_144
 
-Case labels use the October 19, 2026 numbering. Private JSON and raw traces retain their earlier IDs; [case_map.json](../../../case_map.json) records the mapping.
+Case labels use the current case index. Private JSON and raw traces retain their original IDs; [case_map.json](../../../case_map.json) records the mapping.
 
 Archived on October 19, 2026. These input-based cases are excluded from current kernel verification and accuracy. The results below are historical. See the [archive index](../README.md).
 
 这 20 题测试：**面对一份真实但可能不充分的初始实验，能否检查参考是否可靠、输入域是否覆盖、观察时机是否符合合同**。三组得到相同 kernel、合同、生成器和初始 T4 输出。初始测试结果是待审查证据，不是真值。
 
-现有结论：最初十题与连续盒域题均未区分 solo/debate。错误求和参考在 case_131 上两次触发 solo 错、debate 对，但 case_132 两次 debate 弃答抵消了总体正确率收益；六个新 seed 的确认仅多答对一题，未达到追加复测门槛。**有具体机制信号，尚未证明稳定的整体 debate 优势。**
+现有结论：最初十题与连续盒域题均未区分 solo/debate。错误求和参考在 case_137 上两次触发 solo 错、debate 对，但 case_138 两次 debate 弃答抵消了总体正确率收益；六个新 seed 的确认仅多答对一题，未达到追加复测门槛。**有具体机制信号，尚未证明稳定的整体 debate 优势。**
 
 看题从 [统一公开目录](../triton_eval_cases/)或[全局题目索引](../../../CASE_INDEX.md)进入；全部运行、失败与 probe 在 [GLM traces](../traces_glm/)。本目录只保留 README＋`private_data/`；程序在 [eval_scripts/solo_vs_debate_challenges](../../../eval_scripts/solo_vs_debate_challenges/)。新 CLI 名称为 `solo_vs_debate_challenges`，历史 trace 的 dataset `evidence_challenges` 保留用于追溯。
 
@@ -14,14 +14,14 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 
 | 案例与合同 | 初始证据的盲区 | 独立真值/完整范围 |
 |---|---|---|
-| [119/120](../triton_eval_cases/case_119/problem.txt) | candidate 与 tester 共用不稳定的 FP32 原始矩协方差 | 独立居中回归预测误差 0.00206523 / 0.25584796，阈值0.05 |
-| [121/122](../triton_eval_cases/case_121/problem.txt) | 缓存重排＋追加只测五个短操作字 | 全部121个长度0–4操作字；121全通过，122有12个失败，最大绝对误差7.625，阈值1e-5 |
-| [123/124](../triton_eval_cases/case_123/problem.txt) | 单通道/两两正确不保证四阶分布 | 固定1024种子、8通道、70组四通道分布；123全部正确，124恰一组有依赖 |
-| [125/126](../triton_eval_cases/case_125/problem.txt) | 每个view单独对齐不等于一个全局共享变换 | 穷举24×16=384变换；共同最小误差0 / 0.8316711，阈值0.05 |
-| [127/128](../triton_eval_cases/case_127/problem.txt) | 候选和tester都保留可变状态视图 | 六步更新结束后观察原历史对象；误差0.00574470 / 0.89898037，阈值0.025；最终状态另需1e-5 |
-| [129/130](../triton_eval_cases/case_129/problem.txt) | 41个smoke点不能证明整个连续盒域 | [-1,1]^12的凸残差证书；129全域上界0.7187501<1，130真实顶点反例1.34375 |
-| [131/132](../triton_eval_cases/case_131/problem.txt) | 普通FP64求和也会丢失小项，不能自动当oracle | 对存储的4×12 FP32输入求精确实数和；误差1.92358e-8 / 1，阈值1e-5 |
-| [133–138](../triton_eval_cases/case_133/problem.txt) | 同一求和参考机制的六个全新seed | 三个合格、两个非零错误输出、一个零错误输出；不是新增算法家族 |
+| [125/126](../triton_eval_cases/case_125/problem.txt) | candidate 与 tester 共用不稳定的 FP32 原始矩协方差 | 独立居中回归预测误差 0.00206523 / 0.25584796，阈值0.05 |
+| [127/128](../triton_eval_cases/case_127/problem.txt) | 缓存重排＋追加只测五个短操作字 | 全部121个长度0–4操作字；127全通过，128有12个失败，最大绝对误差7.625，阈值1e-5 |
+| [129/130](../triton_eval_cases/case_129/problem.txt) | 单通道/两两正确不保证四阶分布 | 固定1024种子、8通道、70组四通道分布；129全部正确，130恰一组有依赖 |
+| [131/132](../triton_eval_cases/case_131/problem.txt) | 每个view单独对齐不等于一个全局共享变换 | 穷举24×16=384变换；共同最小误差0 / 0.8316711，阈值0.05 |
+| [133/134](../triton_eval_cases/case_133/problem.txt) | 候选和tester都保留可变状态视图 | 六步更新结束后观察原历史对象；误差0.00574470 / 0.89898037，阈值0.025；最终状态另需1e-5 |
+| [135/136](../triton_eval_cases/case_135/problem.txt) | 41个smoke点不能证明整个连续盒域 | [-1,1]^12的凸残差证书；135全域上界0.7187501<1，136真实顶点反例1.34375 |
+| [137/138](../triton_eval_cases/case_137/problem.txt) | 普通FP64求和也会丢失小项，不能自动当oracle | 对存储的4×12 FP32输入求精确实数和；误差1.92358e-8 / 1，阈值1e-5 |
+| [139–144](../triton_eval_cases/case_139/problem.txt) | 同一求和参考机制的六个全新seed | 三个合格、两个非零错误输出、一个零错误输出；不是新增算法家族 |
 
 具体输入、dtype、别名和允许修改的状态以各题合同为准。不能把所有别名都当失败，也不能把私有验证规定的完整域暗中缩成初始 smoke 样本。
 
@@ -31,7 +31,7 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 
 当前rN仅为case/arm内存储序号，实验批次以 `original_trial` 识别。明确错误、弃答、预算耗尽、服务失败分开记；标签成绩与证据质量也分开，不因事后审查改判原成绩。
 
-### 首批四题：case_119–case_122
+### 首批四题：case_125–case_128
 
 `ea_pilot_r1` 的12个槽位全部完成：source 3/4，solo/debate各4/4，费用约$0.355581。60个API请求均完整，无传输失败、截断或弃答。两种工具系统都自行修正了参考/覆盖盲区；未触发原协议的第二轮及六题扩展。这里的阴性结果仍保留，当前20题还包含后来**另开版本**的16题，不能再说整个目录“只有四例”。
 
@@ -62,9 +62,9 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 
 </details>
 
-### v2：case_123–case_128
+### v2：case_129–case_134
 
-`ea_methods_v2_r1` 共18槽：source 3/6（123弃答、124/127明确错误），solo/debate各6/6；费用约$0.593313。未触发第二轮。联合分布、共享变换、历史输出三种新机制都未产生solo错/debate对；case_124 debate用完整CPU结构分析，不能说每条工具trace都另跑GPU。
+`ea_methods_v2_r1` 共18槽：source 3/6（129弃答、130/133明确错误），solo/debate各6/6；费用约$0.593313。未触发第二轮。联合分布、共享变换、历史输出三种新机制都未产生solo错/debate对；case_130 debate用完整CPU结构分析，不能说每条工具trace都另跑GPU。
 
 <details>
 <summary>查看逐批运行统计与失败记录</summary>
@@ -93,9 +93,9 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 
 </details>
 
-### v3：case_129–case_132
+### v3：case_135–case_138
 
-`ea_methods_v3_r1/r2` 全四题三臂各两轮，共24槽：source 2/8（5明确错、1弃答），solo 6/8（2明确错），debate 6/8（2弃答）；费用约$0.962978。137个API调用完整，无传输失败或累计预算耗尽。Case_74同例纠错重复出现，满足开发机制的扩展门槛；case_132的两次弃答不改成模型曾尝试提交的reject，因此总体正确率仍打平。
+`ea_methods_v3_r1/r2` 全四题三臂各两轮，共24槽：source 2/8（5明确错、1弃答），solo 6/8（2明确错），debate 6/8（2弃答）；费用约$0.962978。137个API调用完整，无传输失败或累计预算耗尽。case_137同例纠错重复出现，满足开发机制的扩展门槛；case_138的两次弃答不改成模型曾尝试提交的reject，因此总体正确率仍打平。
 
 <details>
 <summary>查看逐批运行统计与失败记录</summary>
@@ -119,7 +119,7 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 
 逐次记录及原始证据见 [GLM traces 索引](../traces_glm/) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
-指定窗口扩展门槛： **通过**; 复验中重复纠错的题目： case_131; 配对明确错误净改善： 2.
+指定窗口扩展门槛： **通过**; 复验中重复纠错的题目： case_137; 配对明确错误净改善： 2.
 
 纠正明确错误与解决弃答分别统计。达到数值门槛后仍需独立审核关键运行证据；该报告不会启动新实验。
 
@@ -127,16 +127,16 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 
 </details>
 
-### 新seed确认：case_133–case_138
+### 新seed确认：case_139–case_144
 
-`ea_precision_transfer_r1` 共18槽：source 2/6、solo5/6、debate6/6，唯一solo错/debate对为case_135；费用约$0.617964。92份API请求/响应完整，无传输失败、预算耗尽或弃答。Debate仅多答对一题，未达到事前规定的“至少多两题”全组第二轮门槛，已停止该批扩量，没有挑选个别题补跑。case_133/137的solo自行找到精确参考，反驳“solo普遍不能解决”的解释。
+`ea_precision_transfer_r1` 共18槽：source 2/6、solo5/6、debate6/6，唯一solo错/debate对为case_141；费用约$0.617964。92份API请求/响应完整，无传输失败、预算耗尽或弃答。Debate仅多答对一题，未达到事前规定的“至少多两题”全组第二轮门槛，已停止该批扩量，没有挑选个别题补跑。case_139/143的solo自行找到精确参考，反驳“solo普遍不能解决”的解释。
 
 <details>
 <summary>查看逐批运行统计与失败记录</summary>
 
 <!-- BEGIN GENERATED PRECISION TRANSFER RESULTS -->
 
-生成时间：2026-10-01T04:01:51.753924+00:00；题目范围：case_133–case_138。
+生成时间：2026-10-01T04:01:51.753924+00:00；题目范围：case_139–case_144。
 
 | 批次 | 模型 / 提供方 | 预算 / 推理 / 轮次 | 方式 | 次数 | 正确 | 错误 | 弃答 | 截断 | 其他 | API 估算 |
 |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|
@@ -169,7 +169,7 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 四阶段均于各自首次模型调用前记录设置，已评测题不改源码、合同、阈值或标签。公共 `initial_probe` 的实际T4输出在preview后、冻结前附入合同，不能伪造；三组输入相同，私有family、oracle和搜索记录不进入agent镜像。独立CPU参考与真实T4十次决定性测量先于模型评测，保留全部候选与失败验证记录。
 
 - **首批**：先四题×三臂一轮；只有明确solo错/debate对才全四题再测一轮。相同case重复纠错、有效证据、正向差异多于反向明确错误，才按冻结规则新增六个平衡题并全组三臂测两轮。弃答、耗尽和provider失败不触发。该原计划未进入第二轮，后续v2不是伪装成成功扩量。
-- **v2/v3**：同样先完成全组，再由明确solo错/debate对触发全组第二轮；同例重复、正向多于反向明确错误、独立证据审查通过才继续新seed。此门槛统计明确纠错，不等于总正确率提高；v3的case_132弃答必须另计。
+- **v2/v3**：同样先完成全组，再由明确solo错/debate对触发全组第二轮；同例重复、正向多于反向明确错误、独立证据审查通过才继续新seed。此门槛统计明确纠错，不等于总正确率提高；v3的case_138弃答必须另计。
 - **新seed确认**：保持同一4×12生成器、Neumaier实现、精确和合同和1e-5阈值，预先固定新范围203600–204111。按seed升序取三个误差≤半阈值的合格、两个非零失败、一个零输出失败，失败均>两倍阈值，不依模型答案选例。第一轮完成全部18槽后，仅当debate至少多对两题且有一个明确纠错才全组再测。重复优势还需两轮均领先、至少同一题纠错重复及有效证据；本次没有达到第二轮触发条件。
 
 公共材料、模型、role prompts和工具权限在这些批次中未同时改造。相同输出额度不隔离角色数量、输入上下文或计算量的影响；失败槽位不由成功重试替换，工具内部修复仍属于原trial。所有72次试验共378个实际API请求，无已知缺失usage；有真实probe/ledger错误，不能将“无API失败”写成“全部操作无错”。
@@ -190,9 +190,9 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 | 历史对象 | [64候选](private_data/search_mutation.json)和独立精确参考；候选返回对象保持原别名直到六步结束，参考保存各步独立值；分别检查允许修改的状态和禁止修改的梯度。 |
 | 连续盒域 | 正系数ReLU残差非负且凸，最大值可取4096顶点；独立64个active-subset支持函数以整数/Fraction复核全部[64候选](private_data/search_box_relu.json)。base=0.25x0+0.5x1在全域另加1e-7舍入/FTZ界，不能说内部点base总是精确。未选中seed194063的M=1只表明上界无法证明通过，已改为requires_boundary_analysis；578个邻近FP32点的补查也不构成全域证明。 |
 | 精确求和 | [256开发候选](private_data/search_precision_oracle.json)的1024行，用math.fsum、精确dyadic整数和另写Fraction逐项一致。±2^80、±2^30消去后八个正小量必须保留；普通顺序FP64与FP32 compensation本身都可能丢失小项。 |
-| 新seed | [512完整候选](private_data/search_precision_transfer.json)与193600–193855开发范围不交叠；9合格、401非零失败、102零输出失败。另写Fraction核验2048行、struct逐步FP32舍入复现全部候选；最后FP64参考转换精确。选中seed为203635/203600/203795/203601/203820/203604，对应133–138。 |
+| 新seed | [512完整候选](private_data/search_precision_transfer.json)与193600–193855开发范围不交叠；9合格、401非零失败、102零输出失败。另写Fraction核验2048行、struct逐步FP32舍入复现全部候选；最后FP64参考转换精确。选中seed为203635/203600/203795/203601/203820/203604，对应139–144。 |
 
-所有公开generator重建的输入匹配私有hash；已选box/precision题远离阈值，未选边界记录的修正不改其标签。case_134 CPU/GPU最终归一化差2.22e-16，不是输出或参考不一致。输入材料公平性另逐份核对case_131 r1的5份solo、9份debate请求及source prompt，完整源码/合同相同且无截断，没有私有答案。
+所有公开generator重建的输入匹配私有hash；已选box/precision题远离阈值，未选边界记录的修正不改其标签。case_140 CPU/GPU最终归一化差2.22e-16，不是输出或参考不一致。输入材料公平性另逐份核对case_137 r1的5份solo、9份debate请求及source prompt，完整源码/合同相同且无截断，没有私有答案。
 
 </details>
 
@@ -203,18 +203,18 @@ Archived on October 19, 2026. These input-based cases are excluded from current 
 
 | 范围 | 关键证据与局限 |
 |---|---|
-| 119/120 | [solo t7](../traces_glm/case_120/solo/r1/probes/t7_probe.py)和debate均以独立居中FP64参考测量真实GPU。119 debate t13把FP32统计转Python float后用混合精度，不能叫精确复现initial_probe；其c2“旧零误差不充分”也不能因新实验通过就被驳回。119/120的辅助向量归约不等于候选逐元素顺序，2.24%协方差归因不是实际kernel测量。Source119虽对却依赖共用错误参考；121误拒，122对但提出了无效辅助反例。 |
-| 121/122 | [121 solo](../traces_glm/case_121/solo/r1/probes/t7_probe.py)独立GPU穷举121字，逐项检查shape/dtype/finite。Debate121 t12/t13参考broadcast失败后修复；t15只统计超阈值条目，不能把“无超标”说成主动测得全域最大误差0，且没做finite检查。122合法反例(0,1,2)误差3.8125、(0,1,2,2)误差7.625，solo/debate均找到；非identity不一定失败，非involution才是方向问题。 |
-| 123/124 | [123 debate](../traces_glm/case_123/debate/r1/transcript.md)实际GPU计数支持trust，却把顺序XOR-fold错当对原始值的一次性移位，编造8×5低秩模型；仿射offset不能增加秩，末轮review未纠正。其list(None)、combinations索引报错后修复。124 solo辅助formula_match也写错fold，但主GPU四阶计数有效；[124 debate](../traces_glm/case_124/debate/r1/transcript.md)是完整CPU整数仿真＋GF(2)证明，没有本次GPU执行。找到的确是四通道依赖；“任何非空依赖都破坏四阶”过强。 |
-| 125/126 | [125 solo](../traces_glm/case_125/solo/r1/probes/t7_probe.py)及其余主probe穷举384共享变换，局部首选不同不等于无共同解。126 solo t6打印NameError后t7重跑成功。126 debate只检features未改，不是全部输入检查；注释的NaN sentinel未实际设置，输出转FP64后也不能证明原dtype。模型probe未保存完整输出hash，只核对合同误差与最优变换。 |
-| 127/128 | [127 solo](../traces_glm/case_127/solo/r1/probes/t7_probe.py)与debate都在完整更新后才stack候选原对象，同时参考每步copy。128 solo首次混用CPU/CUDA比较失败后修复；torch.equal(g, regenerated_g)不是独立uint8字节检查。127的别名仍在容差内，不能因“存在别名”误拒。 |
-| 129/130 | 两轮两工具臂均建立顶点证书或有效GPU反例；[129 solo r1 t11](../traces_glm/case_129/solo/r1/probes/t11_probe.py)在执行后才clone，输入未修改检查无效；130 debate r2该字段硬编码true。缺base舍入界、把逐神经元最大值和3.3125当实际联合最大值、用零分母floor形成巨大smoke倍率，均属论证限制。广播/设备/矩阵乘标量错误有后续修复；被ledger拦下的probe未执行。129 r2的20万随机点仅CPU搜索，不能代替4096顶点证书，GPU batch仍合法。 |
-| 131 | [solo r1](../traces_glm/case_131/solo/r1/probes/t7_probe.py)/r2均把np.float64.sum的0当exact，以0.99置信误拒，非执行故障。[debate r1](../traces_glm/case_131/debate/r1/transcript.md)有Skeptic接受错误参考→Describer指出吸收→Experimenter用fsum＋真实GPU→Judge纠正的链条，E=1.92357928e-8。r2修复Fraction(np.float32)错误后用Fraction复核共享初始T4输出，没有重新执行GPU。 |
-| 132 | Solo两轮用fsum＋真实GPU得到E=1，r2缺NumPy import后修复。[debate r1](../traces_glm/case_132/debate/r1/transcript.md)发现参考错误但承诺的补测未执行；[r2](../traces_glm/case_132/debate/r2/transcript.md)以AST等价Triton副本＋Fraction/fsum完成有效E=1测量，却未finalize决定性claim。两次reject请求被ledger拒绝，最终弃答，不可追溯重评分；两次均未耗尽预算。 |
-| 133–135 | [135 solo](../traces_glm/case_135/solo/r1/probes/t7_probe.py)再次误用FP64零参考，以0.99置信误拒；[debate t13](../traces_glm/case_135/debate/r1/probes/t13_probe.py)用Fraction＋原GPU得到E=3.3787355e-8，但Describer起初已识别参考问题，并非每次都是角色间纠正已出错verdict。其t12 full模拟重复计首个2^80，未修复，不影响t13主证据。133 solo和134 solo自行用Fraction；133 solo、134 debate有Fraction(np.float32)失败后以float精确转换修复。134 debate跑的是逐AST验证等价源码副本，不是修正kernel。 |
-| 136–138 | [136 solo](../traces_glm/case_136/solo/r1/probes/t7_probe.py)标签碰巧对，仍用错误零参考和伪误差；debate用Fraction＋GPU得到0.66109915，其PTX零opcode计数未存文本，不能证明无编译器问题。[137 solo](../traces_glm/case_137/solo/r1/probes/t7_probe.py)自己找到精确参考，Python dict stdout仍是有效原始数值而非解析JSON。138 solo修复Fraction类型错误；[debate t17](../traces_glm/case_138/debate/r1/probes/t17_probe.py)真修复参考得E=1，但未finalize c1，最终依c2机制和raw t17拒绝，登记缺口仍保留。 |
+| 125/126 | [solo t7](../traces_glm/case_126/solo/r1/probes/t7_probe.py)和debate均以独立居中FP64参考测量真实GPU。125 debate t13把FP32统计转Python float后用混合精度，不能叫精确复现initial_probe；其c2“旧零误差不充分”也不能因新实验通过就被驳回。125/126的辅助向量归约不等于候选逐元素顺序，2.24%协方差归因不是实际kernel测量。Source125虽对却依赖共用错误参考；127误拒，128对但提出了无效辅助反例。 |
+| 127/128 | [127 solo](../traces_glm/case_127/solo/r1/probes/t7_probe.py)独立GPU穷举121字，逐项检查shape/dtype/finite。Debate127 t12/t13参考broadcast失败后修复；t15只统计超阈值条目，不能把“无超标”说成主动测得全域最大误差0，且没做finite检查。128合法反例(0,1,2)误差3.8125、(0,1,2,2)误差7.625，solo/debate均找到；非identity不一定失败，非involution才是方向问题。 |
+| 129/130 | [129 debate](../traces_glm/case_129/debate/r1/transcript.md)实际GPU计数支持trust，却把顺序XOR-fold错当对原始值的一次性移位，编造8×5低秩模型；仿射offset不能增加秩，末轮review未纠正。其list(None)、combinations索引报错后修复。130 solo辅助formula_match也写错fold，但主GPU四阶计数有效；[130 debate](../traces_glm/case_130/debate/r1/transcript.md)是完整CPU整数仿真＋GF(2)证明，没有本次GPU执行。找到的确是四通道依赖；“任何非空依赖都破坏四阶”过强。 |
+| 131/132 | [131 solo](../traces_glm/case_131/solo/r1/probes/t7_probe.py)及其余主probe穷举384共享变换，局部首选不同不等于无共同解。132 solo t6打印NameError后t7重跑成功。132 debate只检features未改，不是全部输入检查；注释的NaN sentinel未实际设置，输出转FP64后也不能证明原dtype。模型probe未保存完整输出hash，只核对合同误差与最优变换。 |
+| 133/134 | [133 solo](../traces_glm/case_133/solo/r1/probes/t7_probe.py)与debate都在完整更新后才stack候选原对象，同时参考每步copy。134 solo首次混用CPU/CUDA比较失败后修复；torch.equal(g, regenerated_g)不是独立uint8字节检查。133的别名仍在容差内，不能因“存在别名”误拒。 |
+| 135/136 | 两轮两工具臂均建立顶点证书或有效GPU反例；[135 solo r1 t11](../traces_glm/case_135/solo/r1/probes/t11_probe.py)在执行后才clone，输入未修改检查无效；136 debate r2该字段硬编码true。缺base舍入界、把逐神经元最大值和3.3125当实际联合最大值、用零分母floor形成巨大smoke倍率，均属论证限制。广播/设备/矩阵乘标量错误有后续修复；被ledger拦下的probe未执行。135 r2的20万随机点仅CPU搜索，不能代替4096顶点证书，GPU batch仍合法。 |
+| 137 | [solo r1](../traces_glm/case_137/solo/r1/probes/t7_probe.py)/r2均把np.float64.sum的0当exact，以0.99置信误拒，非执行故障。[debate r1](../traces_glm/case_137/debate/r1/transcript.md)有Skeptic接受错误参考→Describer指出吸收→Experimenter用fsum＋真实GPU→Judge纠正的链条，E=1.92357928e-8。r2修复Fraction(np.float32)错误后用Fraction复核共享初始T4输出，没有重新执行GPU。 |
+| 138 | Solo两轮用fsum＋真实GPU得到E=1，r2缺NumPy import后修复。[debate r1](../traces_glm/case_138/debate/r1/transcript.md)发现参考错误但承诺的补测未执行；[r2](../traces_glm/case_138/debate/r2/transcript.md)以AST等价Triton副本＋Fraction/fsum完成有效E=1测量，却未finalize决定性claim。两次reject请求被ledger拒绝，最终弃答，不可追溯重评分；两次均未耗尽预算。 |
+| 139–141 | [141 solo](../traces_glm/case_141/solo/r1/probes/t7_probe.py)再次误用FP64零参考，以0.99置信误拒；[debate t13](../traces_glm/case_141/debate/r1/probes/t13_probe.py)用Fraction＋原GPU得到E=3.3787355e-8，但Describer起初已识别参考问题，并非每次都是角色间纠正已出错verdict。其t12 full模拟重复计首个2^80，未修复，不影响t13主证据。139 solo和140 solo自行用Fraction；139 solo、140 debate有Fraction(np.float32)失败后以float精确转换修复。140 debate跑的是逐AST验证等价源码副本，不是修正kernel。 |
+| 142–144 | [142 solo](../traces_glm/case_142/solo/r1/probes/t7_probe.py)标签碰巧对，仍用错误零参考和伪误差；debate用Fraction＋GPU得到0.66109915，其PTX零opcode计数未存文本，不能证明无编译器问题。[143 solo](../traces_glm/case_143/solo/r1/probes/t7_probe.py)自己找到精确参考，Python dict stdout仍是有效原始数值而非解析JSON。144 solo修复Fraction类型错误；[debate t17](../traces_glm/case_144/debate/r1/probes/t17_probe.py)真修复参考得E=1，但未finalize c1，最终依c2机制和raw t17拒绝，登记缺口仍保留。 |
 
-此外，不少claim缺 `scope_rationale`、description参数不合格式后在原运行内修复。大数间距的解释也需准确：FP64在2^80附近间距为2^28，±2^30可精确加入，丢失的是单位量级小项；“补偿大项相邻”仍不够，第一大项之前的小量也可能被correction抹掉。case_133/137 solo成功与case_136偶然标签正确都必须保留，不按证据质量事后重算二元分数。
+此外，不少claim缺 `scope_rationale`、description参数不合格式后在原运行内修复。大数间距的解释也需准确：FP64在2^80附近间距为2^28，±2^30可精确加入，丢失的是单位量级小项；“补偿大项相邻”仍不够，第一大项之前的小量也可能被correction抹掉。case_139/143 solo成功与case_142偶然标签正确都必须保留，不按证据质量事后重算二元分数。
 
 </details>
 
@@ -229,8 +229,8 @@ python benchmark_fn_fp/eval_scripts/solo_vs_debate_challenges/report_methods_v3.
 python benchmark_fn_fp/eval_scripts/solo_vs_debate_challenges/report_precision_transfer.py
 ```
 
-`--json`可选导出`private_data/reports/`，原始记录仍在统一trace。真实GPU验证程序为 `eval_scripts/solo_vs_debate_challenges/validate_modal.py`，preview/附加真实初始观察/freeze用于构造，不能重写已评测合同。新模型运行使用共享runner的 `--dataset solo_vs_debate_challenges --cases ...`，另有API/GPU费用。
+`--json`可选导出`private_data/reports/`，原始记录仍在统一trace。真实GPU验证程序为 `eval_scripts/solo_vs_debate_challenges/validate_modal.py`，preview/附加真实初始观察/freeze用于构造，不能重写已评测合同。这些案例已经归档，共享模型 runner 会拒绝新实验；这里只保留历史构造与审核程序。
 
-Case_75暴露了具体编排缺口：实验请求通常由open claims驱动，改成inconclusive后承诺的修复可能失去调度；修复成功也可能没登记。未来可在原预算内增加带claim ID的有界修复请求、补测与显式finalize检查，但这是**未测试的下一版本建议**，不能算本批改进或重评分理由。仍需保留无法修复时的弃答，不因probe成功就自动confirm。
+case_138暴露了具体编排缺口：实验请求通常由open claims驱动，改成inconclusive后承诺的修复可能失去调度；修复成功也可能没登记。未来可在原预算内增加带claim ID的有界修复请求、补测与显式finalize检查，但这是**未测试的下一版本建议**，不能算本批改进或重评分理由。仍需保留无法修复时的弃答，不因probe成功就自动confirm。
 
 这是一条自适应开发轨迹。新seed确认只是在已选机制内部迁移，不是新算法家族，也不是一般多agent优势证明。同例重复不是独立新题；未来需固定构造、完整保留负例，以同预算solo自审、独立多次solo汇总等对照区分复核流程、采样和角色交互的作用。Confidence仅原样记录，未校准为可靠概率。

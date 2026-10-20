@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e02`
-- Turns: 10
-- Tool events: 13
+- Entry: `case_v`
+- Turns: 8
+- Tool events: 11
 - Claims: 1
-- Description updates: 2
-- LLM time: 83.06s across 9 calls | tokens: in=192906 out=4946 total=197852
+- Description updates: 1
+- LLM time: 42.568s across 7 calls | tokens: in=104517 out=2714 total=107231
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.97
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e02"
+    "entry": "case_v"
   }
   Output summary:
   {
-    "entry": "case_e02"
+    "entry": "case_v"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e02"
+    "entry": "case_v"
   }
   Output summary:
   {
-    "entry": "case_e02"
+    "entry": "case_v"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e02"
+    "entry": "case_v"
   }
   Output summary:
   {
-    "entry": "case_e02"
+    "entry": "case_v"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e02",
+    "entry": "case_v",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e02"
+    "entry": "case_v"
   }
 
-### Turn 2 - `describer` (13.016462213999999s, in=7380 out=1083)
+### Turn 2 - `describer` (9.419018206999993s, in=4731 out=823)
 
 Message:
 
 ```text
-The contract and kernel source are fully available. I'll record a structured description of the model, noting the key numerical-precision risk: the kernel computes means/covariances in float32 from raw (uncentered) moments with large offsets (~32, -24), so catastrophic cancellation is the main bug surface; the math itself matches the ridge formulation.
+I have full context already; I'll record the description model for this Fourier-reconstruction-with-cutoff case.
 ```
 
 Tool calls:
@@ -75,269 +75,221 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
-      "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
-      "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
-      "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
-      "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
+      "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} (cos-coef[k-1]*cos(2*pi*k*n/64) + sin-coef[k-1]*sin(2*pi*k*n/64)), evaluated in float64 on the supplied float32 inputs.",
+      "Scope is fixed to the tensors from make_inputs() (coefficients (2,16) float32, offset (1,) float32); other coefficient tensors are out of scope.",
+      "Output: finite float32 vector of shape (64,).",
+      "Tolerance: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 (relative L2, quite loose, consistent with the stated frequency-cutoff approximation).",
+      "FP multiply/add fusion is disabled in the launch, per problem statement."
     ],
     "kernel_model": [
-      "Singl
-  ...[truncated 2781 chars]
+      "Triton kernel computes output[n] = offset + sum_{k=1..RETAINED=6} of cos/sin terms only, truncating 
+  ...[truncated 2371 chars]
   Output summary:
   {
     "contract_model": [
-      "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
-      "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
-      "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
-      "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
-      "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
+      "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} (cos-coef[k-1]*cos(2*pi*k*n/64) + sin-coef[k-1]*sin(2*pi*k*n/64)), evaluated in float64 on the supplied float32 inputs.",
+      "Scope is fixed to the tensors from make_inputs() (coefficients (2,16) float32, offset (1,) float32); other coefficient tensors are out of scope.",
+      "Output: finite float32 vector of shape (64,).",
+      "Tolerance: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 (relative L2, quite loose, consistent with the stated frequency-cutoff approximation).",
+      "FP multiply/add fusion is disabled in the launch, per problem statement."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Single Triton program (grid (1,), N=32 constexpr, num_warps=1, enable_fp_fusion=False) sequentially accumulates 8 raw moments in float32 via tl.static_range (kernel.py lines 17-28).",
-      "Means and covariance-style quantities computed from raw moments: a = E[x0^2]-m0^2+1/1024, b = E[x0x1]-m0m1, c = E[x1^2]-m1^2+1/1024, u,v = cross moments with y minus m*my (lines 29-36).",
-    
-  ...[truncated 2495 chars]
+      "Triton kernel computes output[n] = offset + sum_{k=1..RETAINED=6} of cos/sin terms only, truncating modes 7..16 (a fixed low-pass cutoff approximation).",
+      "Single program launch over N=64 samples; coefficients are loaded scalar-wise with layout coefficients[0,k-1] (cos) and coefficients[MODES+k-1] (sin), matching a contiguous (2,16) row-major layout.",
+      "Angle computed in float32: n.to(float32) * (2*pi*k/64); accumulation in float32 with enable_fp_fusion=False.",
+  ...[truncated 2071 chars]
 
-### Turn 3 - `skeptic` (7.003973698000001s, in=15004 out=368)
-
-Message:
-
-```text
-Record the key in-scope claim: kernel float32 raw-moment cancellation vs float64 reference exceeds 5% tolerance.
-```
-
-Tool calls:
-
-- `record_claim -> t6 error`
-  Args:
-  {
-    "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-mom
-  ...[truncated 445 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 4 - `skeptic` (7.409192936s, in=15981 out=518)
+### Turn 3 - `skeptic` (5.274791421000003s, in=11463 out=377)
 
 Message:
 
 ```text
-The prior record_claim was rejected for missing scope_rationale; I'll re-send it with the required fields.
+I'll record the central testable claim: whether the fixed 6-mode cutoff meets the 0.15 relative L2 bound on the seeded workload.
 ```
 
 Tool calls:
 
-- `record_claim -> t7 ok`
+- `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
+    "rationale": "Dropped tail modes are drawn with std 0.04 vs retained std 0.15, and the DC bias (+1.0) plus offset are kept, so the relative L2 error ratio depends on the realized seeded energy split and could plausibly land near or above 0.15; it must be computed numerically.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-mom
-  ...[truncated 916 chars]
+        "summary": "Reference uses ALL sixteen modes; numerical contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15, and 'the only inputs in scope are the float32 tensors returned by make_inputs() in kernel.py', so the fixed seeded workload decides pass/fail."
+      }
+    ],
+    "scope_rationale": "The contract fixes the exact seeded workload from make_inputs() and a numeric bound of 0.15 relative L2 against the all-16-
+  ...[truncated 395 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
+    "rationale": "Dropped tail modes are drawn with std 0.04 vs retained std 0.15, and the DC bias (+1.0) plus offset are kept, so the relative L2 error ratio depends on the realized seeded energy split and could plausibly land near or above 0.15; it must be computed numerically.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-moment cancellation occurs."
+        "summary": "Reference uses ALL sixteen modes; numerical contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15, and 'the only inputs in scope are the float32 tensors returned by make_inputs() in kernel.py', so the fixed seeded workload decides pass/fail."
       }
     ],
-    "scope_rationale": "The contract fixes the workload to make_inputs() (seed 130653) X (32,2)/y (32,)/Q (4,2), defines the target prediction in float64-or-better arithmetic, and accepts only if ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05. The kernel computes all moments and the 2x2 ridge solve in float32 from raw uncentered moment
-  ...[truncated 550 chars]
+    "scope_rationale": "The contract fixes the exact seeded workload from make_inputs() and a numeric bound of 0.15 relative L2 against the all-16-mode float64 reference; whether truncation to 6 modes violates this bound on that workload is precisely the stated contract question.",
+    "statement": "For the fixed seeded workload from make_inputs() (PCG64 seed 811158), the kernel's 6-mode cutoff (RETAINED=6, dropping modes 7-16) yields a relative L2 error against the float64 all-16-mode reference that exceeds the contract bound of
+  ...[truncated 29 chars]
 
-### Turn 5 - `describer` (13.839115586999998s, in=16514 out=836)
-
-Message:
-
-```text
-The description model is already recorded and there are no open description tasks. The open claim c1 concerns the cancellation magnitude; I can add one useful refinement from the source numbers: the expected fp32 cancellation error scale versus the 5% tolerance and the ridge damping, which cuts both ways for claim c1.
-```
-
-Tool calls:
-
-- `record_description_update -> t8 ok`
-  Args:
-  {
-    "impact_on_claims": [
-      "c1: this quantification cuts both ways - a single fp32 subtraction error (~6e-5 absolute) is ~1.6% of var 0.0039, and ridge lambda=1/1024 adds 25% to the effective diagonal, damping covariance errors in beta; however 32-term summation error and the beta-noise amplification may still exceed 5%. A float64 reference comparison probe (e.g. centered computation in numpy float64 on the exact seeded inputs) is the decisive evidence."
-    ],
-    "kernel_model": [
-      "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not 
-  ...[truncated 1477 chars]
-  Output summary:
-  {
-    "contract_model": [],
-    "impact_on_claims": [
-      "c1: this quantification cuts both ways - a single fp32 subtraction error (~6e-5 absolute) is ~1.6% of var 0.0039, and ridge lambda=1/1024 adds 25% to the effective diagonal, damping covariance errors in beta; however 32-term summation error and the beta-noise amplification may still exceed 5%. A float64 reference comparison probe (e.g. centered computation in numpy float64 on the exact seeded inputs) is the decisive evidence."
-    ],
-    "kernel_model": [
-      "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not necessarily beyond, the 5% output tolerance."
-    ],
-    "open_questions": [
-      "Does the fp32 raw-moment error, after 32-term accumulation rounding and the 2x2 solve, stay under or exceed the 5% final-output tolerance against a true float64 centered computation? Needs runtime probe with float64 oracle."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Ridge damping partially
-  ...[truncated 1186 chars]
-
-### Turn 6 - `skeptic` (6.931459767s, in=22634 out=291)
+### Turn 4 - `experimenter` (5.490415521000017s, in=13239 out=386)
 
 Message:
 
 ```text
-The primary in-scope failure surface (fp32 raw-moment cancellation vs. the float64 contract reference) is already captured by claim c1, and no new evidence has arrived since it was recorded. The kernel's math matches the ridge normal equations, layouts match the fixed seeded workload, and other stress axes (other seeds, shapes, dtypes) are explicitly out of contract. I have nothing new to add beyond c1; the decisive next step is a runtime probe against a float64 oracle.
+I'll run the decisive probe for claim c1: compute the kernel output on the fixed seeded workload and compare to the float64 all-16-mode reference with the contract's relative L2 metric.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t9 ok`
-  Args:
-  {
-    "reason": "The only material in-scope risk \u2014 fp32 raw-moment catastrophic cancellation on the contractually fixed make_inputs() (seed 130653) workload, exceeding the 5% tolerance against the float64 reference \u2014 is already recorded as c1. The kernel's algebra matches the ridge normal equations, contiguity matches make_inputs output, and all other variations (seeds, shapes, dtypes) are out of contract per problem.txt. No new high-quality in-scope claims are warranted; c1 needs a float64-oracle runtime probe, not further speculation.",
-    "reviewed_claims": [
-      "c1"
-    ]
-  }
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "The only material in-scope risk \u2014 fp32 raw-moment catastrophic cancellation on the contractually fixed make_inputs() (seed 130653) workload, exceeding the 5% tolerance against the float64 reference \u2014 is already recorded as c1. The kernel's algebra matches the ridge normal equations, contiguity matches make_inputs output, and all other variations (seeds, shapes, dtypes) are out of contract per problem.txt. No new high-quality in-scope claims are warranted; c1 needs a float64-oracle runtime probe, not further speculation.",
-    "reviewed_claims": [
-      "c1"
-    ],
-    "reviewed_tool_event_count": 8,
-    "turn": 6
-  }
-
-### Turn 7 - `experimenter` (10.878162933000006s, in=23802 out=591)
-
-Message:
-
-```text
-The only open claim is c1; I'll run the kernel on the fixed seeded inputs and compare against a float64 centered-moment oracle (not the initial_probe's float32 raw-moment reference).
-```
-
-Tool calls:
-
-- `run_claim_probe -> t10 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import json\nimport numpy as np\nimport torch\n\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e02/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nx, y, q = k.make_inputs()\nout = k.run(x, y, q)\n\n# float64 contract oracle: centered ridge, explicit normal equations\nX = x.cpu().numpy().astype(np.float64)\nY = y.cpu().numpy().astype(np.float64)\nQ = q.cpu().numpy().astype(np.float64)\nmu_x = X.mean(axis=0); mu_y = Y.mean()\nXc = X - mu_x; Yc = Y - mu_y\nA = Xc.T @ Xc / 32 + np.eye(2) / 1024\nrhs = Xc.T @ Yc / 32\nbeta = np.linalg.solve(A, rhs)\npred = mu_y + (Q - mu_x) @ beta\n\no = out.cpu().numpy().astype(np.float64)\ndiff = np.linalg.norm(o - pred)\ndenom = m
-  ...[truncated 878 chars]
+    "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_v\")\nimport numpy as np, torch\nimport kernel as K\n\ncoefficients, offset = K.make_inputs(\"cuda\")\nout = K.run(coefficients, offset).float64()\nc = coefficients.cpu().numpy().astype(np.float64)\no = float(offset.cpu().numpy()[0])\nn = np.arange(64)\nref = np.full(64, o)\nfor k in range(1, 17):\n    ref += c[0, k-1]*np.cos(2*np.pi*k*n/64) + c[1, k-1]*np.sin(2*np.pi*k*n/64)\ndiff = out.cpu().numpy().astype(np.float64) - ref\nratio = np.linalg.norm(diff) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 all-16-mode reference\",\n  \"ratio\": float(ratio),\n  \"tolerance\": 0.15,\n  \"exceeds\": bool(ratio > 0.15),\n  \"ref_norm\": float(np.li
+  ...[truncated 269 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t10_probe.py",
-        "sha256": "d7dc58b33cc3191f1e1f68401d4c87988987be05374d10a08129bbf45ad824bc"
+        "path": "probes/t7_probe.py",
+        "sha256": "03ce2581d51db6137c6a112af72b0324caa4bd29c5539b3218b0991764a49610"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t10_stdout.txt",
-        "sha256": "eeedfe4e5636afec3afeb7b56f220f468f033c4fb9840ab6dd38221c557d9455"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t10_stderr.txt",
+        "path": "probes/t7_stderr.txt",
+        "sha256": "08611c2ff1adda9150791a6abfb8c446b82b8a53ecaa1cebfb0f76b74063d734"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "For the fixed seeded workload from make_inputs() (PCG64 seed 811158), the kernel's 6-mode cutoff (RETAINED=6, dropping modes 7-16) yields a relative L2 error against the float64 all-16-mode reference that exceeds the contract bound of 0.15.",
+    "duration_s": 5.18412,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "k
+  ...[truncated 2029 chars]
+
+### Turn 5 - `experimenter` (6.580907445999998s, in=15223 out=366)
+
+Message:
+
+```text
+The probe failed on a trivial API mistake (`.float64()` isn't a torch method). Rerunning with `.double()`.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t8 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_v\")\nimport numpy as np, torch\nimport kernel as K\n\ncoefficients, offset = K.make_inputs(\"cuda\")\nout = K.run(coefficients, offset).cpu().numpy().astype(np.float64)\nc = coefficients.cpu().numpy().astype(np.float64)\no = float(offset.cpu().numpy()[0])\nn = np.arange(64)\nref = np.full(64, o)\nfor k in range(1, 17):\n    ref += c[0, k-1]*np.cos(2*np.pi*k*n/64) + c[1, k-1]*np.sin(2*np.pi*k*n/64)\ndiff = out - ref\nratio = np.linalg.norm(diff) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 all-16-mode reference\",\n  \"ratio\": float(ratio),\n  \"tolerance\": 0.15,\n  \"exceeds\": bool(ratio > 0.15),\n  \"ref_norm\": float(np.linalg.norm(
+  ...[truncated 245 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "a6de30fab7c617387cbcb989033c130d4baf03fa8d7383bb96f4238b4e5bc378"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "08434d3146e74b0c1e888b2a49df4f28ff3ff6919fe7a3be41143db98c2495e1"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t10_json_result.json",
-        "sha256": "9aeafdd49f8afb75d6af7694f4b0f8a1061685e5c8fa1d95ce44e84fff018d36"
+        "path": "probes/t8_json_result.json",
+        "sha256": "8c306cbfcb252ecfb181bdf3eb3ef61b05222a676ea0f48dc3ae3faada7bb0f4"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with 
-  ...[truncated 4331 chars]
+    "claim_statement": "For the fixed seeded workload from make_inputs() (PCG64 seed 811158), the kernel's 6-mode cutoff (RETAINED=6, dropping modes 7-16) yields a relative L2 error against the float64 all-16-mode reference that exceeds 
+  ...[truncated 2934 chars]
 
-### Turn 8 - `experimenter` (8.861781063999999s, in=27198 out=525)
+### Turn 6 - `experimenter` (5.33836600799998s, in=17545 out=279)
 
 Message:
 
 ```text
-The probe decisively confirms c1: the kernel output deviates from the float64 contract reference by 25.6% relative error (tolerance 5%), and the fp32 raw-moment covariance itself is off by 2.2% from the exact value.
+The t8 probe succeeded: relative L2 ratio 0.2305 exceeds the 0.15 bound, confirming claim c1. I'll finalize that evidence now; this covers the only open claim.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t11 ok`
+- `finalize_probe_evidence -> t9 ok`
   Args:
   {
     "data": {
-      "beta_f64": [
-        0.7097992046560915,
-        -0.9074404433080981
+      "exceeds": true,
+      "metric": "relative L2 error vs float64 all-16-mode reference",
+      "out_finite": true,
+      "out_shape": [
+        64
       ],
-      "cov00_exact": 0.0057311659465995035,
-      "cov00_fp32": 0.005859375,
-      "cov00_rel_err": 0.022370500975733794,
-      "output": [
-        -0.13965053856372833,
-        0.028182610869407654,
-        0.13553990423679352,
-        -0.032625481486320496
-      ],
-      "pred_f64": [
-        -0.11580082185643768,
-        0.03600776652492417,
-        0.10418083799488609,
-        -0.04689557792391956
-      ],
-      "pred_norm": 0.16661101952414487,
-      "relative_error": 0.255847958607997,
-      "tolerance": 0.05
+      "ratio": 0.23046426609697562,
+      "ref_norm": 5.593149107153358,
+      "tolerance": 0.15
     },
-    "event_id": "t10",
+    "event_id": "t8",
     "status": "confirmed",
-    "summary": "On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding th
-  ...[truncated 415 chars]
+    "summary": "On the fixed seeded workload (make_inputs, PCG64 811158), the kernel's 6-mode cutoff output gives relative L2 error 0.2305 against the float64 all-16-mode reference (ref_norm 5.593), exceeding the contract bound 0.15. Output is finite float32 shape (64,); coefficients are contiguous, so the layout assumption held and the error is due to mode truncation.",
+    "supports": "confirmed"
+  }
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding the 5% tolerance (pred norm 0.1666 > 0.1 floor). Diagnostic: the fp32 raw-moment covariance E[x0^2]-m0^2 computes to 0.005859375 vs exact 0.00573117 (2.24% error), showing cancellation/summation noise in the fp32 raw-moment scheme that propagates through the 2x2 solve into the predictions. This confirms the kernel fails the contract acceptance criterion on the fixed in-scope workload.",
+    "summary": "On the fixed seeded workload (make_inputs, PCG64 811158), the kernel's 6-mode cutoff output gives relative L2 error 0.2305 against the float64 all-16-mode reference (ref_norm 5.593), exceeding the contract bound 0.15. Output is finite float32 shape (64,); coefficients are contiguous, so the layout assumption held and the error is due to mode truncation.",
     "supports": "confirmed",
-    "tool_event_id": "t10"
+    "tool_event_id": "t8"
   }
 
-### Turn 9 - `skeptic` (6.265644125000009s, in=31997 out=302)
+### Turn 7 - `skeptic` (3.7424118499999963s, in=20927 out=204)
 
 Message:
 
 ```text
-The decisive evidence has arrived: claim c1 is confirmed in-scope with a runtime probe showing 25.6% relative error versus the float64 contract oracle (tolerance 5%) on the exact seeded workload. The probe is well-designed, the oracle matches the contract definition exactly, and no other in-scope failure surfaces exist (other seeds/shapes are explicitly out of contract). Nothing new to add.
+The single in-scope claim c1 is decisively confirmed: the 6-mode cutoff yields relative L2 error 0.2305 on the fixed seeded workload, well above the 0.15 contract bound, with layout and finiteness conditions verified. No additional material issues remain.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t12 ok`
+- `record_no_new_claims -> t10 ok`
   Args:
   {
-    "reason": "Final review: the sole in-scope claim c1 is confirmed by runtime probe t10 \u2014 on the exact make_inputs() (seed 130653) contract workload, run() output deviates from the float64 centered-ridge prediction by 25.6% relative error (tolerance 5%, pred norm 0.1666 above the 0.1 floor), with the fp32 raw-moment covariance itself off by 2.24%, pinpointing the failure mechanism. The probe's oracle matches the contract's float64-or-better reference definition, and its output is finite float32 (4,). No other in-scope failure surface exists: other seeds/shapes/dtypes are explicitly out of contract per problem.txt, and the kernel's algebra, layouts, and ridge solve otherwise match the target. No additional claims are warranted.",
+    "reason": "Claim c1 is confirmed by direct runtime evidence on the fixed seeded workload: relative L2 error 0.2305 > 0.15 tolerance against the float64 all-16-mode reference. Secondary concerns (contiguity/layout, float32 angle precision, finiteness) were all checked in the same probe and did not contribute to the failure. No further in-scope testable claims are warranted; the contract explicitly restricts scope to this fixed workload.",
     "reviewed_claims": [
       "c1"
     ]
@@ -345,226 +297,186 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the sole in-scope claim c1 is confirmed by runtime probe t10 \u2014 on the exact make_inputs() (seed 130653) contract workload, run() output deviates from the float64 centered-ridge prediction by 25.6% relative error (tolerance 5%, pred norm 0.1666 above the 0.1 floor), with the fp32 raw-moment covariance itself off by 2.24%, pinpointing the failure mechanism. The probe's oracle matches the contract's float64-or-better reference definition, and its output is finite float32 (4,). No other in-scope failure surface exists: other seeds/shapes/dtypes are explicitly out of contract per problem.txt, and the kernel's algebra, layouts, and ridge solve otherwise match the target. No additional claims are warranted.",
+    "reason": "Claim c1 is confirmed by direct runtime evidence on the fixed seeded workload: relative L2 error 0.2305 > 0.15 tolerance against the float64 all-16-mode reference. Secondary concerns (contiguity/layout, float32 angle precision, finiteness) were all checked in the same probe and did not contribute to the failure. No further in-scope testable claims are warranted; the contract explicitly restricts scope to this fixed workload.",
     "reviewed_claims": [
       "c1"
     ],
-    "reviewed_tool_event_count": 11,
-    "turn": 9
+    "reviewed_tool_event_count": 9,
+    "turn": 7
   }
 
-### Turn 10 - `judge` (8.854348726000012s, in=32396 out=432)
+### Turn 8 - `judge` (6.721964709000019s, in=21389 out=279)
 
 Message:
 
 ```text
-The sole in-scope claim c1 is confirmed by a decisive runtime probe on the exact contract workload: 25.6% relative error vs the float64 ridge oracle (tolerance 5%), caused by fp32 raw-moment cancellation. Skeptic reviewed the latest evidence with no new claims. I'll record a reject verdict.
+The single in-scope claim c1 is confirmed by decisive runtime evidence on the exact fixed workload the contract defines: the 6-mode cutoff gives relative L2 error 0.2305 vs the 0.15 bound. Skeptic signed off; no open claims. Rejecting.
 ```
 
 Tool calls:
 
-- `record_verdict -> t13 ok`
+- `record_verdict -> t11 ok`
   Args:
   {
     "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four pr
-  ...[truncated 616 chars]
+    "reason": "The contract (problem.txt, with no test.py/get_inputs narrowing it) fixes the input domain to the tensors from make_inputs() (PCG64 seed 811158) and requires relative L2 error <= 0.15 against the float64 all-16-mode reference. Runtime probe t8 on exactly that seeded workload measured ratio 0.23046 (ref_norm 5.593), clearly exceeding 0.15. Output was finite float32 of shape (64,), and coefficients were contiguous, so layout and finiteness conditions held and the excess error is attributable to truncating modes 7-16. This is not a tolerable quantization/rounding or accumulation-order deviation \u2014 the contract explicitly sets the numeric bound and the fixed approximation must satisfy it, which it does not. No unreso
+  ...[truncated 45 chars]
   Output summary:
   {
     "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four predictions. The contract explicitly requires target arithmetic evaluated in float64 or more accurately with a 5% acceptance threshold, so this precision failure is a defect, not a tolerated rounding artifact. The initial_probe's 0.0 error is not exculpatory: its reference uses the same float32 raw-moment scheme as the kernel and therefore cannot test the contract's float64 oracle. Other seeds/shape
-  ...[truncated 216 chars]
+    "reason": "The contract (problem.txt, with no test.py/get_inputs narrowing it) fixes the input domain to the tensors from make_inputs() (PCG64 seed 811158) and requires relative L2 error <= 0.15 against the float64 all-16-mode reference. Runtime probe t8 on exactly that seeded workload measured ratio 0.23046 (ref_norm 5.593), clearly exceeding 0.15. Output was finite float32 of shape (64,), and coefficients were contiguous, so layout and finiteness conditions held and the excess error is attributable to truncating modes 7-16. This is not a tolerable quantization/rounding or accumulation-order deviation \u2014 the contract explicitly sets the numeric bound and the fixed approximation must satisfy it, which it does not. No unresolved claims remain.",
+    "verdict": "reject"
+  }
 
 ## Description Model
 
 {
   "contract_model": [
-    "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
-    "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
-    "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
-    "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
-    "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
+    "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} (cos-coef[k-1]*cos(2*pi*k*n/64) + sin-coef[k-1]*sin(2*pi*k*n/64)), evaluated in float64 on the supplied float32 inputs.",
+    "Scope is fixed to the tensors from make_inputs() (coefficients (2,16) float32, offset (1,) float32); other coefficient tensors are out of scope.",
+    "Output: finite float32 vector of shape (64,).",
+    "Tolerance: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 (relative L2, quite loose, consistent with the stated frequency-cutoff approximation).",
+    "FP multiply/add fusion is disabled in the launch, per problem statement."
   ],
   "kernel_model": [
-    "Single Triton program (grid (1,), N=32 constexpr, num_warps=1, enable_fp_fusion=False) sequentially accumulates 8 raw moments in float32 via tl.static_range (kernel.py lines 17-28).",
-    "Means and covariance-style quantities computed from raw moments: a = E[x0^2]-m0^2+1/1024, b = E[x0x1]-m0m1, c = E[x1^2]-m1^2+1/1024, u,v = cross moments with y minus m*my (lines 29-36).",
-    "2x2 solve via explicit Cramer's rule with tl.div_rn (lines 37-39); prediction for 4 queries via vectorized tl.arange(0,4) loads and stores (lines 40-44).",
-    "run() allocates float32 (4,) output and launches the kernel; mathematically the estimator matches the ridge normal equations (Xc^T Xc/32 + lambda I) beta = Xc^T yc/32.",
-    "All arithmetic (loads, sums, products, divisions) is float32; only div_rn forces round-to-nearest division.",
-    "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not necessarily beyond, the 5% output tolerance."
+    "Triton kernel computes output[n] = offset + sum_{k=1..RETAINED=6} of cos/sin terms only, truncating modes 7..16 (a fixed low-pass cutoff approximation).",
+    "Single program launch over N=64 samples; coefficients are loaded scalar-wise with layout coefficients[0,k-1] (cos) and coefficients[MODES+k-1] (sin), matching a contiguous (2,16) row-major layout.",
+    "Angle computed in float32: n.to(float32) * (2*pi*k/64); accumulation in float32 with enable_fp_fusion=False.",
+    "run() allocates float32 (64,) output on the input device and launches with grid (1,), num_warps=2.",
+    "make_inputs generates seeded (PCG64 811158) data: retained modes 1..6 have larger std 0.15, tail modes 7..16 std 0.04, plus a +1.0 DC bias added to cos-coeff[0] and offset 0.25."
   ],
-  "open_quest
-...[truncated 2635 chars]
+  "open_questions": [
+    "Actual ratio value vs the 0.15 threshold: is it comfortably below (safe) or near the boundary (borderline)?",
+    "Does coefficient memory layout assumption (row-major contiguous (2,16)) hold for the actual device tensors produced by make_inputs()?"
+  ],
+  "risk_map": [
+    "Truncation of modes 7..16: the dropped modes are drawn with std 0.04 vs retained std 0.15; the relative L2 error of the cutoff depends on the energy ratio of dropped vs total signal, and sits near the 0.15 boundary \u2014 needs
+...[truncated 934 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_e02: centered two-feature ridge regression (lambda=1/1024) fit on fixed seeded workload (X 32x2, y 32, Q 4x2), predicting 4 queries; mathematically the kernel implements the correct normal-equation ridge solve in a single Triton program, but all statistics are accumulated in float32 from raw (uncentered) moments despite large feature offsets (~32, -24).
-- `du2` tasks=`initial`: Refinement for claim c1: quantify fp32 raw-moment cancellation against the 5% tolerance - single-subtraction error ~1.5% of the covariance, ridge lambda=1/1024 adds ~25% diagonal damping, so the failure is plausible but not certain; the 32-term fp32 summation error may dominate and the initial probe cannot decide it.
+- `du1` tasks=`initial`: case_v: kernel reconstructs a 64-sample signal from 16 Fourier coefficient pairs but only retains modes 1-6 (fixed cutoff), contract allows relative L2 error <= 0.15 vs a float64 all-16-mode reference on the fixed seeded workload.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with |m|~32, ~-24 versus variance ~0.0039), so the run() output deviates from the float64 ridge-regression prediction by more than the allowed 5% relative error (denominator floor 0.1).
+Statement: For the fixed seeded workload from make_inputs() (PCG64 seed 811158), the kernel's 6-mode cutoff (RETAINED=6, dropping modes 7-16) yields a relative L2 error against the float64 all-16-mode reference that exceeds the contract bound of 0.15.
 
 Scope: `in_scope`
 
-Scope rationale: The contract fixes the workload to make_inputs() (seed 130653) X (32,2)/y (32,)/Q (4,2), defines the target prediction in float64-or-better arithmetic, and accepts only if ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05. The kernel computes all moments and the 2x2 ridge solve in float32 from raw uncentered moments with means ~32/-24 and variance ~0.0039, so this precision failure occurs exactly on the contract's own fixed inputs.
+Scope rationale: The contract fixes the exact seeded workload from make_inputs() and a numeric bound of 0.15 relative L2 against the all-16-mode float64 reference; whether truncation to 6 modes violates this bound on that workload is precisely the stated contract question.
 
 Scope evidence:
-- `problem.txt`: 'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload — the same inputs where the kernel's fp32 raw-moment cancellation occurs.
+- `problem.txt`: Reference uses ALL sixteen modes; numerical contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15, and 'the only inputs in scope are the float32 tensors returned by make_inputs() in kernel.py', so the fixed seeded workload decides pass/fail.
 
-Rationale: Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.
+Rationale: Dropped tail modes are drawn with std 0.04 vs retained std 0.15, and the DC bias (+1.0) plus offset are kept, so the relative L2 error ratio depends on the realized seeded energy split and could plausibly land near or above 0.15; it must be computed numerically.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t10: On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding the 5% tolerance (pred norm 0.1666 > 0.1 floor). Diagnostic: the fp32 raw-moment covariance E[x0^2]-m0^2 computes to 0.005859375 vs exact 0.00573117 (2.24% error), showing cancellation/summation noise in the fp32 raw-moment scheme that propagates through the 2x2 solve into the predictions. This confirms the kernel fails the contract acceptance criterion on the fixed in-scope workload.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: On the fixed seeded workload (make_inputs, PCG64 811158), the kernel's 6-mode cutoff output gives relative L2 error 0.2305 against the float64 all-16-mode reference (ref_norm 5.593), exceeding the contract bound 0.15. Output is finite float32 shape (64,); coefficients are contiguous, so the layout assumption held and the error is due to mode truncation.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e02"
+  "entry": "case_v"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e02"
+  "entry": "case_v"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e02"
+  "entry": "case_v"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e02"
+  "entry": "case_v"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
-    "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
-    "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
-    "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
-    "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
+    "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} (cos-coef[k-1]*cos(2*pi*k*n/64) + sin-coef[k-1]*sin(2*pi*k*n/64)), evaluated in float64 on the supplied float32 inputs.",
+    "Scope is fixed to the tensors from make_inputs() (coefficients (2,16) float32, offset (1,) float32); other coefficient tensors are out of scope.",
+    "Output: finite float32 vector of shape (64,).",
+    "Tolerance: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 (relative L2, quite loose, consistent with the stated frequency-cutoff approximation).",
+    "FP multiply/add fusion is disabled in the launch, per problem statement."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Single Triton program (grid (1,), N=32 constexpr, num_warps=1, enable_fp_fusion=False) sequentially accumulates 8 raw moments in float32 via tl.static_range (kernel.py lines 17-28).",
-    "Means and covariance-style quantities computed from raw moments: a = E[x0^2]-m0^2+1/1024, b = E[x0x1]-m0m1, c = E[x1^2]-m1^2+1/1024, u,v = cross moments with y minus m*my (lines 29-36).",
-    "2x2 solve via explicit Cramer's rule with tl.div_rn (lines 37-39); prediction for 4 queries via vectorized tl.arange(0,4) loads and stores (lines 40-44).",
-    "run() allocates float32 (4,) output and launches the kernel; mathematically the estimator matches the ridge normal equations (Xc^T Xc/32 + lambda I) beta = Xc^T yc/32.",
-    "All arithmetic (loads, sums, products, divisions) is float32; only div_rn forces round-to-nearest division."
+    "Triton kernel computes output[n] = offset + sum_{k=1..RETAINED=6} of cos/sin terms only, truncating modes 7..16 (a fixed low-pass cutoff approximation).",
+    "Single program launch over N=64 samples; coefficients are loaded scalar-wise with layout coefficients[0,k-1] (cos) and coefficients[MODES+k-1] (sin), matching a contiguous (2,16) row-major layout.",
+    "Angle computed in float32: n.to(float32) * (2*pi*k/64); accumulation in float32 with enable_fp_fusion=False.",
+    "run() allocates float32 (64,) output on the input device and launches with grid (1,), num_warps=2.",
+    "make_inputs generates seeded (PCG64 811158) data: retained modes 1..6 have larger std 0.15, tail modes 7..16 std 0.04, plus a +1.0 DC bias added to cos-coeff[0] and offset 0.25."
   ],
-  "open_questions": [],
+  "open_questions": [
+    "Actual ratio value vs the 0.15 threshold: is it comfortably below (safe) or near the boundary (borderline)?",
+    "Does coefficient memory layout assumption (row-major contiguous (2,16)) hold for the actual device tensors produced by make_inputs()?"
+  ],
   "resolved_tasks": [],
   "risk_map": [
-    "Catastrophic cancellation in raw-moment covariance: features have large means (~32, -24) with tiny deviations (sigma 0.0625), so E[x^2]-m^2 loses ~7-9 significant digits in float32; the computed covariance is dominated by rounding noise relative to the true variance (~0.0039). 
-...[truncated 1695 chars]
+    "Truncation of modes 7..16: the dropped modes are drawn with std 0.04 vs retained std 0.15; the relative L2 error of the cutoff depends on the energy ratio of dropped vs total si
+...[truncated 1271 chars]
 
-### t6 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t7 - record_claim - ok
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
+  "rationale": "Dropped tail modes are drawn with std 0.04 vs retained std 0.15, and the DC bias (+1.0) plus offset are kept, so the relative L2 error ratio depends on the realized seeded energy split and could plausibly land near or above 0.15; it must be computed numerically.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-moment cancellation occurs."
+      "summary": "Reference uses ALL sixteen modes; numerical contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15, and 'the only inputs in scope are the float32 tensors returned by make_inputs() in kernel.py', so the fixed seeded workload decides pass/fail."
     }
   ],
-  "scope_rationale": "The contract fixes the workload to make_inputs() (seed 130653) X (32,2)/y (32,)/Q (4,2), defines the target prediction in float64-or-better arithmetic, and accepts only if ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05. The kernel computes all moments and the 2x2 ridge solve in float32 from raw uncentered moments with means ~32/-24 and variance ~0.0039, so this precision failure occurs exactly on the contract's own fixed inputs.",
-  "statement": "For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with |m|~32, ~-24 versus variance ~0.0039), so the run() output deviates from the float64 ridge-regression prediction by more than the allowed 5% relative error (denominator floor 0.1).",
+  "scope_rationale": "The contract fixes the exact seeded workload from make_inputs() and a numeric bound of 0.15 relative L2 against the all-16-mode float64 reference; whether truncation to 6 modes violates this bound on that workload is precisely the stated contract question.",
+  "statement": "For the fixed seeded workload from make_inputs() (PCG64 seed 811158), the kernel's 6-mode cutoff (RETAINED=6, dropping modes 7-16) yields a relative L2 error against the float64 all-16-mode reference that exceeds the contract bound of 0.15.",
   "status": "open"
 }
 
-### t8 - record_description_update - ok
-
-{
-  "contract_model": [],
-  "impact_on_claims": [
-    "c1: this quantification cuts both ways - a single fp32 subtraction error (~6e-5 absolute) is ~1.6% of var 0.0039, and ridge lambda=1/1024 adds 25% to the effective diagonal, damping covariance errors in beta; however 32-term summation error and the beta-noise amplification may still exceed 5%. A float64 reference comparison probe (e.g. centered computation in numpy float64 on the exact seeded inputs) is the decisive evidence."
-  ],
-  "kernel_model": [
-    "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not necessarily beyond, the 5% output tolerance."
-  ],
-  "open_questions": [
-    "Does the fp32 raw-moment error, after 32-term accumulation rounding and the 2x2 solve, stay under or exceed the 5% final-output tolerance against a true float64 centered computation? Needs runtime probe with float64 oracle."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Ridge damping partially protects beta: lambda=1/1024 ~ 0.00098 is ~25% of the true variance 0.0039 added to each diagonal, so even a covariance relative error of a few percent propagates into beta only mildly; claim c1's failure is plausible but not guaranteed - the decisive evidence is a float64 (centered) oracle comparison, which initial_probe does not provide.",
-    "Accumulated summation error: s00 is a 32-term fp32 sum of values ~1024, so its rounding error (~sqrt(32)*eps*1024 or worse, up to ~32*eps*1024 ~ 2e-3) can be comparable to the variance itself 0.0039, larger than the single-subtraction error estimate.",
-    "Prediction output magnitude: recorded probe outputs ~|0.14| each with 4 entries -> norm ~0.2, above the 0.1 floor, so the tolerance is effectively ~5% relative, not the floor."
-  ],
-  "scope_n
-...[truncated 386 chars]
-
-### t9 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "The only material in-scope risk \u2014 fp32 raw-moment catastrophic cancellation on the contractually fixed make_inputs() (seed 130653) workload, exceeding the 5% tolerance against the float64 reference \u2014 is already recorded as c1. The kernel's algebra matches the ridge normal equations, contiguity matches make_inputs output, and all other variations (seeds, shapes, dtypes) are out of contract per problem.txt. No new high-quality in-scope claims are warranted; c1 needs a float64-oracle runtime probe, not further speculation.",
-  "reviewed_claims": [
-    "c1"
-  ],
-  "reviewed_tool_event_count": 8,
-  "turn": 6
-}
-
-### t10 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t10_probe.py",
-      "sha256": "d7dc58b33cc3191f1e1f68401d4c87988987be05374d10a08129bbf45ad824bc"
+      "path": "probes/t7_probe.py",
+      "sha256": "03ce2581d51db6137c6a112af72b0324caa4bd29c5539b3218b0991764a49610"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t10_stdout.txt",
-      "sha256": "eeedfe4e5636afec3afeb7b56f220f468f033c4fb9840ab6dd38221c557d9455"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t10_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t10_json_result.json",
-      "sha256": "9aeafdd49f8afb75d6af7694f4b0f8a1061685e5c8fa1d95ce44e84fff018d36"
+      "path": "probes/t7_stderr.txt",
+      "sha256": "08611c2ff1adda9150791a6abfb8c446b82b8a53ecaa1cebfb0f76b74063d734"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with |m|~32, ~-24 versus variance ~0.0039), so the run() output deviates from the float64 ridge-regression prediction by more than the allowed 5% relative error (denominator floor 0.1).",
-  "duration_s": 6.757413,
-  "event_id": "t10",
+  "claim_statement": "For the fixed seeded workload from make_inputs() (PCG64 seed 811158), the kernel's 6-mode cutoff (RETAINED=6, dropping modes 7-16) yields a relative L2 error against the float64 all-16-mode reference that exceeds the contract bound of 0.15.",
+  "duration_s": 5.18412,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -572,48 +484,113 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t10_probe.py",
-          "sha256": "d7dc58b33cc3191f1e1f68401d4c87988987be05374d10a08129bbf45ad824bc"
+          "path": "probes/t7_probe.py",
+          "sha256": "03ce2581d51db6137c6a112af72b0324caa4bd29c5539b3218b0991764a49610"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t10_stdout.txt",
-          "sha256": "eeedfe4e5636afec3afeb7b56f220f468f033c4fb9840ab6dd38221c557d9455"
- 
-...[truncated 3531 chars]
+          "path": "probes/t7_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t7_stderr.txt",
+          "sha256": "08611c2ff1adda9150791a6abfb8c446b82b8a53ecaa1cebfb0f76b74063d734"
+        }
+      ],
+      "duration_s": 5.18412,
+      "exit_code": 1,
+      "expected_signal": "relative L2 ratio vs 0.15 threshold on the fixed seeded workload"
+...[truncated 1229 chars]
 
-### t11 - finalize_probe_evidence - ok
+### t8 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t8_probe.py",
+      "sha256": "a6de30fab7c617387cbcb989033c130d4baf03fa8d7383bb96f4238b4e5bc378"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t8_stdout.txt",
+      "sha256": "08434d3146e74b0c1e888b2a49df4f28ff3ff6919fe7a3be41143db98c2495e1"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t8_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t8_json_result.json",
+      "sha256": "8c306cbfcb252ecfb181bdf3eb3ef61b05222a676ea0f48dc3ae3faada7bb0f4"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "For the fixed seeded workload from make_inputs() (PCG64 seed 811158), the kernel's 6-mode cutoff (RETAINED=6, dropping modes 7-16) yields a relative L2 error against the float64 all-16-mode reference that exceeds the contract bound of 0.15.",
+  "duration_s": 5.304755,
+  "event_id": "t8",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t8_probe.py",
+          "sha256": "a6de30fab7c617387cbcb989033c130d4baf03fa8d7383bb96f4238b4e5bc378"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t8_stdout.txt",
+          "sha256": "08434d3146e74b0c1e888b2a49df4f28ff3ff6919fe7a3be41143db98c2495e1"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t8_stderr.txt"
+...[truncated 2134 chars]
+
+### t9 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding the 5% tolerance (pred norm 0.1666 > 0.1 floor). Diagnostic: the fp32 raw-moment covariance E[x0^2]-m0^2 computes to 0.005859375 vs exact 0.00573117 (2.24% error), showing cancellation/summation noise in the fp32 raw-moment scheme that propagates through the 2x2 solve into the predictions. This confirms the kernel fails the contract acceptance criterion on the fixed in-scope workload.",
+  "summary": "On the fixed seeded workload (make_inputs, PCG64 811158), the kernel's 6-mode cutoff output gives relative L2 error 0.2305 against the float64 all-16-mode reference (ref_norm 5.593), exceeding the contract bound 0.15. Output is finite float32 shape (64,); coefficients are contiguous, so the layout assumption held and the error is due to mode truncation.",
   "supports": "confirmed",
-  "tool_event_id": "t10"
+  "tool_event_id": "t8"
 }
 
-### t12 - record_no_new_claims - ok
+### t10 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the sole in-scope claim c1 is confirmed by runtime probe t10 \u2014 on the exact make_inputs() (seed 130653) contract workload, run() output deviates from the float64 centered-ridge prediction by 25.6% relative error (tolerance 5%, pred norm 0.1666 above the 0.1 floor), with the fp32 raw-moment covariance itself off by 2.24%, pinpointing the failure mechanism. The probe's oracle matches the contract's float64-or-better reference definition, and its output is finite float32 (4,). No other in-scope failure surface exists: other seeds/shapes/dtypes are explicitly out of contract per problem.txt, and the kernel's algebra, layouts, and ridge solve otherwise match the target. No additional claims are warranted.",
+  "reason": "Claim c1 is confirmed by direct runtime evidence on the fixed seeded workload: relative L2 error 0.2305 > 0.15 tolerance against the float64 all-16-mode reference. Secondary concerns (contiguity/layout, float32 angle precision, finiteness) were all checked in the same probe and did not contribute to the failure. No further in-scope testable claims are warranted; the contract explicitly restricts scope to this fixed workload.",
   "reviewed_claims": [
     "c1"
   ],
-  "reviewed_tool_event_count": 11,
-  "turn": 9
+  "reviewed_tool_event_count": 9,
+  "turn": 7
 }
 
-### t13 - record_verdict - ok
+### t11 - record_verdict - ok
 
 {
   "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four predictions. The contract explicitly requires target arithmetic evaluated in float64 or more accurately with a 5% acceptance threshold, so this precision failure is a defect, not a tolerated rounding artifact. The initial_probe's 0.0 error is not exculpatory: its reference uses the same float32 raw-moment scheme as the kernel and therefore cannot test the contract's float64 oracle. Other seeds/shapes/dtypes are out of contract per problem.txt; no other in-scope failure surfaces exist. Skeptic signed off after reviewing the decisive evidence (no new claims). No unresolved claims remain.",
+  "reason": "The contract (problem.txt, with no test.py/get_inputs narrowing it) fixes the input domain to the tensors from make_inputs() (PCG64 seed 811158) and requires relative L2 error <= 0.15 against the float64 all-16-mode reference. Runtime probe t8 on exactly that seeded workload measured ratio 0.23046 (ref_norm 5.593), clearly exceeding 0.15. Output was finite float32 of shape (64,), and coefficients were contiguous, so layout and finiteness conditions held and the excess error is attributable to truncating modes 7-16. This is not a tolerable quantization/rounding or accumulation-order deviation \u2014 the contract explicitly sets the numeric bound and the fixed approximation must satisfy it, which it does not. No unresolved claims remain.",
   "verdict": "reject"
 }
 
@@ -621,10 +598,10 @@ Evidence:
 
 {
   "confidence": 0.97,
-  "created_at": "2026-09-24T06:11:48Z",
+  "created_at": "2026-09-24T01:01:49Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four predictions. The contract explicitly requires target arithmetic evaluated in float64 or more accurately with a 5% acceptance threshold, so this precision failure is a defect, not a tolerated rounding artifact. The initial_probe's 0.0 error is not exculpatory: its reference uses the same float32 raw-moment scheme as the kernel and therefore cannot test the contract's float64 oracle. Other seeds/shapes/dtypes are out of contract per problem.txt; no other in-scope failure surfaces exist. Skeptic signed off after reviewing the decisive evidence (no new claims). No unresolved claims remain.",
+  "reason": "The contract (problem.txt, with no test.py/get_inputs narrowing it) fixes the input domain to the tensors from make_inputs() (PCG64 seed 811158) and requires relative L2 error <= 0.15 against the float64 all-16-mode reference. Runtime probe t8 on exactly that seeded workload measured ratio 0.23046 (ref_norm 5.593), clearly exceeding 0.15. Output was finite float32 of shape (64,), and coefficients were contiguous, so layout and finiteness conditions held and the excess error is attributable to truncating modes 7-16. This is not a tolerable quantization/rounding or accumulation-order deviation \u2014 the contract explicitly sets the numeric bound and the fixed approximation must satisfy it, which it does not. No unresolved claims remain.",
   "verdict": "reject"
 }

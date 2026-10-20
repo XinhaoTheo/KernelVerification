@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import torch
 
-EXPECTED = {"case_167": "trust", "case_168": "reject"}
+EXPECTED = {"case_95": "trust", "case_96": "reject"}
 FIPS_TABLE = bytes.fromhex(
     "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0"
     "b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b275"

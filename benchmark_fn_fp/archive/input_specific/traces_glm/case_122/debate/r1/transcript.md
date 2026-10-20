@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e04`
+- Entry: `case_x`
 - Turns: 10
 - Tool events: 17
 - Claims: 2
 - Description updates: 1
-- LLM time: 103.563s across 9 calls | tokens: in=212995 out=7357 total=220352
+- LLM time: 109.632s across 9 calls | tokens: in=187447 out=7441 total=194888
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.99
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e04"
+    "entry": "case_x"
   }
   Output summary:
   {
-    "entry": "case_e04"
+    "entry": "case_x"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e04"
+    "entry": "case_x"
   }
   Output summary:
   {
-    "entry": "case_e04"
+    "entry": "case_x"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e04"
+    "entry": "case_x"
   }
   Output summary:
   {
-    "entry": "case_e04"
+    "entry": "case_x"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e04",
+    "entry": "case_x",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e04"
+    "entry": "case_x"
   }
 
-### Turn 2 - `describer` (28.353016851000007s, in=7548 out=2013)
+### Turn 2 - `describer` (19.487889552999974s, in=4786 out=1316)
 
 Message:
 
 ```text
-I have full source and problem context. Analyzing the permutation-tracking semantics before recording the description model.
+The contract and kernel are fully loaded, so I'll build the initial description model directly: the workload is a single fixed 8×8 SPD Gram-plus-regularizer float32 matrix, the reference is float64 log(det(A)) on the actual stored entries, and the kernel does a flat, single-block Triton LU-style elimination without pivoting, accumulating FP32 logs of pivots.
 ```
 
 Tool calls:
@@ -75,24 +75,24 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32 from make_inputs_numpy(), with fixed Delta (8,32) float32 and two int32 permutations P (2,8).",
-      "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; output must be the final logical cache.",
-      "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; all values are multiples of 1/16 so float32 arithmetic is exact here.",
-      "Each P is individually an involution, but no property of their composition may be assumed.",
-      "run() defaults to word (0,1,2) and is not the wh
-  ...[truncated 4198 chars]
+      "Workload is exactly the float32 (8,8) SPD matrix produced by make_inputs_numpy (seeded PCG64(98262), integer Gram from a (-8,8)-integer 8x7 factor, plus 1/1024 diagonal regularizer, cast to float32); no other matrices are in scope.",
+      "Reference is log(det(A)) evaluated in float64 on the actual stored float32 entries of A, not the idealized pre-cast construction.",
+      "Output must be a finite float32 tensor of shape (1,).",
+      "Error metric: ||output - reference||_2 / max(||reference||_2, 1.0) must be <= 0.0001.",
+      "The contract explicitly describes the intended algorithm: elimination without pivoting, accumulating logs of diagonal pivots, with FP fusion disabled and round-to-nearest FP32 division for multipliers (matching enable_fp_fusion=False and tl.
+  ...[truncated 3829 chars]
   Output summary:
   {
     "error_type": "ToolRegistryError",
-    "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"High-suspicion surface: _append's Delta indexing (kernel.py lines 23-26). It yields the contract-correct Delta[i] only when order is an involution; smoke words with a single involution reorder before op 2 (e.g. (0,2), (0,0,2)) pass for exactly this reason, so the recorded probe pass is weak evidence.\", \"Words where order = P_a\u2218P_b composition (non-involution) precedes an op 2, e.g. (0,1,2), (1,0,2), (0,1,1,2), are the prime candidates for failure; also repeated op 2 after a non-identity order, e.g. (0,2,2) \u2014 second append repeats the same misindexed Delta.\", \"In-place physical mutation plus wrong indexing may still keep output finite/float32, so the failure mode is a value mismatch, not a crash; error would be a multiple of 1/16 and far above 1e-5 when it occurs.\", \"Do not accept involution-based reasoning for compositions: contract explicitly forbids assuming composition properties of P[0] and P[1].\", \"Empty word and reorder-only words exercise only _reorder/_materialize, which are consistent; these are likely to pass and do not cover the 
-  ...[truncated 53 chars]
+    "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"No pivoting: the algorithm relies on A being SPD so all leading pivots stay positive; a zero/negative pivot would produce -inf/NaN, but the fixed workload is stated SPD, so this is only in-scope if the actual stored float32 entries lose positive-definiteness (gram of rank <=7 plus small 1/1024 regularizer could be near-singular in float32).\", \"tl.log is typically a fast approximate log2-based implementation; 8 accumulated FP32 log approximations could exceed the 1e-4 relative tolerance depending on the reference magnitude.\", \"Schur update never updates rows/cols <= k, but 'column' and 'pivot_row' are re-extracted from the current matrix each iteration; since those regions are unmodified, this is consistent \u2014 however, the masked-slit extraction (sums of where-masks) is an unusual idiom worth checking for off-by-one or axis errors.\", \"Multiplier includes the pivot entry itself (row k), making product[k,k] = pivot, but that slot is masked out by the update predicate, so harmless; still a place where index-math bugs could hide.\", \"float32 accumulati
+  ...[truncated 413 chars]
 
-### Turn 3 - `skeptic` (10.787345795999997s, in=12605 out=838)
+### Turn 3 - `skeptic` (11.20757521500002s, in=9724 out=840)
 
 Message:
 
 ```text
-The Describer analysis exposes a prime suspect: `_append` indexes Delta by `order[row]` (physical address) rather than by logical row, which is only correct when `order` is an involution. The smoke words all happen to have involution order before the append, masking this. I'll record concrete in-scope claims tied to the 121-word contract.
+The contract fixes a single 8×8 Gram-plus-regularizer matrix with a 1e-4 relative-tolerance scalar output. The main attack surfaces are FP32 pivot/Schur accuracy on a near-rank-7 matrix (final pivots tiny), the accuracy of Triton's `tl.log` in FP32, and the masked extraction idiom. I'll record the highest-risk testable claims.
 ```
 
 Tool calls:
@@ -100,16 +100,16 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
+    "rationale": "The Gram factor is 8x7, so gram has rank at most 7 and the last diagonal pivot after elimination is on the scale of the 1/1024 regularizer; Schur-complement entries in FP32 have absolute errors ~1e-3 relative to gram entries, which can be large relative to such tiny final pivots, so log(pivot) for late pivots may be badly wrong even though early pivots are fine.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; a word like (0,1,2) (also run()'s default) is explicitly in the domain."
+        "summary": "The entire workload is the fixed (8,8) float32 matrix from make_inputs(); reference is float64 log(det(A)) on the actual stored entries with error <= 1e-4 relative."
       }
     ],
-    "sta
-  ...[truncated 320 chars]
+    "statement": "For the fixed make_inputs() matrix, FP32 Gaussian-elimination Schur updates without pivoting produce final pivots so small
+  ...[truncated 207 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -118,28 +118,28 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
+    "rationale": "tl.log on NVIDIA lowers to a fast log2-based approximation with error of a few ULPs or more; with small late pivots the log magnitudes are large, and 8 accumulated approximations plus FP32 summation could exceed the 1e-4 relative tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
+        "summary": "Error metric ||output-reference||_2/max(||reference||_2,1.0) must be <= 0.0001 for this fixed workload; the implementation accumulates the logarithms of its diagonal pivots in FP32 (tl.log)."
       }
     ],
-    "statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is re
-  ...[truncated 151 chars]
+    "statement": "The kernel's use of Triton's fast approximate tl.log in float32, accumulated over 8 pivots, may make the final output exceed the 1e-4 relative error tolerance versus the float64 log(det(A)) reference for this specific ma
+  ...[truncated 73 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (6.946154330000013s, in=14272 out=732)
+### Turn 4 - `skeptic` (7.557360227999993s, in=11255 out=683)
 
 Message:
 
 ```text
-Both prior claim recordings failed for missing `scope_rationale` — I'll re-send them with the required fields.
+Both claim attempts failed for missing `scope_rationale`; I'll re-send them with that field filled.
 ```
 
 Tool calls:
@@ -147,64 +147,65 @@ Tool calls:
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
+    "rationale": "The Gram factor is 8x7, so gram has rank at most 7 and the last diagonal pivot after elimination is on the scale of the 1/1024 regularizer; Schur-complement entries in FP32 have rounding errors large relative to such tiny final pivots, so log(pivot) for late pivots may be badly wrong even though early pivots are fine.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain."
+        "summary": "The entire workload is the fixed (8,8) float32 matrix from make_inputs(); the reference is float64 log(det(A)) on the actual stored entries, with the relative error metric required to be <= 0.0001."
       }
     ],
-    "scope_rationale
-  ...[truncated 621 chars]
+    "scope_rationale": "problem.txt fixes the workload to the single (8,8) float32 matrix from make_inputs() (Gram of an 8x7 factor plus 1/1024 diagonal
+  ...[truncated 557 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
+    "rationale": "The Gram factor is 8x7, so gram has rank at most 7 and the last diagonal pivot after elimination is on the scale of the 1/1024 regularizer; Schur-complement entries in FP32 have rounding errors large relative to such tiny final pivots, so log(pivot) for late pivots may be badly wrong even though early pivots are fine.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain."
+        "summary": "The entire workload is the fixed (8,8) float32 matrix from make_inputs(); the reference is float64 log(det(A)) on the actual stored entries, with the relative error metric required to be <= 0.0001."
       }
     ],
-    "scope_rationale": "problem.txt requires Delta to address current LOGICAL rows for all 121 words of length 0-4 over {0,1,2}; a word such as (0,1,2) or (1,0,2) \u2014 both in the admitted domain \u2014 yields a possibly non-involution order before op 2, directly exercising the _append Delta-indexing surface.",
-    "statement": "For any in-scope word where a non-involution order (e.g. the composition P0
-  ...[truncated 255 chars]
+    "scope_rationale": "problem.txt fixes the workload to the single (8,8) float32 matrix from make_inputs() (Gram of an 8x7 factor plus 1/1024 diagonal regularizer) and requires ||output - float64 log(det(A))|| / max(||ref||,1) <= 1e-4, so any FP32 Schur-update rounding that pushes the accumulated log-sum past this tolerance on this exact matrix is in scope.",
+    "statement": "For the fixed make_inputs() matrix, FP32 Gaussian-elimination Schur updates without pivoting produce final pivots so small (rank<=7 Gram plus only ~1e-3 regul
+  ...[truncated 191 chars]
 - `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
+    "rationale": "tl.log on NVIDIA lowers to a fast log2-based approximation whose error can exceed a few ULPs; with small late pivots the log magnitudes are large, and 8 accumulated FP32 approximations plus FP32 summation could exceed the 1e-4 relative tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
+        "summary": "Error metric ||output-reference||_2/max(||reference||_2,1.0) must be <= 0.0001 for this fixed workload; the implementation accumulates the logarithms of its diagonal pivots (tl.log in FP32)."
       }
     ],
-    "scope_rationale": "problem.txt explicitly defines the contract as all 121 words of length 
-  ...[truncated 408 chars]
+    "scope_rationale": "problem.txt states the error metric must be <= 0.0001 for this fixed workload and explicitly describes accumulating the logarithms of the diagonal pivots, so the accuracy of the FP32 log approximation on this
+  ...[truncated 365 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
+    "rationale": "tl.log on NVIDIA lowers to a fast log2-based approximation whose error can exceed a few ULPs; with small late pivots the log magnitudes are large, and 8 accumulated FP32 approximations plus FP32 summation could exceed the 1e-4 relative tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
+        "summary": "Error metric ||output-reference||_2/max(||reference||_2,1.0) must be <= 0.0001 for this fixed workload; the implementation accumulates the logarithms of its diagonal pivots (tl.log in FP32)."
       }
     ],
-    "scope_rationale": "problem.txt explicitly defines the contract as all 121 words of length 0-4 over {0,1,2} and states the initial probe's pass is evidence about its five words only; deciding the contract therefore requires sweeping the whole word set.",
-    "statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the fiv
-  ...[truncated 42 chars]
+    "scope_rationale": "problem.txt states the error metric must be <= 0.0001 for this fixed workload and explicitly describes accumulating the logarithms of the diagonal pivots, so the accuracy of the FP32 log approximation on this matrix's pivot values is directly contract-relevant.",
+    "statement": "The kernel's use of Triton's fast approximate tl.log in float32, accumulated over 8 pivots, may make the final output exceed the 1e-4 relative error tolerance versus the float64 log(det(A)) reference for this specific matrix, particularly if some pivots are far from 1 (large |log| values).",
+    "status": "open"
+  }
 
-### Turn 5 - `describer` (15.837557869000022s, in=15922 out=1288)
+### Turn 5 - `describer` (18.699565158999974s, in=12624 out=1339)
 
 Message:
 
 ```text
-My previous description update failed due to malformed arguments — I'm re-sending it correctly now, with the same analysis of the `_append` Delta-indexing risk that supports open claims c1/c2.
+My earlier description-model update failed due to malformed tool arguments, so the shared model is still empty. I'll re-record it now in correct form, incorporating the current claims c1/c2 as surfaces the risk map should reflect.
 ```
 
 Tool calls:
@@ -213,32 +214,33 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
-      "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
-      "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
-      "Each P is individually an involution, but no property of their composition may be assumed.",
-      "run() def
-  ...[truncated 3961 chars]
+      "Workload is exactly the float32 (8,8) matrix from make_inputs_numpy(): PCG64(98262) integer factor of shape (8,7) with entries in [-8,8], integer Gram, plus 1/1024 diagonal regularizer, cast to float32; stated SPD, and no other matrices/seeds are in scope.",
+      "Reference is log(det(A)) computed in float64 on the actual stored float32 entries of A, not the idealized pre-cast construction.",
+      "Output: finite float32 tensor of shape (1,).",
+      "Error metric: ||output - reference||_2 / max(||reference||_2, 1.0) must be <= 1e-4.",
+      "Contract explicitly prescribes the algorithm: elimination without pivoting, accumulating logs of diagonal pivots, FP fusion disabled, round-to-nearest FP32 division for multipliers (matching enable_fp_fusion=False and tl.div_rn)
+  ...[truncated 4131 chars]
   Output summary:
   {
     "contract_model": [
-      "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
-      "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
-      "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
-      "Each P is individually an involution, but no property of their composition may be assumed.",
-      "run() defaults to word (0,1,2) and is not the whole domain; initial_probe() covers only five smoke words and its recorded pass is evidence for those words only."
+      "Workload is exactly the float32 (8,8) matrix from make_inputs_numpy(): PCG64(98262) integer factor of shape (8,7) with entries in [-8,8], integer Gram, plus 1/1024 diagonal regularizer, cast to float32; stated SPD, and no other matrices/seeds are in scope.",
+      "Reference is log(det(A)) computed in float64 on the actual stored float32 entries of A, not the idealized pre-cast construction.",
+      "Output: finite float32 tensor of shape (1,).",
+      "Error metric: ||output - reference||_2 / max(||reference||_2, 1.0) must be <= 1e-4.",
+      "Contract explicitly prescribes the algorithm: elimination without pivoting, accumulating logs of diagonal pivots, FP fusion disabled, round-to-nearest FP32 division for multipliers (matching enable_fp_fusion=False and tl.div_rn)."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Kernel tracks a logical->physical row mapping `order` (int32, identity initially) and mutates physical storage lazily: _reorder sets next_order[i] = order[P[i]] (lines 13-16); _materialize ou
-  ...[truncated 3651 chars]
+      "Single Triton program (grid (1,), num_warps=1, constexpr N=8) loads the full 8x8 matrix as an (8,8) float32 tile via rows[:,None]*N + columns[None,:] indexing (kernel.py lines 9-11).",
+      "Per step k in tl.static_range(0, N): pivot = (k,k) entry extracted by masked double sum; column = column k; pivot_row = row k; multiplier = tl.div_rn(c
+  ...[truncated 3831 chars]
 
-### Turn 6 - `skeptic` (7.200247823000012s, in=25234 out=383)
+### Turn 6 - `skeptic` (7.220498702999976s, in=21852 out=404)
 
 Message:
 
 ```text
-Both high-risk surfaces are already captured: c1 targets the `_append` physical-vs-logical Delta indexing (the exact defect masked by all five smoke words having involution order before a single append), and c2 requires the exhaustive 121-word sweep the contract demands. I've checked `_reorder` and `_materialize` — they are mutually consistent under the stated convention and pose no independent suspicious surface. No further in-scope attack surfaces exist beyond these claims.
+The two recorded in-scope claims (FP32 Schur rounding on tiny late pivots; approximate tl.log accumulation) cover the highest-risk, contract-relevant attack surfaces for this fixed workload. I reviewed the kernel source again: the masked extraction and update-predicate idioms are internally consistent (already-consumed rows/cols are never used again), and other failure modes (non-contiguous input, other shapes/seeds) are explicitly out of scope per problem.txt. No additional high-quality in-scope claims.
 ```
 
 Tool calls:
@@ -246,7 +248,7 @@ Tool calls:
 - `record_no_new_claims -> t11 ok`
   Args:
   {
-    "reason": "The kernel's only mismatch surface is _append's Delta indexing by physical address (covered by c1), and deciding the full 121-word finite contract requires the exhaustive sweep (covered by c2). _reorder and _materialize are internally consistent under the logical->physical order convention, and the empty/reorder-only words cannot expose any distinct failure beyond what c1/c2 already cover. No additional testable in-scope claims found.",
+    "reason": "Reviewed kernel source and the description model alongside existing claims c1 and c2. The main contract-relevant risks \u2014 FP32 Schur-update rounding on the near-singular rank<=7 Gram + 1e-3 regularizer (tiny late pivots), and accumulated fast tl.log approximation error against the 1e-4 relative tolerance \u2014 are already recorded as in-scope open claims. The masked-extraction and update-predicate index math is consistent by inspection (rows/cols <= k are never re-read after consumption), and all other potential failure modes (other matrices, seeds, shapes, strides, dtypes) are explicitly excluded by problem.txt, so no new in-scope claims are warranted.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -255,7 +257,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The kernel's only mismatch surface is _append's Delta indexing by physical address (covered by c1), and deciding the full 121-word finite contract requires the exhaustive sweep (covered by c2). _reorder and _materialize are internally consistent under the logical->physical order convention, and the empty/reorder-only words cannot expose any distinct failure beyond what c1/c2 already cover. No additional testable in-scope claims found.",
+    "reason": "Reviewed kernel source and the description model alongside existing claims c1 and c2. The main contract-relevant risks \u2014 FP32 Schur-update rounding on the near-singular rank<=7 Gram + 1e-3 regularizer (tiny late pivots), and accumulated fast tl.log approximation error against the 1e-4 relative tolerance \u2014 are already recorded as in-scope open claims. The masked-extraction and update-predicate index math is consistent by inspection (rows/cols <= k are never re-read after consumption), and all other potential failure modes (other matrices, seeds, shapes, strides, dtypes) are explicitly excluded by problem.txt, so no new in-scope claims are warranted.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -264,12 +266,12 @@ Tool calls:
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (12.350335431000019s, in=26286 out=895)
+### Turn 7 - `experimenter` (17.30811653799998s, in=23147 out=1323)
 
 Message:
 
 ```text
-I'll launch two independent runtime probes: c1 tests targeted words with a non-involution order before an append, and c2 runs the exhaustive 121-word sweep. Both use fresh inputs per word and compare against the exact CPU logical reference.
+Both open claims (c1: FP32 Schur rounding on tiny late pivots; c2: tl.log approximation error) can be tested independently on the exact fixed workload. I'll batch two probes: c1 uses a numpy float32 emulation of the kernel's elimination (exact fp32 arithmetic) to isolate Schur-update/pivot rounding; c2 runs the actual Triton kernel and compares it against that emulation to isolate the tl.log contribution, both against the float64 reference.
 ```
 
 Tool calls:
@@ -278,8 +280,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json, itertools\nimport numpy as np, torch\nsys.path.insert(0, \"/root/evidence_cases/case_e04\")\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs()\nP0, P1 = cpu[2][0], cpu[2][1]\ncomp = P0[P1]  # order after (0,1): next_order[i]=order[P0[i]]=P0[i]; careful below\ninv = np.array_equal(comp[comp], np.arange(K.N))\n\ndef reference(word):\n    ref = cpu[0].astype(np.float64).copy()\n    for op in word:\n        ref = ref[cpu[2][op]].copy() if op < 2 else ref + cpu[1].astype(np.float64)\n    return ref\n\nwords = [(0,1,2),(1,0,2),(0,1,1,2),(1,0,0,2),(0,1,0,2),(0,2,2),(1,2,2),(0,1,2,2)]\nrecords = []\nfor w in words:\n    actual = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(actual.astype(np.fl
-  ...[truncated 466 chars]
+    "code": "import numpy as np\n\nrng = np.random.Generator(np.random.PCG64(98262))\nfactor = rng.integers(-8, 9, (8, 7), dtype=np.int64)\ngram = np.sum(factor[:, None, :] * factor[None, :, :], axis=2, dtype=np.int64)\nA = (gram.astype(np.float64) + (1.0/1024.0)*np.eye(8)).astype(np.float32)\n\nref = np.float64(np.log(np.linalg.det(A.astype(np.float64))))\n\n# Emulate kernel's FP32 elimination without pivoting\nM = A.astype(np.float32).copy()\npivots = []\nfor k in range(8):\n    pivot = np.float32(M[k, k])\n    pivots.append(pivot)\n    col = M[:, k].astype(np.float32)\n    prow = M[k, :].astype(np.float32)\n    mult = (col / pivot).astype(np.float32)  # div_rn fp32\n    product = np.multiply.outer(mult, prow).astype(np.float32)\n    updated = (M - product).astype(np.
+  ...[truncated 882 chars]
   Output summary:
   {
     "artifacts": [
@@ -287,13 +289,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t12_probe.py",
-        "sha256": "dbcab87ae55a205f69d3c5d5503661da49d84247be5e98d1028d01d66ee9e071"
+        "sha256": "add9668c0c6bd6f47fbe4f6baef6262a6619841cc2cbdfac4bdfcc1ce3d5d98b"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t12_stdout.txt",
-        "sha256": "b3e93ace3e81990aa9f48db466a8f9edc9a0b73b1db12de7275c6d10e231b630"
+        "sha256": "355abf77aed706e14f0ac8acca520b63486484719858ea05f0d69ad97045e7f3"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -305,18 +307,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t12_json_result.json",
-        "sha256": "b25f65bd1167b50cc69eb2128c1a0f7fa50d7106fe91ae215258e59bb9b89280"
+        "sha256": "780da90fb6fe780c69088f809a61738639162e6225b74d94c74bbf6be60fe88c"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For any in-scope word where a non-involution order (e.g. the composition P0\u2218P1 or P1\u2218P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final ou
-  ...[truncated 6811 chars]
+    "claim_statement": "For the fixed make_inputs() matrix, FP32 Gaussian-elimination Schur updates without pivoting produce final pivots so small (rank<=7 Gram plus only ~1e-3 regularizer) that FP32 rounding in the updates makes sum
+  ...[truncated 3990 chars]
 - `run_claim_probe -> t13 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "import sys, json, itertools\nimport numpy as np, torch\nsys.path.insert(0, \"/root/evidence_cases/case_e04\")\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs()\n\ndef reference(word):\n    ref = cpu[0].astype(np.float64).copy()\n    for op in word:\n        ref = ref[cpu[2][op]].copy() if op < 2 else ref + cpu[1].astype(np.float64)\n    return ref\n\nwords = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]\nassert len(words) == 121\nfails, worst = [], 0.0\nfor w in words:\n    actual = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(actual.astype(np.float64) - reference(w))))\n    ok = actual.shape == (K.N, K.D) and actual.dtype == np.float32 and np.isfinite(actual).all() and er
-  ...[truncated 390 chars]
+    "code": "import numpy as np, torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/numerical_cases/case_x/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\n\n(matrix,) = kern.make_inputs()\nout = kern.run(matrix)\nkernel_val = float(out.item())\n\nA64 = matrix.cpu().numpy().astype(np.float64)\nref = float(np.log(np.linalg.det(A64)))\n\n# fp32 emulation with exact float64 log of fp32 pivots -> isolates log approximation\nM = matrix.cpu().numpy().astype(np.float32).copy()\npivots = []\nfor k in range(8):\n    pivots.append(np.float32(M[k, k]))\n    mult = (M[:, k] / pivots[-1]).astype(np.float32)\n    prow = M[k, :].astype(np.float32)\n    updated = (M - np.multiply.outer(mult, prow
+  ...[truncated 1063 chars]
   Output summary:
   {
     "artifacts": [
@@ -324,13 +326,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t13_probe.py",
-        "sha256": "9fb24c230da374ed4ac70ade3a230599918ad8d009fece79ce931811c54155fc"
+        "sha256": "66f737405ffb5c22a282a948601cf648a989c423b705dd07454d2ff141993fa3"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t13_stdout.txt",
-        "sha256": "6c3cca2a1a25070e5c90747ed69dfc565f3b30ebc33400435a0b84350850c31d"
+        "sha256": "1ba5d5b385d77d926ad6b938c89b3897afc098cee4cc0094960632623682bb7a"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -342,19 +344,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t13_json_result.json",
-        "sha256": "9ea245f87a53cf272ce33dbec7359b25a649667c3cfbfd5b55bed19e77a4cb8d"
+        "sha256": "26bb7425e00e706abe3f68ae077196efb79cb813d5c4216caca74b46f8ec29c3"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five s
-  ...[truncated 6494 chars]
+    "claim_statement": "The kernel's use of Triton's fast approximate tl.log in float32, accumulated over 8 pivots, may make the final output exceed the 1e-4 relative error tolerance versus the float64 log(det(A)) reference for this 
+  ...[truncated 4531 chars]
 
-### Turn 8 - `experimenter` (8.886217748999997s, in=31305 out=575)
+### Turn 8 - `experimenter` (12.223147984999969s, in=28971 out=875)
 
 Message:
 
 ```text
-Both probes returned decisive failures: 12 of 121 words fail (worst error 7.625, multiple of 1/16), with the prime candidate (0,1,2) failing at 3.8125. I'll finalize both claims as confirmed.
+Both probes returned. The FP32-elimination emulation exceeds the tolerance (7.12e-4 > 1e-4), driven by Schur-update rounding on the ~4e-3 final pivot — confirming c1. Meanwhile the tl.log approximation contributes only ~1.7e-6, so c2 (log approximation causing the failure) is rebutted; I'll finalize both.
 ```
 
 Tool calls:
@@ -363,26 +365,34 @@ Tool calls:
   Args:
   {
     "data": {
-      "P0_after_P1_is_involution": false,
-      "any_fail": true,
-      "num_fail": 12,
-      "tolerance": 1e-05,
-      "word_0_1_2_2_error": 7.625,
-      "word_0_1_2_error": 3.8125,
-      "word_1_0_2_error": 3.8125,
-      "worst_error": 7.625
+      "emulated_fp32_logsum": 25.792875289916992,
+      "exceeds_tolerance": true,
+      "last_pivot_fp32": 0.004097938537597656,
+      "min_pivot": 0.004097938537597656,
+      "pivots_fp32": [
+        215.0009765625,
+        95.85680389404297,
+        90.66627502441406,
+        110.32901763916016,
+        93.33158874511719,
+        69.13493347167969,
+        29.188522338867188,
+        0.004097938537597656
+      ],
+      "reference_logdet_f64": 25.811250835476812,
+      "relative_error": 0.0007119199947707914,
+      "tolerance": 0.0001
     },
     "event_id": "t12",
     "status": "confirmed",
-    "summary": "Targeted words confirm the _append Delta-indexing defect: P0\u2218P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.",
-    "supports": "confirmed"
-  }
+    "summary": "FP32 no-pivot elimination emulation on the exact make_inputs() matrix gives pivots ending at ~0.0041 (rank<=7 Gram + 1/1024 regularizer). The accumulated log-sum is 25.7929 vs float64 reference 25.8113, relative 
+  ...[truncated 204 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Targeted words confirm the _append Delta-indexing defect: P0\u2218P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.",
+    "summary": "FP32 no-pivot elimination emulation on the exact make_inputs() matrix gives pivots ending at ~0.0041 (rank<=7 Gram + 1/1024 regularizer). The accumulated log-sum is 25.7929 vs float64 reference 25.8113, relative error 7.12e-4, exceeding the 1e-4 contract tolerance \u2014 FP32 Schur-update rounding on the tiny final pivot is the dominant error. All pivots positive, so no sign failure.",
     "supports": "confirmed",
     "tool_event_id": "t12"
   }
@@ -390,61 +400,34 @@ Tool calls:
   Args:
   {
     "data": {
-      "example_failures": [
-        [
-          0,
-          1,
-          2
-        ],
-        [
-          1,
-          0,
-          2
-        ],
-        [
-          0,
-          1,
-          2,
-          2
-        ],
-        [
-          0,
-          2,
-          1,
-          2
-        ],
-        [
-          1,
-          2,
-          0,
-          2
-        ]
-      ],
-      "num_fail": 12,
-      "num_words": 121,
-      "tolerance": 1e-05,
-      "worst_error": 7.625
+      "fp32_elim_exactlog_relative_error": 0.0007119870234842651,
+      "kernel_output": 25.792875289916992,
+      "kernel_relative_error": 0.0007119199947707914,
+      "log_approx_error_contribution": 1.7300949366472196e-06,
+      "max_abs_log_pivot": 5.497271227423911,
+      "reference_logdet_f64": 25.811250835476812,
+      "tolerance": 0.0001
     },
     "event_id": "t13",
-    "status": "confirmed",
-    "summary": "Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the fiv
-  ...[truncated 52 chars]
+    "status": "rebutted",
+    "summary": "Actual Triton kernel output 25.79288 (relative error 7.12e-4, above tolerance), but decomposition isolating the log contribution shows: with exact float64 logs of the same FP32 pivots the sum is 25.792874 (relative error 7.12e-4 \u2014 already over tolerance). The tl.log approximation adds only 1.7e-6 absolute error (relative ~6.7e-8), far below the 1e-4 tolerance even with |log| up to
+  ...[truncated 148 chars]
   Output summary:
   {
     "claim_id": "c2",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c2.e1",
-    "summary": "Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the five smoke words passing.",
-    "supports": "confirmed",
+    "summary": "Actual Triton kernel output 25.79288 (relative error 7.12e-4, above tolerance), but decomposition isolating the log contribution shows: with exact float64 logs of the same FP32 pivots the sum is 25.792874 (relative error 7.12e-4 \u2014 already over tolerance). The tl.log approximation adds only 1.7e-6 absolute error (relative ~6.7e-8), far below the 1e-4 tolerance even with |log| up to 5.5. The tolerance violation is entirely attributable to FP32 elimination pivot error (claim c1), not tl.log accuracy.",
+    "supports": "rebutted",
     "tool_event_id": "t13"
   }
 
-### Turn 9 - `skeptic` (5.447852694999995s, in=39967 out=239)
+### Turn 9 - `skeptic` (6.86559373800003s, in=37477 out=321)
 
 Message:
 
 ```text
-The evidence is decisive: both in-scope claims (c1, c2) are confirmed with runtime probe artifacts — 12 of 121 contract words fail, worst error 7.625 (a multiple of 1/16, far above 1e-5), including run()'s default word (0,1,2). No additional in-scope surfaces remain uncovered.
+This is the final review round. Claim c1 is confirmed in-scope with direct runtime evidence: the actual kernel output 25.79288 has relative error 7.12e-4 against the float64 reference 25.81125, well above the 1e-4 contract tolerance, and the decomposition shows the failure is entirely due to FP32 Schur-update rounding on the tiny (~4e-3) final pivot, not tl.log accuracy (c2 rebutted, contributing only ~1.7e-6). The evidence is decisive and no uncovered in-scope problem remains.
 ```
 
 Tool calls:
@@ -452,7 +435,7 @@ Tool calls:
 - `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Final review: the exhaustive 121-word sweep (c2/t13) and the targeted non-involution-order probes (c1/t12) both decisively confirm the _append Delta-indexing defect \u2014 12 of 121 in-scope words fail with worst error 7.625 vs the 1e-5 tolerance, including run()'s default word (0,1,2). The new evidence raises no material problem not already covered by confirmed claims c1 and c2; _reorder/_materialize remain internally consistent and no other in-scope attack surface exists.",
+    "reason": "Final review: the decisive in-scope failure is already captured by confirmed claim c1 \u2014 the actual kernel output 25.79288 vs float64 reference 25.81125 gives relative error 7.12e-4, exceeding the 1e-4 contract tolerance on the exact fixed make_inputs() matrix, with the decomposition (t13) attributing the violation entirely to FP32 Schur-update rounding on the ~0.0041 final pivot. c2 (tl.log approximation) was rebutted, contributing only ~1.7e-6. No additional material, testable, in-scope problem is exposed by the new evidence; all other failure modes are explicitly out of scope per problem.txt.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -461,7 +444,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the exhaustive 121-word sweep (c2/t13) and the targeted non-involution-order probes (c1/t12) both decisively confirm the _append Delta-indexing defect \u2014 12 of 121 in-scope words fail with worst error 7.625 vs the 1e-5 tolerance, including run()'s default word (0,1,2). The new evidence raises no material problem not already covered by confirmed claims c1 and c2; _reorder/_materialize remain internally consistent and no other in-scope attack surface exists.",
+    "reason": "Final review: the decisive in-scope failure is already captured by confirmed claim c1 \u2014 the actual kernel output 25.79288 vs float64 reference 25.81125 gives relative error 7.12e-4, exceeding the 1e-4 contract tolerance on the exact fixed make_inputs() matrix, with the decomposition (t13) attributing the violation entirely to FP32 Schur-update rounding on the ~0.0041 final pivot. c2 (tl.log approximation) was rebutted, contributing only ~1.7e-6. No additional material, testable, in-scope problem is exposed by the new evidence; all other failure modes are explicitly out of scope per problem.txt.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -470,12 +453,12 @@ Tool calls:
     "turn": 9
   }
 
-### Turn 10 - `judge` (7.754344738000015s, in=39856 out=394)
+### Turn 10 - `judge` (9.062068896000028s, in=37611 out=340)
 
 Message:
 
 ```text
-The exhaustive 121-word sweep and targeted probes decisively confirm the _append Delta-indexing defect within the artifact's own declared domain. I'll record a reject verdict.
+Confirmed in-scope claim c1: actual kernel output exceeds tolerance on the fixed workload. problem.txt is operative contract (no test.py). Record reject.
 ```
 
 Tool calls:
@@ -483,109 +466,110 @@ Tool calls:
 - `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.99,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this
-  ...[truncated 490 chars]
+    "reason": "Confirmed in-scope claim c1: on the exact fixed make_inputs() matrix, the actual kernel output is 25.79288 while the contract-mandated float64 reference log(det(A)) is 25.81125, giving a relative error of 7.12e-4 \u2014 seven times the 1e-4 tolerance problem.txt explicitly requires for this fixed workload (the only in-scope input, since no test.py/get_inputs narrow it further; problem.txt is the operative contract). The decomposition probe (t13) shows the violation is not attributable to the tl.log approximation (c2 rebutted: only ~1.7e-6 contribution), but to FP32 Schur-update rounding during the prescribed elimination: the final pivot is ~0.0041 (rank<=7 Gram plus 1/1024 regularizer), and its corrupted log dominate
+  ...[truncated 485 chars]
   Output summary:
   {
-    "confidence": 0.99,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this is not a rounding artifact), and the exhaustive sweep shows 12 of 121 contract words fail with worst error 7.625, far above the 1e-5 tolerance. No reference-undefined or tie-breaking caveat applies: the reference is exact. The five passing smoke words each had involution order before a single append, masking the defect. Skeptic reviewed the latest evidence (t16) with no new claims; no open claims
-  ...[truncated 90 chars]
+    "reason": "Confirmed in-scope claim c1: on the exact fixed make_inputs() matrix, the actual kernel output is 25.79288 while the contract-mandated float64 reference log(det(A)) is 25.81125, giving a relative error of 7.12e-4 \u2014 seven times the 1e-4 tolerance problem.txt explicitly requires for this fixed workload (the only in-scope input, since no test.py/get_inputs narrow it further; problem.txt is the operative contract). The decomposition probe (t13) shows the violation is not attributable to the tl.log approximation (c2 rebutted: only ~1.7e-6 contribution), but to FP32 Schur-update rounding during the prescribed elimination: the final pivot is ~0.0041 (rank<=7 Gram plus 1/1024 regularizer), and its corrupted log dominates the error. The contract prescribes the elimination algorithm, so the algorithmic choice is not itself a defect, but the contract still requires the output to meet the 1e-4 relative-error bound on this matrix, and confirmed runtime evidence on the exact workload shows it does not. This is a genuine numeric-accuracy failure of the declared format's precision requirements relative to the float64 re
+  ...[truncated 85 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
-    "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
-    "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
-    "Each P is individually an involution, but no property of their composition may be assumed.",
-    "run() defaults to word (0,1,2) and is not the whole domain; initial_probe() covers only five smoke words and its recorded pass is evidence for those words only."
+    "Workload is exactly the float32 (8,8) matrix from make_inputs_numpy(): PCG64(98262) integer factor of shape (8,7) with entries in [-8,8], integer Gram, plus 1/1024 diagonal regularizer, cast to float32; stated SPD, and no other matrices/seeds are in scope.",
+    "Reference is log(det(A)) computed in float64 on the actual stored float32 entries of A, not the idealized pre-cast construction.",
+    "Output: finite float32 tensor of shape (1,).",
+    "Error metric: ||output - reference||_2 / max(||reference||_2, 1.0) must be <= 1e-4.",
+    "Contract explicitly prescribes the algorithm: elimination without pivoting, accumulating logs of diagonal pivots, FP fusion disabled, round-to-nearest FP32 division for multipliers (matching enable_fp_fusion=False and tl.div_rn)."
   ],
   "kernel_model": [
-    "Kernel tracks a logical->physical row mapping `order` (int32, identity initially) and mutates physical storage lazily: _reorder sets next_order[i] = order[P[i]] (lines 13-16); _materialize outputs Output[i] = Cache[order[i]] (lines 30-34); _append adds Delta to physical rows in place (lines 20-26).",
-    "Convention: logical row i resides at physical row order[i]; _reorder and _materialize are mutually consistent with this convention.",
-    "Mismatch surface in _append (lines 23-26): it adds Delta[order[row]] to physical slot `row`, i.e. Delta is indexed by PHYSICAL address, while the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the two agree only when order is an involution.",
-    "run_sequence clones initial each call, so every word starts fresh, matching the contract; all kernels are single-block with N=8, D=32, num_warps=1.",
-    "All five smoke words end with a single op 2 preceded only by identity, P0, P1, or P0^2/P1^2 \u2014 all involutions \u2014 which exac
-...[truncated 2258 chars]
+    "Single Triton program (grid (1,), num_warps=1, constexpr N=8) loads the full 8x8 matrix as an (8,8) float32 tile via rows[:,None]*N + columns[None,:] indexing (kernel.py lines 9-11).",
+    "Per step k in tl.static_range(0, N): pivot = (k,k) entry extracted by masked double sum; column = column k; pivot_row = row k; multiplier = tl.div_rn(column, pivot); product = multiplier[:,None]*pivot_row[None,:]; updated = matrix - product, but committed only where rows>k AND columns>k (lines 13-22) \u2014 a Schur-complement update that leaves already-consumed rows/columns untouched, consistent with re-extracting column/pivot_row from the unmodified regions each iteration.",
+    "output (scalar FP32) accumulates tl.log(pivot) across the 8 pivots and is stored to a 1-element float32 tensor (lines 12, 23-24, 27-30).",
+    "run() assumes the input is contiguous row-major float32 on the device with shape (8,8); N=8, num_warps=1, enable_fp_fusion=False are hardcoded.",
+    "All arithmetic except the division is ordinary FP32; tl.log on NVIDIA lowers to a fast log2-based approximation rather than a correctly-rounded log."
+  ],
+  "open_questions": [
+    "Is tl.log accu
+...[truncated 2621 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Re-recording (prior update t5 failed on malformed args): case_e04 is a lazy reordered beam-cache. _reorder/_materialize are internally consistent under the convention logical row i lives at physical order[i], but _append indexes Delta by physical address (Delta[order[row]]) instead of logical row, matching the contract only when order is an involution. The five smoke words all have involution order before their single append, masking this surface; the contract covers all 121 words.
+- `du1` tasks=`initial`: Re-recording the initial description model for case_x (previous attempt failed with malformed tool args): FP32 Triton log-det via non-pivoted elimination on a single fixed 8x8 SPD Gram+regularizer matrix, summing FP32 logs of pivots, against a float64 log(det(A)) reference with 1e-4 relative tolerance.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For any in-scope word where a non-involution order (e.g. the composition P0∘P1 or P1∘P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final output deviates from the mathematical reference by a multiple of 1/16, far above the 1e-5 tolerance.
+Statement: For the fixed make_inputs() matrix, FP32 Gaussian-elimination Schur updates without pivoting produce final pivots so small (rank<=7 Gram plus only ~1e-3 regularizer) that FP32 rounding in the updates makes sum(log(pivot)) differ from the float64 log(det(A)) reference by more than 1e-4 in the contract's relative-error metric.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt requires Delta to address current LOGICAL rows for all 121 words of length 0-4 over {0,1,2}; a word such as (0,1,2) or (1,0,2) — both in the admitted domain — yields a possibly non-involution order before op 2, directly exercising the _append Delta-indexing surface.
+Scope rationale: problem.txt fixes the workload to the single (8,8) float32 matrix from make_inputs() (Gram of an 8x7 factor plus 1/1024 diagonal regularizer) and requires ||output - float64 log(det(A))|| / max(||ref||,1) <= 1e-4, so any FP32 Schur-update rounding that pushes the accumulated log-sum past this tolerance on this exact matrix is in scope.
 
 Scope evidence:
-- `problem.txt`: Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain.
+- `problem.txt`: The entire workload is the fixed (8,8) float32 matrix from make_inputs(); the reference is float64 log(det(A)) on the actual stored entries, with the relative error metric required to be <= 0.0001.
 
-Rationale: _append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.
+Rationale: The Gram factor is 8x7, so gram has rank at most 7 and the last diagonal pivot after elimination is on the scale of the 1/1024 regularizer; Schur-complement entries in FP32 have rounding errors large relative to such tiny final pivots, so log(pivot) for late pivots may be badly wrong even though early pivots are fine.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Targeted words confirm the _append Delta-indexing defect: P0∘P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: FP32 no-pivot elimination emulation on the exact make_inputs() matrix gives pivots ending at ~0.0041 (rank<=7 Gram + 1/1024 regularizer). The accumulated log-sum is 25.7929 vs float64 reference 25.8113, relative error 7.12e-4, exceeding the 1e-4 contract tolerance — FP32 Schur-update rounding on the tiny final pivot is the dominant error. All pivots positive, so no sign failure.
 
-### c2 - `confirmed`
+### c2 - `rebutted`
 
-Statement: An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five smoke words pass.
+Statement: The kernel's use of Triton's fast approximate tl.log in float32, accumulated over 8 pivots, may make the final output exceed the 1e-4 relative error tolerance versus the float64 log(det(A)) reference for this specific matrix, particularly if some pivots are far from 1 (large |log| values).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly defines the contract as all 121 words of length 0-4 over {0,1,2} and states the initial probe's pass is evidence about its five words only; deciding the contract therefore requires sweeping the whole word set.
+Scope rationale: problem.txt states the error metric must be <= 0.0001 for this fixed workload and explicitly describes accumulating the logarithms of the diagonal pivots, so the accuracy of the FP32 log approximation on this matrix's pivot values is directly contract-relevant.
 
 Scope evidence:
-- `problem.txt`: Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only.
+- `problem.txt`: Error metric ||output-reference||_2/max(||reference||_2,1.0) must be <= 0.0001 for this fixed workload; the implementation accumulates the logarithms of its diagonal pivots (tl.log in FP32).
 
-Rationale: Even if P0∘P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.
+Rationale: tl.log on NVIDIA lowers to a fast log2-based approximation whose error can exceed a few ULPs; with small late pivots the log magnitudes are large, and 8 accumulated FP32 approximations plus FP32 summation could exceed the 1e-4 relative tolerance.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the five smoke words passing.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: Actual Triton kernel output 25.79288 (relative error 7.12e-4, above tolerance), but decomposition isolating the log contribution shows: with exact float64 logs of the same FP32 pivots the sum is 25.792874 (relative error 7.12e-4 — already over tolerance). The tl.log approximation adds only 1.7e-6 absolute error (relative ~6.7e-8), far below the 1e-4 tolerance even with |log| up to 5.5. The tolerance violation is entirely attributable to FP32 elimination pivot error (claim c1), not tl.log accuracy.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e04"
+  "entry": "case_x"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e04"
+  "entry": "case_x"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e04"
+  "entry": "case_x"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e04"
+  "entry": "case_x"
 }
 
 ### t5 - record_description_update - error
 
 {
   "error_type": "ToolRegistryError",
-  "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"High-suspicion surface: _append's Delta indexing (kernel.py lines 23-26). It yields the contract-correct Delta[i] only when order is an involution; smoke words with a single involution reorder before op 2 (e.g. (0,2), (0,0,2)) pass for exactly this reason, so the recorded probe pass is weak evidence.\", \"Words where order = P_a\u2218P_b composition (non-involution) precedes an op 2, e.g. (0,1,2), (1,0,2), (0,1,1,2), are the prime candidates for failure; also repeated op 2 after a non-identity order, e.g. (0,2,2) \u2014 second append repeats the same misindexed Delta.\", \"In-place physical mutation plus wrong indexing may still keep output finite/float32, so the failure mode is a value mismatch, not a crash; error would be a multiple of 1/16 and far above 1e-5 when it occurs.\", \"Do not accept involution-based reasoning for compositions: contract explicitly forbids assuming composition properties of P[0] and P[1].\", \"Empty word and reorder-only words exercise only _reorder/_materialize, which are consistent; these are likely to pass and do not cover the append surface.\"]</arg_value><arg_key>scope_notes"
+  "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"No pivoting: the algorithm relies on A being SPD so all leading pivots stay positive; a zero/negative pivot would produce -inf/NaN, but the fixed workload is stated SPD, so this is only in-scope if the actual stored float32 entries lose positive-definiteness (gram of rank <=7 plus small 1/1024 regularizer could be near-singular in float32).\", \"tl.log is typically a fast approximate log2-based implementation; 8 accumulated FP32 log approximations could exceed the 1e-4 relative tolerance depending on the reference magnitude.\", \"Schur update never updates rows/cols <= k, but 'column' and 'pivot_row' are re-extracted from the current matrix each iteration; since those regions are unmodified, this is consistent \u2014 however, the masked-slit extraction (sums of where-masks) is an unusual idiom worth checking for off-by-one or axis errors.\", \"Multiplier includes the pivot entry itself (row k), making product[k,k] = pivot, but that slot is masked out by the update predicate, so harmless; still a place where index-math bugs could hide.\", \"float32 accumulation of log(pivot) vs a float64 reference: relative error target 1e-4 is loose relative to FP32 epsilon, so accumulation error is likely fine, but combined with approximate log this needs runtime evidence.\", \"run() assumes a contiguous, on-device float32 input of exactly shape (8,8); no strides or dtype checks \u2014 safe for the fixed workload but brittle out of scope.\"]</arg_value><arg_key>open_questions"
 }
 
 ### t6 - record_claim - error
@@ -606,16 +590,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
+  "rationale": "The Gram factor is 8x7, so gram has rank at most 7 and the last diagonal pivot after elimination is on the scale of the 1/1024 regularizer; Schur-complement entries in FP32 have rounding errors large relative to such tiny final pivots, so log(pivot) for late pivots may be badly wrong even though early pivots are fine.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain."
+      "summary": "The entire workload is the fixed (8,8) float32 matrix from make_inputs(); the reference is float64 log(det(A)) on the actual stored entries, with the relative error metric required to be <= 0.0001."
     }
   ],
-  "scope_rationale": "problem.txt requires Delta to address current LOGICAL rows for all 121 words of length 0-4 over {0,1,2}; a word such as (0,1,2) or (1,0,2) \u2014 both in the admitted domain \u2014 yields a possibly non-involution order before op 2, directly exercising the _append Delta-indexing surface.",
-  "statement": "For any in-scope word where a non-involution order (e.g. the composition P0\u2218P1 or P1\u2218P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final output deviates from the mathematical reference by a multiple of 1/16, far above the 1e-5 tolerance.",
+  "scope_rationale": "problem.txt fixes the workload to the single (8,8) float32 matrix from make_inputs() (Gram of an 8x7 factor plus 1/1024 diagonal regularizer) and requires ||output - float64 log(det(A))|| / max(||ref||,1) <= 1e-4, so any FP32 Schur-update rounding that pushes the accumulated log-sum past this tolerance on this exact matrix is in scope.",
+  "statement": "For the fixed make_inputs() matrix, FP32 Gaussian-elimination Schur updates without pivoting produce final pivots so small (rank<=7 Gram plus only ~1e-3 regularizer) that FP32 rounding in the updates makes sum(log(pivot)) differ from the float64 log(det(A)) reference by more than 1e-4 in the contract's relative-error metric.",
   "status": "open"
 }
 
@@ -623,16 +607,16 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
+  "rationale": "tl.log on NVIDIA lowers to a fast log2-based approximation whose error can exceed a few ULPs; with small late pivots the log magnitudes are large, and 8 accumulated FP32 approximations plus FP32 summation could exceed the 1e-4 relative tolerance.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
+      "summary": "Error metric ||output-reference||_2/max(||reference||_2,1.0) must be <= 0.0001 for this fixed workload; the implementation accumulates the logarithms of its diagonal pivots (tl.log in FP32)."
     }
   ],
-  "scope_rationale": "problem.txt explicitly defines the contract as all 121 words of length 0-4 over {0,1,2} and states the initial probe's pass is evidence about its five words only; deciding the contract therefore requires sweeping the whole word set.",
-  "statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five smoke words pass.",
+  "scope_rationale": "problem.txt states the error metric must be <= 0.0001 for this fixed workload and explicitly describes accumulating the logarithms of the diagonal pivots, so the accuracy of the FP32 log approximation on this matrix's pivot values is directly contract-relevant.",
+  "statement": "The kernel's use of Triton's fast approximate tl.log in float32, accumulated over 8 pivots, may make the final output exceed the 1e-4 relative error tolerance versus the float64 log(det(A)) reference for this specific matrix, particularly if some pivots are far from 1 (large |log| values).",
   "status": "open"
 }
 
@@ -640,26 +624,28 @@ Evidence:
 
 {
   "contract_model": [
-    "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
-    "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
-    "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
-    "Each P is individually an involution, but no property of their composition may be assumed.",
-    "run() defaults to word (0,1,2) and is not the whole domain; initial_probe() covers only five smoke words and its recorded pass is evidence for those words only."
+    "Workload is exactly the float32 (8,8) matrix from make_inputs_numpy(): PCG64(98262) integer factor of shape (8,7) with entries in [-8,8], integer Gram, plus 1/1024 diagonal regularizer, cast to float32; stated SPD, and no other matrices/seeds are in scope.",
+    "Reference is log(det(A)) computed in float64 on the actual stored float32 entries of A, not the idealized pre-cast construction.",
+    "Output: finite float32 tensor of shape (1,).",
+    "Error metric: ||output - reference||_2 / max(||reference||_2, 1.0) must be <= 1e-4.",
+    "Contract explicitly prescribes the algorithm: elimination without pivoting, accumulating logs of diagonal pivots, FP fusion disabled, round-to-nearest FP32 division for multipliers (matching enable_fp_fusion=False and tl.div_rn)."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Kernel tracks a logical->physical row mapping `order` (int32, identity initially) and mutates physical storage lazily: _reorder sets next_order[i] = order[P[i]] (lines 13-16); _materialize outputs Output[i] = Cache[order[i]] (lines 30-34); _append adds Delta to physical rows in place (lines 20-26).",
-    "Convention: logical row i resides at physical row order[i]; _reorder and _materialize are mutually consistent with this convention.",
-    "Mismatch surface in _append (lines 23-26): it adds Delta[order[row]] to physical slot `row`, i.e. Delta is indexed by PHYSICAL address, while the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the two agree only when order is an involution.",
-    "run_sequence clones initial each call, so every word starts fresh, matching the contract; all kernels are single-block with N=8, D=32, num_warps=1.",
-    "All five smoke words end with a single op 2 preceded only by identity, P0, P1, or P0^2/P1^2 \u2014 all inv
-...[truncated 2851 chars]
+    "Single Triton program (grid (1,), num_warps=1, constexpr N=8) loads the full 8x8 matrix as an (8,8) float32 tile via rows[:,None]*N + columns[None,:] indexing (kernel.py lines 9-11).",
+    "Per step k in tl.static_range(0, N): pivot = (k,k) entry extracted by masked double sum; column = column k; pivot_row = row k; multiplier = tl.div_rn(column, pivot); product = multiplier[:,None]*pivot_row[None,:]; updated = matrix - product, but committed only where rows>k AND columns>k (lines 13-22) \u2014 a Schur-complement update that leaves already-consumed rows/columns untouched, consistent with re-extracting column/pivot_row from the unmodified regions each iteration.",
+    "output (scalar FP32) accumulates tl.log(pivot) across the 8 pivots and is stored to a 1-element float32 tensor (lines 12, 23-24, 27-30).",
+    "run() assumes the input is contiguous row-major float32 on the device with shape (8,8); N=8, num_warps=1, enable_fp_fusion=False are hardcoded.",
+    "All arithmetic except the division is ordinary FP32; tl.log on NVIDIA lowers to a fast log2-based approximation rather than a correctly-rounded log."
+  ],
+  "open_questio
+...[truncated 3031 chars]
 
 ### t11 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "The kernel's only mismatch surface is _append's Delta indexing by physical address (covered by c1), and deciding the full 121-word finite contract requires the exhaustive sweep (covered by c2). _reorder and _materialize are internally consistent under the logical->physical order convention, and the empty/reorder-only words cannot expose any distinct failure beyond what c1/c2 already cover. No additional testable in-scope claims found.",
+  "reason": "Reviewed kernel source and the description model alongside existing claims c1 and c2. The main contract-relevant risks \u2014 FP32 Schur-update rounding on the near-singular rank<=7 Gram + 1e-3 regularizer (tiny late pivots), and accumulated fast tl.log approximation error against the 1e-4 relative tolerance \u2014 are already recorded as in-scope open claims. The masked-extraction and update-predicate index math is consistent by inspection (rows/cols <= k are never re-read after consumption), and all other potential failure modes (other matrices, seeds, shapes, strides, dtypes) are explicitly excluded by problem.txt, so no new in-scope claims are warranted.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -676,13 +662,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t12_probe.py",
-      "sha256": "dbcab87ae55a205f69d3c5d5503661da49d84247be5e98d1028d01d66ee9e071"
+      "sha256": "add9668c0c6bd6f47fbe4f6baef6262a6619841cc2cbdfac4bdfcc1ce3d5d98b"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t12_stdout.txt",
-      "sha256": "b3e93ace3e81990aa9f48db466a8f9edc9a0b73b1db12de7275c6d10e231b630"
+      "sha256": "355abf77aed706e14f0ac8acca520b63486484719858ea05f0d69ad97045e7f3"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -694,12 +680,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t12_json_result.json",
-      "sha256": "b25f65bd1167b50cc69eb2128c1a0f7fa50d7106fe91ae215258e59bb9b89280"
+      "sha256": "780da90fb6fe780c69088f809a61738639162e6225b74d94c74bbf6be60fe88c"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For any in-scope word where a non-involution order (e.g. the composition P0\u2218P1 or P1\u2218P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final output deviates from the mathematical reference by a multiple of 1/16, far above the 1e-5 tolerance.",
-  "duration_s": 6.231254,
+  "claim_statement": "For the fixed make_inputs() matrix, FP32 Gaussian-elimination Schur updates without pivoting produce final pivots so small (rank<=7 Gram plus only ~1e-3 regularizer) that FP32 rounding in the updates makes sum(log(pivot)) differ from the float64 log(det(A)) reference by more than 1e-4 in the contract's relative-error metric.",
+  "duration_s": 0.26035,
   "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
@@ -709,17 +695,17 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t12_probe.py",
-          "sha256": "dbcab87ae55a205f69d3c5d5503661da49d84247be5e98d1028d01d66ee9e071"
+          "sha256": "add9668c0c6bd6f47fbe4f6baef6262a6619841cc2cbdfac4bdfcc1ce3d5d98b"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t12_stdout.txt",
-          "sha256": "b3e93ace3e81990aa9f48db466a8f9edc9a0b73b1db12de7275c6d10e231b630"
+          "sha256": "355abf77aed706e14f0ac8acca520b63486484719858ea05f0d69ad97045e7f3"
         },
         {
-          "description": "Captured stderr from the probe proce
-...[truncated 6011 chars]
+          "description": "Captured stderr fr
+...[truncated 3190 chars]
 
 ### t13 - run_claim_probe - ok
 
@@ -729,13 +715,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t13_probe.py",
-      "sha256": "9fb24c230da374ed4ac70ade3a230599918ad8d009fece79ce931811c54155fc"
+      "sha256": "66f737405ffb5c22a282a948601cf648a989c423b705dd07454d2ff141993fa3"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t13_stdout.txt",
-      "sha256": "6c3cca2a1a25070e5c90747ed69dfc565f3b30ebc33400435a0b84350850c31d"
+      "sha256": "1ba5d5b385d77d926ad6b938c89b3897afc098cee4cc0094960632623682bb7a"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -747,12 +733,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t13_json_result.json",
-      "sha256": "9ea245f87a53cf272ce33dbec7359b25a649667c3cfbfd5b55bed19e77a4cb8d"
+      "sha256": "26bb7425e00e706abe3f68ae077196efb79cb813d5c4216caca74b46f8ec29c3"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five smoke words pass.",
-  "duration_s": 4.607914,
+  "claim_statement": "The kernel's use of Triton's fast approximate tl.log in float32, accumulated over 8 pivots, may make the final output exceed the 1e-4 relative error tolerance versus the float64 log(det(A)) reference for this specific matrix, particularly if some pivots are far from 1 (large |log| values).",
+  "duration_s": 5.629066,
   "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
@@ -762,20 +748,18 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t13_probe.py",
-          "sha256": "9fb24c230da374ed4ac70ade3a230599918ad8d009fece79ce931811c54155fc"
+          "sha256": "66f737405ffb5c22a282a948601cf648a989c423b705dd07454d2ff141993fa3"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t13_stdout.txt",
-          "sha256": "6c3cca2a1a25070e5c90747ed69dfc565f3b30ebc33400435a0b84350850c31d"
+          "sha256": "1ba5d5b385d77d926ad6b938c89b3897afc098cee4cc0094960632623682bb7a"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t13_stderr.txt",
-     
-...[truncated 5694 chars]
+          "
+...[truncated 3731 chars]
 
 ### t14 - finalize_probe_evidence - ok
 
@@ -783,7 +767,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Targeted words confirm the _append Delta-indexing defect: P0\u2218P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.",
+  "summary": "FP32 no-pivot elimination emulation on the exact make_inputs() matrix gives pivots ending at ~0.0041 (rank<=7 Gram + 1/1024 regularizer). The accumulated log-sum is 25.7929 vs float64 reference 25.8113, relative error 7.12e-4, exceeding the 1e-4 contract tolerance \u2014 FP32 Schur-update rounding on the tiny final pivot is the dominant error. All pivots positive, so no sign failure.",
   "supports": "confirmed",
   "tool_event_id": "t12"
 }
@@ -792,10 +776,10 @@ Evidence:
 
 {
   "claim_id": "c2",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c2.e1",
-  "summary": "Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the five smoke words passing.",
-  "supports": "confirmed",
+  "summary": "Actual Triton kernel output 25.79288 (relative error 7.12e-4, above tolerance), but decomposition isolating the log contribution shows: with exact float64 logs of the same FP32 pivots the sum is 25.792874 (relative error 7.12e-4 \u2014 already over tolerance). The tl.log approximation adds only 1.7e-6 absolute error (relative ~6.7e-8), far below the 1e-4 tolerance even with |log| up to 5.5. The tolerance violation is entirely attributable to FP32 elimination pivot error (claim c1), not tl.log accuracy.",
+  "supports": "rebutted",
   "tool_event_id": "t13"
 }
 
@@ -803,7 +787,7 @@ Evidence:
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the exhaustive 121-word sweep (c2/t13) and the targeted non-involution-order probes (c1/t12) both decisively confirm the _append Delta-indexing defect \u2014 12 of 121 in-scope words fail with worst error 7.625 vs the 1e-5 tolerance, including run()'s default word (0,1,2). The new evidence raises no material problem not already covered by confirmed claims c1 and c2; _reorder/_materialize remain internally consistent and no other in-scope attack surface exists.",
+  "reason": "Final review: the decisive in-scope failure is already captured by confirmed claim c1 \u2014 the actual kernel output 25.79288 vs float64 reference 25.81125 gives relative error 7.12e-4, exceeding the 1e-4 contract tolerance on the exact fixed make_inputs() matrix, with the decomposition (t13) attributing the violation entirely to FP32 Schur-update rounding on the ~0.0041 final pivot. c2 (tl.log approximation) was rebutted, contributing only ~1.7e-6. No additional material, testable, in-scope problem is exposed by the new evidence; all other failure modes are explicitly out of scope per problem.txt.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -815,24 +799,22 @@ Evidence:
 ### t17 - record_verdict - ok
 
 {
-  "confidence": 0.99,
+  "confidence": 0.95,
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this is not a rounding artifact), and the exhaustive sweep shows 12 of 121 contract words fail with worst error 7.625, far above the 1e-5 tolerance. No reference-undefined or tie-breaking caveat applies: the reference is exact. The five passing smoke words each had involution order before a single append, masking the defect. Skeptic reviewed the latest evidence (t16) with no new claims; no open claims remain. The kernel fails the explicitly stated finite contract.",
+  "reason": "Confirmed in-scope claim c1: on the exact fixed make_inputs() matrix, the actual kernel output is 25.79288 while the contract-mandated float64 reference log(det(A)) is 25.81125, giving a relative error of 7.12e-4 \u2014 seven times the 1e-4 tolerance problem.txt explicitly requires for this fixed workload (the only in-scope input, since no test.py/get_inputs narrow it further; problem.txt is the operative contract). The decomposition probe (t13) shows the violation is not attributable to the tl.log approximation (c2 rebutted: only ~1.7e-6 contribution), but to FP32 Schur-update rounding during the prescribed elimination: the final pivot is ~0.0041 (rank<=7 Gram plus 1/1024 regularizer), and its corrupted log dominates the error. The contract prescribes the elimination algorithm, so the algorithmic choice is not itself a defect, but the contract still requires the output to meet the 1e-4 relative-error bound on this matrix, and confirmed runtime evidence on the exact workload shows it does not. This is a genuine numeric-accuracy failure of the declared format's precision requirements relative to the float64 reference, not a metric artifact or reference-undefined case.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.99,
-  "created_at": "2026-09-24T06:13:43Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T01:03:55Z",
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this is not a rounding artifact), and the exhaustive sweep shows 12 of 121 contract words fail with worst error 7.625, far above the 1e-5 tolerance. No reference-undefined or tie-breaking caveat applies: the reference is exact. The five passing smoke words each had involution order before a single append, masking the defect. Skeptic reviewed the latest evidence (t16) with no new claims; no open claims remain. The kernel fails the explicitly stated finite contract.",
+  "reason": "Confirmed in-scope claim c1: on the exact fixed make_inputs() matrix, the actual kernel output is 25.79288 while the contract-mandated float64 reference log(det(A)) is 25.81125, giving a relative error of 7.12e-4 \u2014 seven times the 1e-4 tolerance problem.txt explicitly requires for this fixed workload (the only in-scope input, since no test.py/get_inputs narrow it further; problem.txt is the operative contract). The decomposition probe (t13) shows the violation is not attributable to the tl.log approximation (c2 rebutted: only ~1.7e-6 contribution), but to FP32 Schur-update rounding during the prescribed elimination: the final pivot is ~0.0041 (rank<=7 Gram plus 1/1024 regularizer), and its corrupted log dominates the error. The contract prescribes the elimination algorithm, so the algorithmic choice is not itself a defect, but the contract still requires the output to meet the 1e-4 relative-error bound on this matrix, and confirmed runtime evidence on the exact workload shows it does not. This is a genuine numeric-accuracy failure of the declared format's precision requirements relative to the float64 reference, not a metric artifact or reference-undefined case.",
   "verdict": "reject"
 }

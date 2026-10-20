@@ -1,104 +1,109 @@
 [
   {
-    "created_at": "2026-09-30T08:52:43Z",
+    "created_at": "2026-09-30T09:03:30Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T08:53:40Z",
+        "created_at": "2026-09-30T09:04:51Z",
         "data": {
-          "E": 0.001260072290400588,
-          "all_finite": true,
+          "E": 0.15418204354671095,
+          "E_pass": false,
+          "aligned_err_norm": 0.7782051434092082,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
-              "path": "probes/t12_probe.py",
-              "sha256": "a0cff2ac1206a27da7be8100960f85310af01cf148f4ac0f10158ba2c7294b2c"
+              "path": "probes/t15_probe.py",
+              "sha256": "91f5c62e4d4c241f3bb2d8ea23460c0611b59e0006bfb70a26efeef0ed17f748"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
-              "path": "probes/t12_stdout.txt",
-              "sha256": "08d34fecec0bf55bc476a6dbe6a8f5d4fdd15ceac8db9d40906d2aa4e0bd8a8b"
+              "path": "probes/t15_stdout.txt",
+              "sha256": "8e0a3cad03acd466fa4c01ca94607d118d8250b17ea0fe9e0f12b29e021d89ed"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
-              "path": "probes/t12_stderr.txt",
+              "path": "probes/t15_stderr.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
-              "path": "probes/t12_json_result.json",
-              "sha256": "1c7ccbe198fc257e45174d11ed3fc25013c419087d93b04a0b423daa87456475"
+              "path": "probes/t15_json_result.json",
+              "sha256": "7bbdb8e6d3c8eff6581d9c227a04c2309c5215455ae08007a019b4c590ccccb3"
             }
           ],
-          "duration_s": 7.255251,
+          "budget": 0.12,
+          "duration_s": 4.979163,
+          "err_norm": 1.0054541136867703,
           "exit_code": 0,
-          "expected_signal": "E vs 0.003 on the exact fixed workload",
+          "expected_signal": "E relative-L2 on fixed workload vs 0.12 budget",
+          "finite": true,
           "json_parse_error": null,
           "json_result": {
-            "E": 0.001260072290400588,
-            "all_finite": true,
-            "max_abs_err": 0.004667371969312217,
-            "norm_out_ref_diff": 0.17729603957606632,
-            "norm_ref": 140.70306991649056,
-            "num_elements": 24576,
-            "tolerance": 0.003
+            "E": 0.15418204354671095,
+            "E_pass": false,
+            "aligned_err_norm": 0.7782051434092082,
+            "budget": 0.12,
+            "err_norm": 1.0054541136867703,
+            "finite": true,
+            "ref_norm": 6.521214082768064,
+            "x_dot_r_col": 0.49958652585864727
           },
-          "max_abs_err": 0.004667371969312217,
-          "norm_out_ref_diff": 0.17729603957606632,
-          "norm_ref": 140.70306991649056,
-          "num_elements": 24576,
+          "ref_norm": 6.521214082768064,
           "stderr": "",
-          "stdout": "{\"E\": 0.001260072290400588, \"norm_out_ref_diff\": 0.17729603957606632, \"norm_ref\": 140.70306991649056, \"num_elements\": 24576, \"tolerance\": 0.003, \"all_finite\": true, \"max_abs_err\": 0.004667371969312217}\n",
+          "stdout": "{\"E\": 0.15418204354671095, \"budget\": 0.12, \"E_pass\": false, \"finite\": true, \"ref_norm\": 6.521214082768064, \"err_norm\": 1.0054541136867703, \"aligned_err_norm\": 0.7782051434092082, \"x_dot_r_col\": 0.49958652585864727}\n",
           "timed_out": false,
           "timeout_s": 60,
-          "tolerance": 0.003
+          "x_dot_r_col": 0.49958652585864727
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "On the exact make_inputs() workload (T=768, D=32, seed 453), E = 0.001260 <= 0.003 budget with all outputs finite; the per-step fp16 rounding does NOT push normalized error above 0.003, so claim c1 is rebutted.",
-        "supports": "rebutted",
-        "tool_event_id": "t12"
+        "summary": "On the fixed workload (m=32, k=128, seed 1223), the kernel's output violates the contract budget: E = ||out - fp64 reference||_2 / max(||ref||_2, 0.00566) = 0.1542 > 0.12. Outputs are finite, ||ref||=6.52, ||err||=1.005. The error decomposition confirms the claimed mechanism: the aligned component (0.5-weighted residual-column direction, x\u00b7r_col \u2248 0.4996) contributes 0.778 of the 1.005 error norm, i.e. the residual-aligned coherent quantization error dominates, exactly as make_inputs constructed it. This is a direct in-scope budget violation.",
+        "supports": "confirmed",
+        "tool_event_id": "t15"
       }
     ],
     "id": "c1",
     "raised_by": "skeptic",
-    "rationale": "Kernel line 13 rounds the carried state to fp16 every step; fp16 unit roundoff ~5e-4 per step over 768 steps could push the normalized error above 0.003, though decay 0.99 attenuates old errors so the accumulation is bounded rather than growing.",
+    "rationale": "make_inputs injects 0.5 * normalized per-column sum of quantization residuals into x, so per-row weight quantization error accumulates coherently across the 128-element row dot products; the residual-aligned component is ~0.5 of ||x||, so output error may violate the 0.12 relative-L2 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Compliance iff all outputs finite and E = ||output-reference||_2 / max(||ref||_2, 0.001*sqrt(num_elements)) <= 0.003 on the single make_inputs() workload (T=768, D=32)."
+        "summary": "Satisfies the contract iff all outputs are finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(#outputs)) <= 0.12; reject for a budget violation."
+      },
+      {
+        "source": "kernel.py make_inputs",
+        "summary": "x is constructed as 0.2*weight-sum direction + 0.8*random + 0.5*normalized sum of per-row quantization residuals (floor(w/scale+0.5) clipped at \u00b17), deliberately amplifying the error of exactly the quantization the kernel performs on the single in-scope workload."
       }
     ],
-    "scope_rationale": "The claim is about E on the exact single make_inputs() workload (T=768, D=32, decay 0.99, noise 0.001, bias 0.01, seed 453), which problem.txt defines as the entire in-scope contract: compliance iff E <= 0.003.",
-    "statement": "On the fixed workload (T=768, D=32, decay=0.99, noise=0.001, bias=0.01, seed 453), the per-step fp16 rounding of the carried state h (kernel line 13) yields E > 0.003 against the float64 reference.",
-    "status": "rebutted",
-    "updated_at": "2026-09-30T08:53:40Z"
+    "scope_rationale": "problem.txt defines compliance on exactly the make_inputs() workload via the E <= 0.12 relative-L2 budget against a float64 reference; the kernel's quantization error on that single workload decides pass/fail, so a budget violation is directly in scope.",
+    "statement": "On the fixed workload (m=32, k=128, seed 1223), the kernel's 7-level per-row weight quantization (scale=max|w|/7, q=clip(floor(w/scale+0.5),-7,7)) yields E > 0.12 against the float64 reference, violating the contract budget.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T09:04:51Z"
   },
   {
-    "created_at": "2026-09-30T08:52:43Z",
+    "created_at": "2026-09-30T09:03:30Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T08:53:40Z",
+        "created_at": "2026-09-30T09:04:38Z",
         "data": {
-          "all_finite": true,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t13_probe.py",
-              "sha256": "e3d6241c40d960947b94e1ceea2d50cc1ada3cddf070d63cdd06a0bb851a8691"
+              "sha256": "962960e12be5a14ea308e11a8994261bf3615946aca1115f373428f151931c4c"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t13_stdout.txt",
-              "sha256": "859d73282bcbe58133bb7a93835a62e7d5b85b6239b845d3b1dc325559a0cb8d"
+              "sha256": "101ed3f2bc778c357f8d120eb4560ddf6c508d2038def8a5119ff4cffb4b8ec9"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -110,55 +115,54 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t13_json_result.json",
-              "sha256": "7c5ff2036cf10305ce178d39c507a690c311aae6acc5cd304d5a27206afe667d"
+              "sha256": "2db9477e4507a0148c8a51c1cf00bccc5e0cf97ffdb605dbdf089cc38c9667f4"
             }
           ],
-          "duration_s": 4.739666,
-          "exact_mismatch_vs_fp16_sim": 0,
+          "duration_s": 4.296376,
+          "err_norm_fp32_quant": 1.0054539535968239,
+          "err_norm_fp64_quant": 1.0054539772202504,
           "exit_code": 0,
-          "expected_signal": "kernel output equals fp16-snapped recurrence exactly (no indexing/carry bugs)",
+          "expected_signal": "count of fp32-vs-fp64 quantization level flips on fixed workload",
           "json_parse_error": null,
           "json_result": {
-            "all_finite": true,
-            "exact_mismatch_vs_fp16_sim": 0,
-            "max_abs_diff_vs_sim": 0.0,
-            "row0_matches_b0": true,
-            "shape": [
-              768,
-              32
-            ]
+            "err_norm_fp32_quant": 1.0054539535968239,
+            "err_norm_fp64_quant": 1.0054539772202504,
+            "level_flips_fp32_vs_fp64": 0,
+            "near_boundary_count": 0,
+            "total_elements": 4096
           },
-          "max_abs_diff_vs_sim": 0.0,
-          "row0_matches_b0": true,
-          "shape": [
-            768,
-            32
-          ],
+          "level_flips_fp32_vs_fp64": 0,
+          "near_boundary_count": 0,
           "stderr": "",
-          "stdout": "{\"shape\": [768, 32], \"exact_mismatch_vs_fp16_sim\": 0, \"max_abs_diff_vs_sim\": 0.0, \"row0_matches_b0\": true, \"all_finite\": true}\n",
+          "stdout": "{\"level_flips_fp32_vs_fp64\": 0, \"near_boundary_count\": 0, \"err_norm_fp32_quant\": 1.0054539535968239, \"err_norm_fp64_quant\": 1.0054539772202504, \"total_elements\": 4096}\n",
           "timed_out": false,
-          "timeout_s": 60
+          "timeout_s": 60,
+          "total_elements": 4096
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "Kernel output (768x32, all finite) matches an independently computed fp16-snapped recurrence exactly (0 mismatches, max diff 0.0), and row 0 equals b[0] snapped to fp16, confirming correct indexing, state carry, and per-step output \u2014 claim c2 confirmed.",
-        "supports": "confirmed",
+        "summary": "On the fixed workload, zero of 4096 weights quantize to a different level under fp32 (kernel-style) vs fp64 computation of scale and floor(w/scale+0.5); no weights are within 1e-5 of a rounding boundary, and the resulting output error norms are identical to ~2e-8. No fp32-vs-fp64 boundary rounding difference exists on this data, so the claim that level flips change the output/budget outcome is contradicted.",
+        "supports": "rebutted",
         "tool_event_id": "t13"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "The loop is a Python-level `for t in range(T)` inside a single @triton.jit program with grid (1,) and T=768 as constexpr; any loop-handling or state-carrier bug would corrupt all outputs, so the E metric on the exact workload is the decisive check.",
+    "rationale": "Kernel computes scale and w/scale+0.5 in binary32 while the generator used binary64; near-tie values (w/scale near x.5) can floor differently, changing selected quantization levels and thus the output error magnitude.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Workload is exactly make_inputs() (T=768, D=32); compliance requires E <= 0.003 with all outputs finite."
+        "summary": "Reference is the mathematical operation in float64 on the SAME float32 input values; the kernel's own error against that reference decides E <= 0.12."
+      },
+      {
+        "source": "kernel.py make_inputs",
+        "summary": "The residual direction injected into x is computed with fp64 wf/scale and floor(wf/scale+0.5), while the kernel (lines 11-12) quantizes in fp32 \u2014 boundary values may quantize to different levels in-kernel."
       }
     ],
-    "scope_rationale": "The claim concerns functional correctness (indexing, state carry, output for every t) of the recurrence h[t]=a[t]*h[t-1]+b[t] as stated in problem.txt, evaluated on the sole in-scope make_inputs() workload with the E<=0.003 and finiteness criteria.",
-    "statement": "The sequential single-program Triton loop over T=768 correctly implements h[t] = a[t]*h[t-1] + b[t] for all steps (correct indexing, correct carry of the rounded state, output for every t), so that output equals the fp16-snapped recurrence with no skipped, duplicated, or misaddressed steps.",
-    "status": "confirmed",
-    "updated_at": "2026-09-30T08:53:40Z"
+    "scope_rationale": "The contract's reference is float64 exact matmul on the same float32 inputs; the kernel's fp32 quantization-boundary rounding is part of the single fixed workload's computed output and directly affects E, so it is in scope.",
+    "statement": "The kernel's fp32 computation of scale = max|w|/7 and floor(w/scale + 0.5) may quantize some weights to different levels than an exact fp64 quantization on the same boundary-tie weights, changing the output error and potentially the pass/fail of the E<=0.12 budget on this fixed workload.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T09:04:38Z"
   }
 ]

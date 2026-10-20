@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e15`
+- Entry: `case_e09`
 - Turns: 10
-- Tool events: 17
-- Claims: 2
-- Description updates: 1
-- LLM time: 145.503s across 9 calls | tokens: in=202445 out=10046 total=212491
+- Tool events: 21
+- Claims: 3
+- Description updates: 2
+- LLM time: 93.613s across 9 calls | tokens: in=208207 out=6343 total=214550
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.95
+- Confidence: 0.92
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,75 +26,83 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e15"
+    "entry": "case_e09"
   }
   Output summary:
   {
-    "entry": "case_e15"
+    "entry": "case_e09"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e15"
+    "entry": "case_e09"
   }
   Output summary:
   {
-    "entry": "case_e15"
+    "entry": "case_e09"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e15"
+    "entry": "case_e09"
   }
   Output summary:
   {
-    "entry": "case_e15"
+    "entry": "case_e09"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e15",
+    "entry": "case_e09",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e15"
+    "entry": "case_e09"
   }
 
-### Turn 2 - `describer` (45.338470271s, in=5963 out=2857)
+### Turn 2 - `describer` (21.271775926000004s, in=6743 out=1281)
 
 Message:
 
 ```text
-I've read the artifact context. Key observation: the rows begin with ±2^80 entries; a sequential float64 sum loses all smaller values (low and ±2^30 terms) when accumulated against 2^80, so the recorded probe's "reference" of 0.0 does not match the contract's exact real-number target (≈ sum of the eight small values per row, ~7–9). The kernel's Neumaier compensated sum plausibly tracks that target instead. I'll record this description model now.
+I have the full kernel source and contract; I'll record the description model now. The main observation: `step()` returns `weights.view(N)`, a live view of the aliased in-place state, while the contract judges retained history values only at observation time after all six updates.
 ```
 
 Tool calls:
 
-- `record_description_update -> t5 error`
+- `record_description_update -> t5 ok`
   Args:
   {
     "contract_model": [
-      "Fixed workload only: the single stored float32 array X of shape (4,12) produced by make_inputs() with SEED=203635; other seeds/permutations/arrays are out of scope.",
-      "Target[r] is the exact real-number sum of the 12 stored values in row r, not any particular floating-point accumulation order.",
-      "run(X) must return a finite float32 vector of shape (4,), must not modify X, and must satisfy ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5 with norms/differences in float64 or better.",
-      "Requirement is on final row sums only, not on intermediate partial sums or correction terms.",
-      "Rows contain huge cancellation terms: x[:,0]=+2^80, x[:,-1]=-2^80 (both exactly representable in float32), a permuted interior containing +2^30, -2^30, and eight val
-  ...[truncated 4197 chars]
+      "Fixed workload: make_inputs() float32, weights/v0 shape (128,), gradients shape (6,128), rows consumed once in order.",
+      "Recurrence (float64 target): v[t+1]=0.75*v[t]+0.25*G[t]; w[t+1]=w[t]-(1/32)*v[t+1].",
+      "step() must update weights/velocity in place and return a (128,) float32 tensor; run_sequence returns the six tensors in order; caller observes all retained outputs only AFTER the full sequence.",
+      "Acceptance: history Frobenius relative error <= 0.025; final weights and velocity relative errors <= 1e-5 (each with 0.1 floor); outputs/states finite float32 with stated shapes.",
+      "G must remain byte-for-byte unchanged; mutating weights and velocity is required; storage aliasing alone is not a failure \u2014 only values at observation time matter
+  ...[truncated 3532 chars]
   Output summary:
   {
-    "error_type": "ToolRegistryError",
-    "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"The recorded initial-probe reference is suspect: a sequential float64 sum adds 2^80 first, so all smaller terms (ulp(2^80)\u22482^27 in float64) round away and the -2^80 leaves 0.0, contradicting the contract's exact real-number target (~7-9 per row). Skeptic should claim/probe whether the acceptance reference is the exact sum, not the probe's 0.0.\", \"Residual error of the fp32 Neumaier result versus the exact target: is the relative error against the true target within 1e-5, given fp32 output quantization (ulp of ~8 is ~1e-6, so borderline feasible)?\", \"Correction-term accumulation itself is plain fp32 addition; if the \u00b12^30 pair interleaves with small values, some lost residues may be re-lost when added into 'correction' while it is large (2^30-scale), potentially degrading the result below tolerance.\", \"Whether tl.where / fp32 rounding in Triton on the target GPU matches the presumed IEEE semantics (enable_fp_fusion=False is set, mitigating contraction, but device behavior of the branch math should be evidenced).\", \"Contiguity/dtype assumptio
-  ...[truncated 135 chars]
+    "contract_model": [
+      "Fixed workload: make_inputs() float32, weights/v0 shape (128,), gradients shape (6,128), rows consumed once in order.",
+      "Recurrence (float64 target): v[t+1]=0.75*v[t]+0.25*G[t]; w[t+1]=w[t]-(1/32)*v[t+1].",
+      "step() must update weights/velocity in place and return a (128,) float32 tensor; run_sequence returns the six tensors in order; caller observes all retained outputs only AFTER the full sequence.",
+      "Acceptance: history Frobenius relative error <= 0.025; final weights and velocity relative errors <= 1e-5 (each with 0.1 floor); outputs/states finite float32 with stated shapes.",
+      "G must remain byte-for-byte unchanged; mutating weights and velocity is required; storage aliasing alone is not a failure \u2014 only values at observation time matter.",
+      "Out of scope: other inputs, different step counts, observations between updates, carrying state across trials.",
+      "initial_probe() results (all errors 0.0, passed) are evidence, not an authoritative verdict."
+    ],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "Triton kernel _momentum_step: single program over tl.arange(0,128), computes next_velocity=0.75*v+0.25*g, next_weights=w-0.
+  ...[truncated 3232 chars]
 
-### Turn 3 - `skeptic` (21.695153146000003s, in=11033 out=1693)
+### Turn 3 - `skeptic` (9.26525060100002s, in=14859 out=757)
 
 Message:
 
 ```text
-The decisive risk here is the fp32 correction accumulator. While `correction` holds +2^30 (before the −2^30 term arrives in the permuted interior), any small values (~0.25–1.75) added to it are rounded away — ulp(2^30) in fp32 is 128 — and there is no second-order compensation. Depending on where the permutation puts +2^30 relative to the small values and −2^30, several small values could be lost entirely, which would blow the 1e-5 tolerance against the exact target. The recorded T4 output values must be checked against the exact per-row sums (sum of the eight small values), not against the probe's float64 sequential reference (0.0), which is itself inconsistent with the contract's exact-real-sum definition.
-
-I'll record these two claims.
+The central defect candidate is clear: `step()` returns a live view of the aliased weights, so all six retained history tensors read as w[6] at observation time, violating the H_target requirement. I'll record that plus the two secondary, testable surfaces.
 ```
 
 Tool calls:
@@ -102,16 +110,13 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "enable_fp_fusion=False is set, so the only remaining error source is the uncompensated `correction = correction + lost` accumulation; its magnitude depends on where the seed-203635 permutation places the +2^30 term.",
+    "rationale": "step() (kernel.py line 40) returns weights.view(N) with no clone, and run_sequence appends these live views; contract says values are judged at post-sequence observation time with H_target[t]=w[t+1], so H[0..4] equaling w[6] should give a large Frobenius error given gradient scales up to 1e2. The recorded initial_probe 0.0 result contradicts this source reading and likely came from a different implementation (it says \"PyTorch implementation with preallocated optimizer state\"), so a runtime probe of this exact kernel is needed.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number sum of the stored float32 values of the make_inputs() array; the requirement is on final row sums only."
-      }
-    ],
-    "statement": "The plain fp32 accumulation of `correction` in _compensated_rows loses small interior values while correction holds \u00b12^30 (ulp(2^30) in fp32 = 128), so on the fixed SEED=203635 input the output 
-  ...[truncated 138 chars]
+        "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at
+  ...[truncated 523 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -120,475 +125,608 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "A float64 accumulator at magnitude 2^80 has ulp \u2248 2^27, so all smaller terms (2^30? actually 2^30 > 2^27, but the ~1 values and residual 2^30-pair cancellation) round away or cancel to 0, contradicting the contract's exact-sum target of ~4\u201314 per row.",
+    "rationale": "Triton computes in float32 while the target is defined in float64; the 1e-5 relative tolerance on final state is much tighter than the history tolerance, so accumulated float32 rounding over 6 steps should be measured, though power-of-two coefficients make it likely small.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The mathematical target is the exact real-number sum of the stored input values, and initial_probe is explicitly evidence to assess, not an authoritative verdict or alternative specification."
+        "summary": "\"All target calculations use the actual stored input values, in float64 or more accurately\" and final state tolerances of 1e-5 with 0.1 floor."
       }
     ],
-    "statement": "The initial_probe's reference (sequential float64 row-order sum yielding 0.0) does not match the contract's exact real-number target (~4\u201314 per row), so the recorded probe failure (passed=false
-  ...[truncated 82 chars]
+    "statement": "The final weights and velocity produced by the float32 Triton kernel may exceed the 1e-5 relative tolerance against the float64 target w[6], v[6] for the fixed seeded workload."
+  }
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+- `record_claim -> t8 error`
+  Args:
+  {
+    "rationale": "Source shows no store to Gradient, but a byte-for-byte runtime comparison of G before/after the full sequence would close the explicit input-mutation requirement.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"G must remain byte-for-byte unchanged.\""
+      }
+    ],
+    "statement": "The gradients tensor G may be mutated (not byte-for-byte unchanged) after the full six-step sequence, violating the explicit input-mutation requirement."
+  }
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (7.929937319000004s, in=12660 out=696)
+### Turn 4 - `skeptic` (10.215594980999981s, in=16904 out=835)
 
 Message:
 
 ```text
-The two claims from last turn failed to record because `scope_rationale` was missing. I'm re-sending them now with that field filled in.
+The three claim calls were rejected for missing `scope_rationale`; I'll re-send them properly.
 ```
 
 Tool calls:
 
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "enable_fp_fusion=False is set, so the remaining error source is the uncompensated `correction = correction + lost` fp32 accumulation; while correction holds +2^30 (ulp = 128 in fp32), small residues (~0.25\u20131.75) can be rounded away depending on where the seed-203635 permutation places the +2^30 term relative to the small values.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number sum of the stored float32 values of the make_inputs() array; requirement is on final row sums only."
-      }
-    ],
-    "scope_rationale": "The contract requires final row sums within 1e-5 relative error of the exact 
-  ...[truncated 542 chars]
-  Output summary:
-  {
-    "id": "c1",
-    "rationale": "enable_fp_fusion=False is set, so the remaining error source is the uncompensated `correction = correction + lost` fp32 accumulation; while correction holds +2^30 (ulp = 128 in fp32), small residues (~0.25\u20131.75) can be rounded away depending on where the seed-203635 permutation places the +2^30 term relative to the small values.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number sum of the stored float32 values of the make_inputs() array; requirement is on final row sums only."
-      }
-    ],
-    "scope_rationale": "The contract requires final row sums within 1e-5 relative error of the exact real-number sum of the fixed make_inputs() (SEED=203635) array, so losing whole small values in the correction accumulator would violate this stated acceptance metric on the in-scope input.",
-    "statement": "The plain fp32 accumulation of `correction` in _compensated_rows loses small interior residues while correction holds ~2^30 (ulp(2^30) in fp32 = 128), so on the fixed SEED=203635
-  ...[truncated 176 chars]
 - `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "A float64 accumulator at magnitude 2^80 has ulp \u2248 2^27, so the eight ~1-magnitude values round away during accumulation and the -2^80 leaves exactly 0.0, contradicting the contract's exact-sum target of ~4\u201314 per row; the kernel's output magnitudes (~7\u20139) are consistent with the exact target instead.",
+    "rationale": "step() (kernel.py line 40) returns weights.view(N) with no clone, and run_sequence appends these live views; contract judges values at post-sequence observation time with H_target[t]=w[t+1], so H[0..4] equaling w[6] should give a large Frobenius error given gradient scales up to 1e2. The recorded initial_probe 0.0 result likely came from a different implementation, so a runtime probe of this exact kernel is needed.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The mathematical target is the exact real-number sum of the stored input values, and initial_probe() and its recorded result are explicitly evidence to assess, not an authoritative verdict or alternative specification."
+        "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1].\""
+      },
+      {
+        "source": "problem.tx
+  ...[truncated 745 chars]
+  Output summary:
+  {
+    "id": "c1",
+    "rationale": "step() (kernel.py line 40) returns weights.view(N) with no clone, and run_sequence appends these live views; contract judges values at post-sequence observation time with H_target[t]=w[t+1], so H[0..4] equaling w[6] should give a large Frobenius error given gradient scales up to 1e2. The recorded initial_probe 0.0 result likely came from a different implementation, so a runtime probe of this exact kernel is needed.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1].\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025."
       }
     ],
-    "scope_rationale": "The contract defines the target as the exact real-number sum of the stored values (~4\u201314 per row), and ex
-  ...[truncated 444 chars]
+    "scope_rationale": "The contract requires the retained history tensors, observed only after the full sequence, to match H_target[t]=w[t+1] within a 0.025 relative Frobenius tolerance; if the returned views all read w[6] at observation time, H[0..4] deviate from w[1..5] for th
+  ...[truncated 379 chars]
+- `record_claim -> t10 ok`
+  Args:
+  {
+    "rationale": "Triton computes in float32 while the target is defined in float64; the 1e-5 relative tolerance on final state is much tighter than the history tolerance, so accumulated float32 rounding over 6 steps should be measured, though power-of-two coefficients make it likely small.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"All target calculations use the actual stored input values, in float64 or more accurately\" and final-state tolerances ||final_weights-w[6]||/max(...,0.1) <= 1e-5 and similarly for velocity."
+      }
+    ],
+    "scope_rationale": "The contract defines the target w[6], v[6] in float64 and requires final state within 1e-5 relative error; float32 kernel accumulation could exceed that tolerance on the fixed wor
+  ...[truncated 204 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "A float64 accumulator at magnitude 2^80 has ulp \u2248 2^27, so the eight ~1-magnitude values round away during accumulation and the -2^80 leaves exactly 0.0, contradicting the contract's exact-sum target of ~4\u201314 per row; the kernel's output magnitudes (~7\u20139) are consistent with the exact target instead.",
+    "rationale": "Triton computes in float32 while the target is defined in float64; the 1e-5 relative tolerance on final state is much tighter than the history tolerance, so accumulated float32 rounding over 6 steps should be measured, though power-of-two coefficients make it likely small.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The mathematical target is the exact real-number sum of the stored input values, and initial_probe() and its recorded result are explicitly evidence to assess, not an authoritative verdict or alternative specification."
+        "summary": "\"All target calculations use the actual stored input values, in float64 or more accurately\" and final-state tolerances ||final_weights-w[6]||/max(...,0.1) <= 1e-5 and similarly for velocity."
       }
     ],
-    "scope_rationale": "The contract defines the target as the exact real-number sum of the stored values (~4\u201314 per row), and explicitly demotes initial_probe to non-authoritative evidence, so the probe's 0.0 reference mis-evaluates the kernel rather than indicating a bug.",
-    "statement": "The initial_probe's reference (sequential float64 row-order sum yielding 0.0) does not match the contract's exact real-number target (~4\u201314 per row), so the recorded probe failure (passed=false, relative_error 1.6e13)
-  ...[truncated 78 chars]
+    "scope_rationale": "The contract defines the target w[6], v[6] in float64 and requires final state within 1e-5 relative error; float32 kernel accumulation could exceed that tolerance on the fixed workload.",
+    "statement": "The final weights and velocity produced by the float32 Triton kernel may exceed the 1e-5 relative tolerance against the float64 target w[6], v[6] for the fixed seeded workload.",
+    "status": "open"
+  }
+- `record_claim -> t11 ok`
+  Args:
+  {
+    "rationale": "Source shows no store to Gradient, but a byte-for-byte runtime comparison of G before/after the full sequence would close the explicit input-mutation requirement.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"G must remain byte-for-byte unchanged.\""
+      }
+    ],
+    "scope_rationale": "The contract explicitly requires the gradients tensor G to remain byte-for-byte unchanged; any mutation after the six-step sequence would violate this requirement on the fixed workload.",
+    "statement": "The gradients tensor G may be mutated (not byte-for-byte unchanged) after the full six-step sequence, violating the explicit input-mutation requirement."
+  }
+  Output summary:
+  {
+    "id": "c3",
+    "rationale": "Source shows no store to Gradient, but a byte-for-byte runtime comparison of G before/after the full sequence would close the explicit input-mutation requirement.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"G must remain byte-for-byte unchanged.\""
+      }
+    ],
+    "scope_rationale": "The contract explicitly requires the gradients tensor G to remain byte-for-byte unchanged; any mutation after the six-step sequence would violate this requirement on the fixed workload.",
+    "statement": "The gradients tensor G may be mutated (not byte-for-byte unchanged) after the full six-step sequence, violating the explicit input-mutation requirement.",
+    "status": "open"
+  }
 
-### Turn 5 - `describer` (13.494878963999994s, in=14083 out=1139)
+### Turn 5 - `describer` (15.51673677399998s, in=19197 out=961)
 
 Message:
 
 ```text
-My previous description update failed due to a malformed argument list, so I'm re-recording it cleanly.
+The description model already covers the contract and kernel. One important reconciliation I can add from source analysis: the recorded initial_probe's 0.0 history error is fully explained even under the aliasing reading — its reference history also appends `reference_weights.view(N).detach()` (live views), so both actual and reference stacks read their own w[6] at observation time and match each other, while neither matches H_target[t]=w[t+1]. This makes the probe non-probative for the actual acceptance metric and strengthens the need for a float64 H_target comparison. I'll record this refinement.
 ```
 
 Tool calls:
 
-- `record_description_update -> t10 ok`
+- `record_description_update -> t12 ok`
   Args:
   {
     "contract_model": [
-      "Fixed workload only: the stored float32 (4,12) array from make_inputs() with SEED=203635; other seeds/permutations/arrays are out of scope.",
-      "target[r] is the exact real-number sum of the 12 stored values in row r; no accumulation order or algorithm is prescribed.",
-      "run(X) must return a finite float32 (4,) vector, must not modify X, and must satisfy ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 or better.",
-      "Requirement is on final row sums only; intermediate partial sums and correction terms are irrelevant.",
-      "Row structure: x[:,0]=+2^80, x[:,-1]=-2^80 (exact in fp32), permuted interior with +2^30, -2^30, and eight values in [0.25,1.75); exact row sums equal the sum of the eight small values (~4 to ~14).",
-      "i
-  ...[truncated 3554 chars]
+      "Acceptance metric is against H_target[t] = mathematical w[t+1] (float64), not against any implementation-produced reference history.",
+      "Only numerical values at post-sequence observation time matter; aliasing is permitted and the required in-place mutation of weights/velocity is explicitly sanctioned."
+    ],
+    "impact_on_claims": [
+      "c1: the recorded initial_probe 0.0 does not rebut c1; the probe's reference history is itself aliased views, so its comparison cannot detect the aliasing failure. A float64 H_target comparison is the decisive evidence.",
+      "c2/c3 remain open and still need runtime measurement (float64 final-state comparison; byte-for-byte G check)."
+    ],
+    "kernel_model": [
+      "initial_probe() is not a PyTorch-reimplemented oracle for the 
+  ...[truncated 2220 chars]
   Output summary:
   {
     "contract_model": [
-      "Fixed workload only: the stored float32 (4,12) array from make_inputs() with SEED=203635; other seeds/permutations/arrays are out of scope.",
-      "target[r] is the exact real-number sum of the 12 stored values in row r; no accumulation order or algorithm is prescribed.",
-      "run(X) must return a finite float32 (4,) vector, must not modify X, and must satisfy ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 or better.",
-      "Requirement is on final row sums only; intermediate partial sums and correction terms are irrelevant.",
-      "Row structure: x[:,0]=+2^80, x[:,-1]=-2^80 (exact in fp32), permuted interior with +2^30, -2^30, and eight values in [0.25,1.75); exact row sums equal the sum of the eight small values (~4 to ~14).",
-      "initial_probe() and its recorded T4 result are evidence, not an oracle; its reference is a sequential float64 row-order sum."
+      "Acceptance metric is against H_target[t] = mathematical w[t+1] (float64), not against any implementation-produced reference history.",
+      "Only numerical values at post-sequence observation time matter; aliasing is permitted and the required in-place mutation of weights/velocity is explicitly sanctioned."
     ],
-    "impact_on_claims": [],
+    "impact_on_claims": [
+      "c1: the recorded initial_probe 0.0 does not rebut c1; the probe's reference history is itself aliased views, so its comparison cannot detect the aliasing failure. A float64 H_target comparison is the decisive evidence.",
+      "c2/c3 remain open and still need runtime measurement (float64 final-state comparison; byte-for-byte G check)."
+    ],
     "kernel_model": [
-      "Triton kernel _compensated_rows: one program per row, static 12-column loop, Neumaier-style compensated fp32 summation (total + branch-selected lost residue accumulated into a correction term), storing total+correction 
-  ...[truncated 3244 chars]
+      "initial_probe() is not a PyTorch-reimplemented oracle for the actual metric: its reference loop appends reference_weights.view(N).detach() (kernel.py lines 62-63), i.e. live views of the aliased reference state, so at torch.stack time (line 64) BOTH actual_history and reference_history read their respective final states w_actual[6] and w_ref[6].",
+      "Since the probe's reference computes the identical recurrence in-place on a clone, w_actual[6] == w_ref[6] 
+  ...[truncated 1884 chars]
 
-### Turn 6 - `skeptic` (16.378215928000003s, in=22576 out=907)
+### Turn 6 - `skeptic` (4.345372470000001s, in=25986 out=217)
 
 Message:
 
 ```text
-The two decisive claims (fp32 correction-accumulator loss vs. the exact target, and the probe's lossy float64 reference) are already recorded as in-scope and open, awaiting probes. Analysis of the kernel confirms the mechanism in c1: while total = 2^80, every interior value's "lost" term equals the value itself and is accumulated into a plain fp32 `correction` that may sit at 2^30 magnitude — exactly the suspected failure mode. I have no further high-quality claims beyond these.
+The ledger already contains the three in-scope claims (c1 aliasing/history, c2 float32 state precision, c3 G immutability), and the Describer's reconciliation confirms the recorded initial_probe is non-probative for the decisive metric. No additional high-risk surfaces remain unclaimed — the next step is runtime probes by the Experimenter, not more claims.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t11 ok`
+- `record_no_new_claims -> t13 ok`
   Args:
   {
-    "reason": "Existing claims c1 (fp32 correction accumulator losing small residues while at 2^30 scale, violating the 1e-5 exact-target tolerance) and c2 (probe's float64 sequential reference of 0.0 conflicts with the contract's exact real-number target) already cover the decisive in-scope risks for this fixed SEED=203635 workload; no further testable in-scope failure hypotheses beyond these.",
+    "reason": "All three contract surfaces are already claimed (c1 retained-view aliasing vs H_target, c2 float32-vs-float64 final-state precision, c3 G byte-for-byte immutability). The Describer's reconciliation fully explains the initial_probe 0.0 result as non-probative, and no new evidence exposes any additional testable in-scope defect. What remains is runtime measurement of the existing claims against a float64 H_target.",
     "reviewed_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Existing claims c1 (fp32 correction accumulator losing small residues while at 2^30 scale, violating the 1e-5 exact-target tolerance) and c2 (probe's float64 sequential reference of 0.0 conflicts with the contract's exact real-number target) already cover the decisive in-scope risks for this fixed SEED=203635 workload; no further testable in-scope failure hypotheses beyond these.",
+    "reason": "All three contract surfaces are already claimed (c1 retained-view aliasing vs H_target, c2 float32-vs-float64 final-state precision, c3 G byte-for-byte immutability). The Describer's reconciliation fully explains the initial_probe 0.0 result as non-probative, and no new evidence exposes any additional testable in-scope defect. What remains is runtime measurement of the existing claims against a float64 H_target.",
     "reviewed_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reviewed_tool_event_count": 10,
+    "reviewed_tool_event_count": 12,
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (15.315071749000012s, in=23635 out=1172)
+### Turn 7 - `experimenter` (12.372672612999992s, in=25437 out=1000)
 
 Message:
 
 ```text
-I'm launching two independent runtime probes together: c1 runs the actual Triton kernel on the fixed SEED=203635 input and compares its output against the exact real-number target (math.fsum of the stored float32 values); c2 reproduces the initial_probe's float64 sequential reference and compares it with the exact target. Neither depends on the other's outcome.
+I'm launching three independent runtime probes: c1 (stacked retained history vs float64 H_target), c2 (final weights/velocity vs float64 w[6], v[6]), c3 (byte-for-byte G check after the sequence). Each uses a fresh make_inputs() state, so they cannot confound each other.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t12 ok`
+- `run_claim_probe -> t14 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, math, importlib.util, numpy as np, torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nx, = k.make_inputs()\nbefore = x.clone()\nout = k.run(x)\ngpu = out.detach().cpu().numpy().astype(np.float64).tolist()\n\nxf = x.detach().cpu().numpy().astype(np.float64)\nexact = [math.fsum(row) for row in xf]  # exact real-number sum, correctly rounded\n\nrel = float(np.linalg.norm(np.array(gpu)-np.array(exact))/max(np.linalg.norm(exact),1e-12))\n\n# CPU simulation of the kernel's fp32 Neumaier accumulation to expose mechanism\nxs = x.detach().cpu().numpy()\nsim = []\nfor row in xs:\n    total = np.float32(0.0); corr = np.float3
-  ...[truncated 1009 chars]
+    "code": "import sys, json, torch, numpy as np\nsys.path.insert(0, \"/root/evidence_cases/case_e09\")\nimport kernel\n\nw, v, G = kernel.make_inputs()\nw64 = w.double().clone(); v64 = v.double().clone(); G64 = G.double().clone()\nhist = kernel.run_sequence(w, v, G)  # retained views, observed after full sequence\n# float64 target history w[1..6]\ntargets = []\nfor t in range(6):\n    v64 = 0.75 * v64 + 0.25 * G64[t]\n    w64 = w64 - 0.03125 * v64\n    targets.append(w64.clone())\nH_target = torch.stack(targets)\nH = torch.stack([h.double() for h in hist])\nerr = float(torch.linalg.norm(H - H_target) / max(torch.linalg.norm(H_target), 0.1))\nrows_equal_w6 = [bool(torch.equal(h.double(), H[5].double())) for h in hist]\nprint(json.dumps({\"history_relative_error\": err,
+  ...[truncated 401 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "44ff0d4dc2b8ac2169d0788d255036a383fc533087b5bb410c0f0db89232a092"
+        "path": "probes/t14_probe.py",
+        "sha256": "b76c6d5af847df9c18bd63286ca85c6ec8bd9292be42bf6c7418b9eaf399230e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "65d1d64c3587a89979a8ac8b56632d8e731782374b3cf1875f38d19893a16505"
+        "path": "probes/t14_stdout.txt",
+        "sha256": "0a55faf34b8f94b3ed7d92dc52341e3abce0562ac167699aa0640770ff89f98c"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
+        "path": "probes/t14_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "5b3c449d29fc850ac7dc55538ef73be2c2ea39d407eb9c6da84d3837d2332a34"
+        "path": "probes/t14_json_result.json",
+        "sha256": "e703526c37fdcc6ab06200e4498ab132a76d29a4d74b44cc1b12cd283d1764b0"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The plain fp32 accumulation of `correction` in _compensated_rows loses small interior residues while correction holds ~2^30 (ulp(2^30) in fp32 = 128), so on the fixed SEED=203635 input the output row sums can 
-  ...[truncated 7463 chars]
-- `run_claim_probe -> t13 ok`
+    "claim_statement": "Because step() returns a live view of the in-place weights storage, all six retained history tensors equal w[6] at observation time, so the stacked H has H[0..4]=w[6] instead of w[1..5], making ||H-H_target||_
+  ...[truncated 3088 chars]
+- `run_claim_probe -> t15 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport json, math, numpy as np\n\nrng = np.random.Generator(np.random.PCG64(203635))\nlow = rng.uniform(0.25, 1.75, (4, 8)).astype(np.float32)\ninterior = np.concatenate((np.full((4,1), 2.0**30, np.float32),\n                           np.full((4,1), -(2.0**30), np.float32), low), axis=1)\norder = rng.permutation(10)\nx = np.empty((4,12), dtype=np.float32)\nx[:,0] = np.float32(2.0**80); x[:,1:-1] = interior[:, order]; x[:,-1] = np.float32(-(2.0**80))\n\nvals = x.astype(np.float64)\n# replicate initial_probe reference: sequential float64 row-order accumulation\nprobe_ref = []\nfor r in range(4):\n    acc = np.float64(0.0)\n    for c in range(12):\n        acc = np.float64(acc + vals[r,c])\n    probe_ref.append(float(acc))\n# exact real-number target\nexact
-  ...[truncated 470 chars]
+    "code": "import sys, json, torch\nsys.path.insert(0, \"/root/evidence_cases/case_e09\")\nimport kernel\n\nw, v, G = kernel.make_inputs()\nw0 = w.double().clone(); v0 = v.double().clone(); G64 = G.double().clone()\nw_ref, v_ref = w0, v0\nfor t in range(6):\n    v_ref = 0.75 * v_ref + 0.25 * G64[t]\n    w_ref = w_ref - 0.03125 * v_ref\nkernel.run(w, v, G)\ndef rel(a, b):\n    return float(torch.linalg.vector_norm(a.double() - b) / max(torch.linalg.vector_norm(b), 0.1))\nwe = rel(w, w_ref); ve = rel(v, v_ref)\nfinite = bool(torch.isfinite(w).all() and torch.isfinite(v).all())\nprint(json.dumps({\"final_weights_relative_error\": we, \"final_velocity_relative_error\": ve,\n                  \"state_tolerance\": 1e-05, \"exceeds\": max(we, ve) > 1e-05,\n                  
+  ...[truncated 281 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t13_probe.py",
-        "sha256": "61a248e8fd4c6a72a1e187ab24f7a15809b6725ca429fec41e404d2767a925c8"
+        "path": "probes/t15_probe.py",
+        "sha256": "d1203a0a7d7eb2160176a505ea53f5a2cb0e0ca848f3aa1850f3424e741fbbb9"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t13_stdout.txt",
-        "sha256": "4f1db3b87bf308d026864fbdf27205d015133001447504633af1176b823bb68e"
+        "path": "probes/t15_stdout.txt",
+        "sha256": "3f1e444d81a61ebfa64b7289ded00ddc9d602a0d01a3962b77084c2e93f367ae"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t13_stderr.txt",
+        "path": "probes/t15_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t13_json_result.json",
-        "sha256": "b16395951bd61a0a0cc280fea612fd7304b96badde0420f355ac4794ff98ad34"
+        "path": "probes/t15_json_result.json",
+        "sha256": "c79528933bdcb688223507c2150a6ef7c9d4d1d042aa8a18bd21378a57ff53f2"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "The initial_probe's reference (sequential float64 row-order sum yielding 0.0) does not match the contract's exact real-number target (~4\u201314 per row), so the recorded probe failure (passed=false, relative_
-  ...[truncated 3447 chars]
+    "claim_statement": "The final weights and velocity produced by the float32 Triton kernel may exceed the 1e-5 relative tolerance against the float64 target w[6], v[6] for the fixed seeded workload.",
+    "duration_s": 4.299963,
+    "e
+  ...[truncated 3190 chars]
+- `run_claim_probe -> t16 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "import sys, json, torch\nsys.path.insert(0, \"/root/evidence_cases/case_e09\")\nimport kernel\n\nw, v, G = kernel.make_inputs()\nG_before = G.clone()\nkernel.run(w, v, G)\ntorch.cuda.synchronize()\nG_after = G\nbyte_equal = bool(torch.equal(G_before.view(torch.uint8), G_after.view(torch.uint8)))\nprint(json.dumps({\"gradients_unchanged_byte_for_byte\": byte_equal,\n                  \"max_abs_diff\": float((G_before - G_after).abs().max()),\n                  \"dtype\": str(G.dtype), \"shape\": list(G.shape)}))",
+    "expected_signal": "gradients tensor byte-for-byte comparison before/after the six-step sequence"
+  }
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t16_probe.py",
+        "sha256": "e872a6ab6d25b85f1f76cff7721081adc40a3a68c08723af5340d9f64be4365b"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t16_stdout.txt",
+        "sha256": "a8138b29532531bcb5ae074dd47058c1336e647f74a307184681d9266ea6f58b"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t16_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t16_json_result.json",
+        "sha256": "d61ffb901f0dd74fe0b6f65335617cb20a85b9aad0452b62225fb01637483fbf"
+      }
+    ],
+    "claim_id": "c3",
+    "claim_statement": "The gradients tensor G may be mutated (not byte-for-byte unchanged) after the full six-step sequence, violating the explicit input-mutation requirement.",
+    "duration_s": 4.204097,
+    "event_id": "t16",
+    "evid
+  ...[truncated 2376 chars]
 
-### Turn 8 - `experimenter` (11.842015580000009s, in=30323 out=840)
+### Turn 8 - `experimenter` (8.55763557900002s, in=30622 out=662)
 
 Message:
 
 ```text
-Both probes completed. The GPU kernel output matches the exact fsum target to 8e-8 relative error (c1 rebutted — note the permutation places −2^30 before +2^30, so small residues never accumulate into a large correction), and the initial_probe's float64 reference is indeed 0.0 while the exact target is ~6.6–8.9 (c2 confirmed).
+The three probes have returned. c1's aliasing mechanism was confirmed (all six rows equal w[6]) but the measured history error is 0.0057, within the 0.025 tolerance — so the claim's stated failure is rebutted for the fixed workload. c2's state errors (~7e-8) are far within 1e-5, rebutted. c3's G is byte-for-byte unchanged, rebutted. Finalizing all three.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t14 ok`
+- `finalize_probe_evidence -> t17 ok`
   Args:
   {
     "data": {
-      "exact_target_fsum": [
-        6.589126467704773,
-        8.897089838981628,
-        8.742547422647476,
-        7.017418473958969
-      ],
-      "gpu_output": [
-        6.589126110076904,
-        8.897090911865234,
-        8.742547035217285,
-        7.01741886138916
-      ],
-      "interior_order_note": "permutation places -2^30 before +2^30 in all rows, so small-value residues are never added while correction is at 2^30 scale",
-      "relative_error_vs_exact": 7.975729244084926e-08,
-      "structural_ok": true,
-      "tolerance": 1e-05,
-      "within_tolerance": true
+      "H_target_fro": 28.854283663978705,
+      "all_rows_equal_final_w6": true,
+      "history_relative_error": 0.005744695547110312,
+      "tolerance": 0.025
     },
-    "event_id": "t12",
+    "event_id": "t14",
     "status": "rebutted",
-    "summary": "Kernel GPU output on the fixed SEED=203635 input matches the exact real-number target (math.fsum in float64) with relative error 7.98e-8, well within the 1e-5 tolerance; struc
-  ...[truncated 346 chars]
+    "summary": "Aliasing mechanism confirmed (all six retained history rows equal w[6] at observation time), but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.00574 is within the 0.025 acceptance tolerance for the fixed seeded workload \u2014 the claim's predicted tolerance violation is rebutted (the history changes too little over 6 steps to breach 0.025).",
+    "supports": "rebutted"
+  }
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Kernel GPU output on the fixed SEED=203635 input matches the exact real-number target (math.fsum in float64) with relative error 7.98e-8, well within the 1e-5 tolerance; structural checks (shape (4,), fp32, finite, X unmodified) pass. No whole small values are lost: the seed-203635 permutation places -2^30 before +2^30, so the correction accumulator never holds a 2^30-scale value while small residues are added. The c1 hypothesized tolerance violation does not occur on the in-scope input.",
+    "summary": "Aliasing mechanism confirmed (all six retained history rows equal w[6] at observation time), but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.00574 is within the 0.025 acceptance tolerance for the fixed seeded workload \u2014 the claim's predicted tolerance violation is rebutted (the history changes too little over 6 steps to breach 0.025).",
     "supports": "rebutted",
-    "tool_event_id": "t12"
+    "tool_event_id": "t14"
   }
-- `finalize_probe_evidence -> t15 ok`
+- `finalize_probe_evidence -> t18 ok`
   Args:
   {
     "data": {
-      "exact_target_fsum": [
-        6.589126467704773,
-        8.897089838981628,
-        8.742547422647476,
-        7.017418473958969
-      ],
-      "kernel_output": [
-        6.589126110076904,
-        8.897090911865234,
-        8.742547035217285,
-        7.01741886138916
-      ],
-      "probe_reference_sequential_f64": [
-        0.0,
-        0.0,
-        0.0,
-        0.0
-      ],
-      "reference_matches_exact": false,
-      "ulp_f64_at_2p80": 268435456.0
+      "exceeds": false,
+      "final_velocity_relative_error": 4.515252231425856e-08,
+      "final_weights_relative_error": 6.918851822104447e-08,
+      "finite_float32": true,
+      "state_tolerance": 1e-05
     },
-    "event_id": "t13",
-    "status": "confirmed",
-    "summary": "Replicated the initial_probe reference: sequential float64 row-order accumulation yields exactly 0.0 per row (ulp(2^80)=2^27 in float64 swallows all smaller terms), while the exact real-number target (math.fsum) is 6.589/8.897/8.743/7.017 \u2014 matching the kernel's output. The recorded probe fa
-  ...[truncated 116 chars]
+    "event_id": "t15",
+    "status": "rebutted",
+    "summary": "Final weights and velocity relative errors vs float64 targets are 6.9e-8 and 4.5e-8, both far below the 1e-5 state tolerance; states are finite float32 with correct shapes. Float32 accumulation over 6 steps does not breach the tolerance.",
+    "supports": "rebutted"
+  }
   Output summary:
   {
     "claim_id": "c2",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c2.e1",
-    "summary": "Replicated the initial_probe reference: sequential float64 row-order accumulation yields exactly 0.0 per row (ulp(2^80)=2^27 in float64 swallows all smaller terms), while the exact real-number target (math.fsum) is 6.589/8.897/8.743/7.017 \u2014 matching the kernel's output. The recorded probe failure (relative_error 1.6e13) is an artifact of the lossy reference, not a kernel bug.",
-    "supports": "confirmed",
-    "tool_event_id": "t13"
+    "summary": "Final weights and velocity relative errors vs float64 targets are 6.9e-8 and 4.5e-8, both far below the 1e-5 state tolerance; states are finite float32 with correct shapes. Float32 accumulation over 6 steps does not breach the tolerance.",
+    "supports": "rebutted",
+    "tool_event_id": "t15"
+  }
+- `finalize_probe_evidence -> t19 ok`
+  Args:
+  {
+    "data": {
+      "gradients_unchanged_byte_for_byte": true,
+      "max_abs_diff": 0.0
+    },
+    "event_id": "t16",
+    "status": "rebutted",
+    "summary": "G is byte-for-byte unchanged after the full six-step sequence (torch.equal on uint8 views, max_abs_diff 0.0), satisfying the input-immutability requirement.",
+    "supports": "rebutted"
+  }
+  Output summary:
+  {
+    "claim_id": "c3",
+    "claim_status": "rebutted",
+    "evidence_id": "c3.e1",
+    "summary": "G is byte-for-byte unchanged after the full six-step sequence (torch.equal on uint8 views, max_abs_diff 0.0), satisfying the input-immutability requirement.",
+    "supports": "rebutted",
+    "tool_event_id": "t16"
   }
 
-### Turn 9 - `skeptic` (5.377341579000017s, in=41001 out=284)
+### Turn 9 - `skeptic` (5.352172332999999s, in=34177 out=269)
 
 Message:
 
 ```text
-The probes resolved both claims: the kernel's GPU output matches the exact real-number target to 8e-8 relative error (well within 1e-5), and the initial_probe's failure was an artifact of its lossy float64 sequential reference. No new in-scope problems remain.
+All three in-scope claims were decisively tested with fresh seeded workloads: c1's aliasing mechanism was confirmed but the measured history error (0.0057) is within the 0.025 tolerance, c2's state errors (~7e-8) are far below 1e-5, and c3's G is byte-for-byte unchanged. No new evidence exposes an untested in-scope defect.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_no_new_claims -> t20 ok`
   Args:
   {
-    "reason": "Final review: c1 is rebutted by direct GPU probe \u2014 on the fixed SEED=203635 input the kernel output matches the exact real-number target (math.fsum) with relative error 7.98e-8, far within the 1e-5 tolerance, and structural checks (shape (4,), fp32, finite, X unmodified) pass; the seed permutation places -2^30 before +2^30, so the hypothesized correction-accumulator loss never occurs on the in-scope input. c2 is confirmed: the initial_probe's float64 sequential reference (0.0) is itself lossy and conflicts with the contract's exact-sum target, so the recorded probe failure mis-evaluates the kernel. The new evidence exposes no material, testable, in-scope problem not covered by these claims.",
+    "reason": "Final review: all three in-scope claims (c1 history aliasing vs float64 H_target, c2 float32 final-state precision, c3 G immutability) were tested with fresh make_inputs() workloads and decisively rebutted \u2014 history error 0.0057 < 0.025, state errors ~7e-8 < 1e-5, G byte-for-byte unchanged. The aliasing behavior is real but contractually sanctioned since only values at observation time matter, and those values pass the stated tolerances on the fixed seeded workload. No remaining testable in-scope defect surface.",
     "reviewed_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c1 is rebutted by direct GPU probe \u2014 on the fixed SEED=203635 input the kernel output matches the exact real-number target (math.fsum) with relative error 7.98e-8, far within the 1e-5 tolerance, and structural checks (shape (4,), fp32, finite, X unmodified) pass; the seed permutation places -2^30 before +2^30, so the hypothesized correction-accumulator loss never occurs on the in-scope input. c2 is confirmed: the initial_probe's float64 sequential reference (0.0) is itself lossy and conflicts with the contract's exact-sum target, so the recorded probe failure mis-evaluates the kernel. The new evidence exposes no material, testable, in-scope problem not covered by these claims.",
+    "reason": "Final review: all three in-scope claims (c1 history aliasing vs float64 H_target, c2 float32 final-state precision, c3 G immutability) were tested with fresh make_inputs() workloads and decisively rebutted \u2014 history error 0.0057 < 0.025, state errors ~7e-8 < 1e-5, G byte-for-byte unchanged. The aliasing behavior is real but contractually sanctioned since only values at observation time matter, and those values pass the stated tolerances on the fixed seeded workload. No remaining testable in-scope defect surface.",
     "reviewed_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reviewed_tool_event_count": 15,
+    "reviewed_tool_event_count": 19,
     "turn": 9
   }
 
-### Turn 10 - `judge` (8.131696997000006s, in=41171 out=458)
+### Turn 10 - `judge` (6.7153742589999865s, in=34282 out=361)
 
 Message:
 
 ```text
-The evidence is decisive: the kernel's GPU output matches the exact real-number target (math.fsum) to 8e-8 relative error on the fixed in-scope input, well within the 1e-5 tolerance, with all structural checks passing. The recorded probe failure was an artifact of the lossy float64 sequential reference (c2 confirmed), and the hypothesized correction-accumulator loss (c1) was rebutted — the seed's permutation places −2^30 before +2^30 so residues are never lost. Skeptic signed off with no new claims; no open claims remain.
+All three in-scope claims were decisively tested against the fixed seeded workload: the aliasing mechanism exists but the measured history error (0.0057) is well within the 0.025 tolerance, final-state errors (~7e-8) are far below 1e-5, and G is byte-for-byte unchanged. The Skeptic has signed off with no new claims. Recording a trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `record_verdict -> t21 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.92,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "On the fixed SEED=203635 workload (the entire in-scope domain per problem.txt), a direct GPU probe shows the kernel output (6.5891, 8.8971, 8.7425, 7.0174) matches the exact real-number target computed by math.fsum in float64 with relative error 7.98e-8, far within the contract's 1e-5 tolerance; shape (4,), float32, finiteness, and input immutability all pass. The only hypothesized in-scope defect (c1, fp32 loss in the correction accumulator) was rebutted: the seed's permutation places -2^30 before +2^30 in every row, so the correction accumulator never sits at 2^30 scale while small residues are added. The artifact's recorded initial_probe failure is explained by c2 (confirmed): its float64 sequential refe
-  ...[truncated 447 chars]
+    "reason": "All three contract surfaces were tested with fresh make_inputs() workloads against float64 targets. c1: the retained-history aliasing (all six rows equal w[6] at observation time) was confirmed as a mechanism, but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.0057 is within the 0.025 acceptance tolerance on the fixed seeded workload; the contract explicitly states aliasing is not a failure and only values at observation time matter. c2: final weights/velocity relative errors vs float64 w[6], v[6] are 6.9e-8 and 4.5e-8, far below the 1e-5 state tolerance, finite float32 with correct shapes. c3: G is byte-for-byte unchanged (max_abs_diff 0.0). No open claims remain, and the Skeptic rev
+  ...[truncated 169 chars]
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.92,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "On the fixed SEED=203635 workload (the entire in-scope domain per problem.txt), a direct GPU probe shows the kernel output (6.5891, 8.8971, 8.7425, 7.0174) matches the exact real-number target computed by math.fsum in float64 with relative error 7.98e-8, far within the contract's 1e-5 tolerance; shape (4,), float32, finiteness, and input immutability all pass. The only hypothesized in-scope defect (c1, fp32 loss in the correction accumulator) was rebutted: the seed's permutation places -2^30 before +2^30 in every row, so the correction accumulator never sits at 2^30 scale while small residues are added. The artifact's recorded initial_probe failure is explained by c2 (confirmed): its float64 sequential reference yields exactly 0.0 because ulp(2^80) in float64 (~2^27) swallows all smaller terms, and problem.txt explicitly states initial_probe is evidence, not a specification, while the acceptance metric is defined against the exact real-number sum \u2014 the clause that makes the probe's failure a metric artifact rather than a defect. No open claims remain and the Skeptic reviewed the latest evidence
-  ...[truncated 47 chars]
+    "reason": "All three contract surfaces were tested with fresh make_inputs() workloads against float64 targets. c1: the retained-history aliasing (all six rows equal w[6] at observation time) was confirmed as a mechanism, but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.0057 is within the 0.025 acceptance tolerance on the fixed seeded workload; the contract explicitly states aliasing is not a failure and only values at observation time matter. c2: final weights/velocity relative errors vs float64 w[6], v[6] are 6.9e-8 and 4.5e-8, far below the 1e-5 state tolerance, finite float32 with correct shapes. c3: G is byte-for-byte unchanged (max_abs_diff 0.0). No open claims remain, and the Skeptic reviewed the latest evidence and found no new concerns. The kernel satisfies the stated acceptance criteria for the benchmark's fixed input domain.",
+    "verdict": "trust"
+  }
 
 ## Description Model
 
 {
   "contract_model": [
-    "Fixed workload only: the stored float32 (4,12) array from make_inputs() with SEED=203635; other seeds/permutations/arrays are out of scope.",
-    "target[r] is the exact real-number sum of the 12 stored values in row r; no accumulation order or algorithm is prescribed.",
-    "run(X) must return a finite float32 (4,) vector, must not modify X, and must satisfy ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 or better.",
-    "Requirement is on final row sums only; intermediate partial sums and correction terms are irrelevant.",
-    "Row structure: x[:,0]=+2^80, x[:,-1]=-2^80 (exact in fp32), permuted interior with +2^30, -2^30, and eight values in [0.25,1.75); exact row sums equal the sum of the eight small values (~4 to ~14).",
-    "initial_probe() and its recorded T4 result are evidence, not an oracle; its reference is a sequential float64 row-order sum."
+    "Fixed workload: make_inputs() float32, weights/v0 shape (128,), gradients shape (6,128), rows consumed once in order.",
+    "Recurrence (float64 target): v[t+1]=0.75*v[t]+0.25*G[t]; w[t+1]=w[t]-(1/32)*v[t+1].",
+    "step() must update weights/velocity in place and return a (128,) float32 tensor; run_sequence returns the six tensors in order; caller observes all retained outputs only AFTER the full sequence.",
+    "Acceptance: history Frobenius relative error <= 0.025; final weights and velocity relative errors <= 1e-5 (each with 0.1 floor); outputs/states finite float32 with stated shapes.",
+    "G must remain byte-for-byte unchanged; mutating weights and velocity is required; storage aliasing alone is not a failure \u2014 only values at observation time matter.",
+    "Out of scope: other inputs, different step counts, observations between updates, carrying state across trials.",
+    "initial_probe() results (all errors 0.0, passed) are evidence, not an authoritative verdict.",
+    "Acceptance metric is against H_target[t] = mathematical w[t+1] (float64), not against any implementation-produced reference history.",
+    "Only numerical values at post-sequence observation time matter; aliasing is permitted and the required in-place mutation of weights/velocity is explicitly sanctioned."
   ],
   "kernel_model": [
-    "Triton kernel _compensated_rows: one program per row, static 12-column loop, Neumaier-style compensated fp32 summation (total + branch-selected lost residue accumulated into a correction term), storing total+correction at Out[row].",
-    "run() launches grid (4,), COLS=12, num_warps=1, enable_fp_fusion=False; assumes a contiguous (4,12) float32 CUDA tensor indexed as row*COLS+column.",
-    "Because +2^80 dominates total until -2^80 arrives, small values are captured only via the correction term; the recorded outputs (~7-9) are consistent with the exact small-value sums.",
-    "The correction accumulator is plain fp32 addition with no second-order compensation; ulp(2^30) in fp32 = 128, so small residues added while correction is at 2^30 scale may be lost (skeptic claim c1).",
-    "Output allocated via torch.empty((4,), float32); X only loaded, never stored, so immutability holds by construction."
-  ],
-  "open_questions": [
-    "What are the exact per-row mathematical sums (sum of the eight small values), and does the kernel output
-...[truncated 1898 chars]
+    "Triton kernel _momentum_step: single program over tl.arange(0,128), computes next_velocity=0.75*v+0.25*g, next_weights=w-0.03125*next_velocity, stores velocity then weights in place; enable_fp_fusion=False, num_warps=1.",
+    "step() launches the Triton kernel and returns weights.view(N) \u2014 a VIEW into the live in-place weights storage, not a snapshot/copy.",
+    "run_sequence() appends these aliased views per step and returns them; no clone anywhere, so all six retained tensors and the final weights share one storage.",
+    "run() stacks run_sequence() outputs at final observation time via torch.stack (stack copies, but of
+...[truncated 4246 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Re-recorded (previous call was malformed): case_e15 is a Neumaier-compensated fp32 Triton row-sum kernel over a fixed (4,12) mixed-scale input with ±2^80 cancellation. The recorded probe's float64 sequential reference (0.0) is itself lossy against the contract's exact real-number target (~4-14 per row), so the probe's failure likely mis-evaluates the kernel; the real open risk is fp32 loss in the correction accumulator (claim c1).
+- `du1` tasks=`initial`: Kernel implements the momentum recurrence exactly in float32 Triton, but step() returns an aliased view of the in-place weights; contract judges retained history values only after all six updates, so aliasing of the retained outputs is the central correctness surface.
+- `du2` tasks=`initial`: Reconciled the initial_probe 0.0 anomaly: the probe's reference history also appends live views of its aliased reference state, so both stacked histories equal w[6] and match each other — the probe cannot detect the retained-view aliasing defect. Evidence for c1 must use a float64 H_target comparison, not the probe.
 
 ## Claims
 
 ### c1 - `rebutted`
 
-Statement: The plain fp32 accumulation of `correction` in _compensated_rows loses small interior residues while correction holds ~2^30 (ulp(2^30) in fp32 = 128), so on the fixed SEED=203635 input the output row sums can deviate from the exact real-number target by whole small values (up to ~1.75 each), violating the 1e-5 relative tolerance.
+Statement: Because step() returns a live view of the in-place weights storage, all six retained history tensors equal w[6] at observation time, so the stacked H has H[0..4]=w[6] instead of w[1..5], making ||H-H_target||_F / max(||H_target||_F,0.1) exceed 0.025 for the fixed seeded workload.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires final row sums within 1e-5 relative error of the exact real-number sum of the fixed make_inputs() (SEED=203635) array, so losing whole small values in the correction accumulator would violate this stated acceptance metric on the in-scope input.
+Scope rationale: The contract requires the retained history tensors, observed only after the full sequence, to match H_target[t]=w[t+1] within a 0.025 relative Frobenius tolerance; if the returned views all read w[6] at observation time, H[0..4] deviate from w[1..5] for the fixed seeded workload, violating that acceptance bound.
 
 Scope evidence:
-- `problem.txt`: run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number sum of the stored float32 values of the make_inputs() array; requirement is on final row sums only.
+- `problem.txt`: "The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1]."
+- `problem.txt`: Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025.
 
-Rationale: enable_fp_fusion=False is set, so the remaining error source is the uncompensated `correction = correction + lost` fp32 accumulation; while correction holds +2^30 (ulp = 128 in fp32), small residues (~0.25–1.75) can be rounded away depending on where the seed-203635 permutation places the +2^30 term relative to the small values.
+Rationale: step() (kernel.py line 40) returns weights.view(N) with no clone, and run_sequence appends these live views; contract judges values at post-sequence observation time with H_target[t]=w[t+1], so H[0..4] equaling w[6] should give a large Frobenius error given gradient scales up to 1e2. The recorded initial_probe 0.0 result likely came from a different implementation, so a runtime probe of this exact kernel is needed.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: Kernel GPU output on the fixed SEED=203635 input matches the exact real-number target (math.fsum in float64) with relative error 7.98e-8, well within the 1e-5 tolerance; structural checks (shape (4,), fp32, finite, X unmodified) pass. No whole small values are lost: the seed-203635 permutation places -2^30 before +2^30, so the correction accumulator never holds a 2^30-scale value while small residues are added. The c1 hypothesized tolerance violation does not occur on the in-scope input.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t14: Aliasing mechanism confirmed (all six retained history rows equal w[6] at observation time), but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.00574 is within the 0.025 acceptance tolerance for the fixed seeded workload — the claim's predicted tolerance violation is rebutted (the history changes too little over 6 steps to breach 0.025).
 
-### c2 - `confirmed`
+### c2 - `rebutted`
 
-Statement: The initial_probe's reference (sequential float64 row-order sum yielding 0.0) does not match the contract's exact real-number target (~4–14 per row), so the recorded probe failure (passed=false, relative_error 1.6e13) mis-evaluates the kernel rather than indicating a bug.
+Statement: The final weights and velocity produced by the float32 Triton kernel may exceed the 1e-5 relative tolerance against the float64 target w[6], v[6] for the fixed seeded workload.
 
 Scope: `in_scope`
 
-Scope rationale: The contract defines the target as the exact real-number sum of the stored values (~4–14 per row), and explicitly demotes initial_probe to non-authoritative evidence, so the probe's 0.0 reference mis-evaluates the kernel rather than indicating a bug.
+Scope rationale: The contract defines the target w[6], v[6] in float64 and requires final state within 1e-5 relative error; float32 kernel accumulation could exceed that tolerance on the fixed workload.
 
 Scope evidence:
-- `problem.txt`: The mathematical target is the exact real-number sum of the stored input values, and initial_probe() and its recorded result are explicitly evidence to assess, not an authoritative verdict or alternative specification.
+- `problem.txt`: "All target calculations use the actual stored input values, in float64 or more accurately" and final-state tolerances ||final_weights-w[6]||/max(...,0.1) <= 1e-5 and similarly for velocity.
 
-Rationale: A float64 accumulator at magnitude 2^80 has ulp ≈ 2^27, so the eight ~1-magnitude values round away during accumulation and the -2^80 leaves exactly 0.0, contradicting the contract's exact-sum target of ~4–14 per row; the kernel's output magnitudes (~7–9) are consistent with the exact target instead.
+Rationale: Triton computes in float32 while the target is defined in float64; the 1e-5 relative tolerance on final state is much tighter than the history tolerance, so accumulated float32 rounding over 6 steps should be measured, though power-of-two coefficients make it likely small.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: Replicated the initial_probe reference: sequential float64 row-order accumulation yields exactly 0.0 per row (ulp(2^80)=2^27 in float64 swallows all smaller terms), while the exact real-number target (math.fsum) is 6.589/8.897/8.743/7.017 — matching the kernel's output. The recorded probe failure (relative_error 1.6e13) is an artifact of the lossy reference, not a kernel bug.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t15: Final weights and velocity relative errors vs float64 targets are 6.9e-8 and 4.5e-8, both far below the 1e-5 state tolerance; states are finite float32 with correct shapes. Float32 accumulation over 6 steps does not breach the tolerance.
+
+### c3 - `rebutted`
+
+Statement: The gradients tensor G may be mutated (not byte-for-byte unchanged) after the full six-step sequence, violating the explicit input-mutation requirement.
+
+Scope: `in_scope`
+
+Scope rationale: The contract explicitly requires the gradients tensor G to remain byte-for-byte unchanged; any mutation after the six-step sequence would violate this requirement on the fixed workload.
+
+Scope evidence:
+- `problem.txt`: "G must remain byte-for-byte unchanged."
+
+Rationale: Source shows no store to Gradient, but a byte-for-byte runtime comparison of G before/after the full sequence would close the explicit input-mutation requirement.
+
+Evidence:
+- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t16: G is byte-for-byte unchanged after the full six-step sequence (torch.equal on uint8 views, max_abs_diff 0.0), satisfying the input-immutability requirement.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e15"
+  "entry": "case_e09"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e15"
+  "entry": "case_e09"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e15"
+  "entry": "case_e09"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e15"
+  "entry": "case_e09"
 }
 
-### t5 - record_description_update - error
+### t5 - record_description_update - ok
 
 {
-  "error_type": "ToolRegistryError",
-  "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"The recorded initial-probe reference is suspect: a sequential float64 sum adds 2^80 first, so all smaller terms (ulp(2^80)\u22482^27 in float64) round away and the -2^80 leaves 0.0, contradicting the contract's exact real-number target (~7-9 per row). Skeptic should claim/probe whether the acceptance reference is the exact sum, not the probe's 0.0.\", \"Residual error of the fp32 Neumaier result versus the exact target: is the relative error against the true target within 1e-5, given fp32 output quantization (ulp of ~8 is ~1e-6, so borderline feasible)?\", \"Correction-term accumulation itself is plain fp32 addition; if the \u00b12^30 pair interleaves with small values, some lost residues may be re-lost when added into 'correction' while it is large (2^30-scale), potentially degrading the result below tolerance.\", \"Whether tl.where / fp32 rounding in Triton on the target GPU matches the presumed IEEE semantics (enable_fp_fusion=False is set, mitigating contraction, but device behavior of the branch math should be evidenced).\", \"Contiguity/dtype assumptions: run() assumes a contiguous (4,12) float32 tensor; out of scope per contract but worth noting.\"]</arg_value><arg_key>scope_notes"
-}
+  "contract_model": [
+    "Fixed workload: make_inputs() float32, weights/v0 shape (128,), gradients shape (6,128), rows consumed once in order.",
+    "Recurrence (float64 target): v[t+1]=0.75*v[t]+0.25*G[t]; w[t+1]=w[t]-(1/32)*v[t+1].",
+    "step() must update weights/velocity in place and return a (128,) float32 tensor; run_sequence returns the six tensors in order; caller observes all retained outputs only AFTER the full sequence.",
+    "Acceptance: history Frobenius relative error <= 0.025; final weights and velocity relative errors <= 1e-5 (each with 0.1 floor); outputs/states finite float32 with stated shapes.",
+    "G must remain byte-for-byte unchanged; mutating weights and velocity is required; storage aliasing alone is not a failure \u2014 only values at observation time matter.",
+    "Out of scope: other inputs, different step counts, observations between updates, carrying state across trials.",
+    "initial_probe() results (all errors 0.0, passed) are evidence, not an authoritative verdict."
+  ],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "Triton kernel _momentum_step: single program over tl.arange(0,128), computes next_velocity=0.75*v+0.25*g, next_weights=w-0.03125*next_velocity, stores velocity then weights in place; enable_fp_fusion=False, num_warps=1.",
+    "step() launches the Triton kernel and returns weights.view(N) \u2014 a VIEW into the live in-place weights storage, not a snapshot/copy.",
+    "run_sequence() appends these aliased views per step and returns them; no clone anywhere, so all six retained tensors and the final weights share one storage.",
+    "run() stacks run_sequence() outputs at final observation time via torch.stack (stack copies, but of the already-aliased values at that time).",
+    "Gradient tensor is only loaded, never stored, so G mutation risk is low at source level.",
+    "Deterministic seed (734200), N=128, STEPS=6 fixed; values are modest magnitude so float32 rounding is tiny relative to tolerances."
+  ],
+  "op
+...[truncated 2432 chars]
 
 ### t6 - record_claim - error
 
@@ -604,109 +742,141 @@ Evidence:
   "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t8 - record_claim - ok
+### t8 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "enable_fp_fusion=False is set, so the remaining error source is the uncompensated `correction = correction + lost` fp32 accumulation; while correction holds +2^30 (ulp = 128 in fp32), small residues (~0.25\u20131.75) can be rounded away depending on where the seed-203635 permutation places the +2^30 term relative to the small values.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "run(X) satisfies the fixed workload iff ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, where target is the exact real-number sum of the stored float32 values of the make_inputs() array; requirement is on final row sums only."
-    }
-  ],
-  "scope_rationale": "The contract requires final row sums within 1e-5 relative error of the exact real-number sum of the fixed make_inputs() (SEED=203635) array, so losing whole small values in the correction accumulator would violate this stated acceptance metric on the in-scope input.",
-  "statement": "The plain fp32 accumulation of `correction` in _compensated_rows loses small interior residues while correction holds ~2^30 (ulp(2^30) in fp32 = 128), so on the fixed SEED=203635 input the output row sums can deviate from the exact real-number target by whole small values (up to ~1.75 each), violating the 1e-5 relative tolerance.",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
 ### t9 - record_claim - ok
 
 {
-  "id": "c2",
-  "rationale": "A float64 accumulator at magnitude 2^80 has ulp \u2248 2^27, so the eight ~1-magnitude values round away during accumulation and the -2^80 leaves exactly 0.0, contradicting the contract's exact-sum target of ~4\u201314 per row; the kernel's output magnitudes (~7\u20139) are consistent with the exact target instead.",
+  "id": "c1",
+  "rationale": "step() (kernel.py line 40) returns weights.view(N) with no clone, and run_sequence appends these live views; contract judges values at post-sequence observation time with H_target[t]=w[t+1], so H[0..4] equaling w[6] should give a large Frobenius error given gradient scales up to 1e2. The recorded initial_probe 0.0 result likely came from a different implementation, so a runtime probe of this exact kernel is needed.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The mathematical target is the exact real-number sum of the stored input values, and initial_probe() and its recorded result are explicitly evidence to assess, not an authoritative verdict or alternative specification."
+      "summary": "\"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed. Let H be their values stacked at this observation time. The target is H_target[t] = mathematical w[t+1].\""
+    },
+    {
+      "source": "problem.txt",
+      "summary": "Acceptance requires ||H-H_target||_F / max(||H_target||_F, 0.1) <= 0.025."
     }
   ],
-  "scope_rationale": "The contract defines the target as the exact real-number sum of the stored values (~4\u201314 per row), and explicitly demotes initial_probe to non-authoritative evidence, so the probe's 0.0 reference mis-evaluates the kernel rather than indicating a bug.",
-  "statement": "The initial_probe's reference (sequential float64 row-order sum yielding 0.0) does not match the contract's exact real-number target (~4\u201314 per row), so the recorded probe failure (passed=false, relative_error 1.6e13) mis-evaluates the kernel rather than indicating a bug.",
+  "scope_rationale": "The contract requires the retained history tensors, observed only after the full sequence, to match H_target[t]=w[t+1] within a 0.025 relative Frobenius tolerance; if the returned views all read w[6] at observation time, H[0..4] deviate from w[1..5] for the fixed seeded workload, violating that acceptance bound.",
+  "statement": "Because step() returns a live view of the in-place weights storage, all six retained history tensors equal w[6] at observation time, so the stacked H has H[0..4]=w[6] instead of w[1..5], making ||H-H_target||_F / max(||H_target||_F,0.1) exceed 0.025 for the fixed seeded workload.",
   "status": "open"
 }
 
-### t10 - record_description_update - ok
+### t10 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "Triton computes in float32 while the target is defined in float64; the 1e-5 relative tolerance on final state is much tighter than the history tolerance, so accumulated float32 rounding over 6 steps should be measured, though power-of-two coefficients make it likely small.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"All target calculations use the actual stored input values, in float64 or more accurately\" and final-state tolerances ||final_weights-w[6]||/max(...,0.1) <= 1e-5 and similarly for velocity."
+    }
+  ],
+  "scope_rationale": "The contract defines the target w[6], v[6] in float64 and requires final state within 1e-5 relative error; float32 kernel accumulation could exceed that tolerance on the fixed workload.",
+  "statement": "The final weights and velocity produced by the float32 Triton kernel may exceed the 1e-5 relative tolerance against the float64 target w[6], v[6] for the fixed seeded workload.",
+  "status": "open"
+}
+
+### t11 - record_claim - ok
+
+{
+  "id": "c3",
+  "rationale": "Source shows no store to Gradient, but a byte-for-byte runtime comparison of G before/after the full sequence would close the explicit input-mutation requirement.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"G must remain byte-for-byte unchanged.\""
+    }
+  ],
+  "scope_rationale": "The contract explicitly requires the gradients tensor G to remain byte-for-byte unchanged; any mutation after the six-step sequence would violate this requirement on the fixed workload.",
+  "statement": "The gradients tensor G may be mutated (not byte-for-byte unchanged) after the full six-step sequence, violating the explicit input-mutation requirement.",
+  "status": "open"
+}
+
+### t12 - record_description_update - ok
 
 {
   "contract_model": [
-    "Fixed workload only: the stored float32 (4,12) array from make_inputs() with SEED=203635; other seeds/permutations/arrays are out of scope.",
-    "target[r] is the exact real-number sum of the 12 stored values in row r; no accumulation order or algorithm is prescribed.",
-    "run(X) must return a finite float32 (4,) vector, must not modify X, and must satisfy ||output-target||_2 / max(||target||_2,1e-12) <= 1e-5, evaluated in float64 or better.",
-    "Requirement is on final row sums only; intermediate partial sums and correction terms are irrelevant.",
-    "Row structure: x[:,0]=+2^80, x[:,-1]=-2^80 (exact in fp32), permuted interior with +2^30, -2^30, and eight values in [0.25,1.75); exact row sums equal the sum of the eight small values (~4 to ~14).",
-    "initial_probe() and its recorded T4 result are evidence, not an oracle; its reference is a sequential float64 row-order sum."
+    "Acceptance metric is against H_target[t] = mathematical w[t+1] (float64), not against any implementation-produced reference history.",
+    "Only numerical values at post-sequence observation time matter; aliasing is permitted and the required in-place mutation of weights/velocity is explicitly sanctioned."
   ],
-  "impact_on_claims": [],
+  "impact_on_claims": [
+    "c1: the recorded initial_probe 0.0 does not rebut c1; the probe's reference history is itself aliased views, so its comparison cannot detect the aliasing failure. A float64 H_target comparison is the decisive evidence.",
+    "c2/c3 remain open and still need runtime measurement (float64 final-state comparison; byte-for-byte G check)."
+  ],
   "kernel_model": [
-    "Triton kernel _compensated_rows: one program per row, static 12-column loop, Neumaier-style compensated fp32 summation (total + branch-selected lost residue accumulated into a correction term), storing total+correction at Out[row].",
-    "run() launches grid (4,), COLS=12, num_warps=1, enable_fp_fusion=False; assumes a contiguous (4,12) float32 CUDA tensor indexed as row*COLS+column.",
-    "Because +2^80 dominates total until -2^80 arrives, small values are captured only via the correction term; the recorded outputs (~7-9) are consistent with the exact small-value sums.",
-    "The correction accumulator is plain fp32 addition with no second-order compensation; ulp(2^30) in fp32 = 128, so small residues added while correction is at 2^30 scale may be lost (skeptic claim c1).",
-    "Output allocated via torch.empty((4,), float32); X only loaded, never stored, so immutability holds by construction."
+    "initial_probe() is not a PyTorch-reimplemented oracle for the actual metric: its reference loop appends reference_weights.view(N).detach() (kernel.py lines 62-63), i.e. live views of the aliased reference state, so at torch.stack time (line 64) BOTH actual_history and reference_history read their respective final states w_actual[6] and w_ref[6].",
+    "Since the probe's reference computes the identical recurrence in-place on a clone, w_actual[6] == w_ref[6] and both stacked histories equal w[6], yielding history_relative_error 0.0 regardless of the retained-view aliasing issue \u2014 this fully explains the recorded 0.0 without needing a 'different implementation' hypothesis.",
+    "Therefore the recorded probe result is non-probative for the H_target[t]=w[t+1] history acceptance; only a float64 w[1..6] reference compared to the stacked retained outputs can decide it."
   ],
   "open_questions": [
-    "What are the exact per-row mathematical sums (sum of the eight small values), 
-...[truncated 2444 chars]
+    "Measured ||H-H_target||_F vs the 0.025 tolerance for the actual retained views (needs Experimenter float64 H_target comparison).",
+    "Measured final weights/velocity relative errors vs 1e-5 in float64.",
+    "Byte-for-byte G comparison after the sequence."
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Primary probe design risk: comparing ke
+...[truncated 1084 chars]
 
-### t11 - record_no_new_claims - ok
+### t13 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Existing claims c1 (fp32 correction accumulator losing small residues while at 2^30 scale, violating the 1e-5 exact-target tolerance) and c2 (probe's float64 sequential reference of 0.0 conflicts with the contract's exact real-number target) already cover the decisive in-scope risks for this fixed SEED=203635 workload; no further testable in-scope failure hypotheses beyond these.",
+  "reason": "All three contract surfaces are already claimed (c1 retained-view aliasing vs H_target, c2 float32-vs-float64 final-state precision, c3 G byte-for-byte immutability). The Describer's reconciliation fully explains the initial_probe 0.0 result as non-probative, and no new evidence exposes any additional testable in-scope defect. What remains is runtime measurement of the existing claims against a float64 H_target.",
   "reviewed_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reviewed_tool_event_count": 10,
+  "reviewed_tool_event_count": 12,
   "turn": 6
 }
 
-### t12 - run_claim_probe - ok
+### t14 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "44ff0d4dc2b8ac2169d0788d255036a383fc533087b5bb410c0f0db89232a092"
+      "path": "probes/t14_probe.py",
+      "sha256": "b76c6d5af847df9c18bd63286ca85c6ec8bd9292be42bf6c7418b9eaf399230e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "65d1d64c3587a89979a8ac8b56632d8e731782374b3cf1875f38d19893a16505"
+      "path": "probes/t14_stdout.txt",
+      "sha256": "0a55faf34b8f94b3ed7d92dc52341e3abce0562ac167699aa0640770ff89f98c"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
+      "path": "probes/t14_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "5b3c449d29fc850ac7dc55538ef73be2c2ea39d407eb9c6da84d3837d2332a34"
+      "path": "probes/t14_json_result.json",
+      "sha256": "e703526c37fdcc6ab06200e4498ab132a76d29a4d74b44cc1b12cd283d1764b0"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The plain fp32 accumulation of `correction` in _compensated_rows loses small interior residues while correction holds ~2^30 (ulp(2^30) in fp32 = 128), so on the fixed SEED=203635 input the output row sums can deviate from the exact real-number target by whole small values (up to ~1.75 each), violating the 1e-5 relative tolerance.",
-  "duration_s": 6.966426,
-  "event_id": "t12",
+  "claim_statement": "Because step() returns a live view of the in-place weights storage, all six retained history tensors equal w[6] at observation time, so the stacked H has H[0..4]=w[6] instead of w[1..5], making ||H-H_target||_F / max(||H_target||_F,0.1) exceed 0.025 for the fixed seeded workload.",
+  "duration_s": 5.349328,
+  "event_id": "t14",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -714,52 +884,53 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "44ff0d4dc2b8ac2169d0788d255036a383fc533087b5bb410c0f0db89232a092"
+          "path": "probes/t14_probe.py",
+          "sha256": "b76c6d5af847df9c18bd63286ca85c6ec8bd9292be42bf6c7418b9eaf399230e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "65d1d64c3587a89979a8ac8b56632d8e731782374b3cf1875f38d19893a16505"
+          "path": "probes/t14_stdout.txt",
+          "sha256": "0a55faf34b8f94b3ed7d92dc52341e3abce0562ac167699aa0640770ff89f98c"
         },
         {
-          "description": "Captured std
-...[truncated 6663 chars]
+          "description": "Captured stderr from the probe process.",
+          "kind": "st
+...[truncated 2288 chars]
 
-### t13 - run_claim_probe - ok
+### t15 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t13_probe.py",
-      "sha256": "61a248e8fd4c6a72a1e187ab24f7a15809b6725ca429fec41e404d2767a925c8"
+      "path": "probes/t15_probe.py",
+      "sha256": "d1203a0a7d7eb2160176a505ea53f5a2cb0e0ca848f3aa1850f3424e741fbbb9"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t13_stdout.txt",
-      "sha256": "4f1db3b87bf308d026864fbdf27205d015133001447504633af1176b823bb68e"
+      "path": "probes/t15_stdout.txt",
+      "sha256": "3f1e444d81a61ebfa64b7289ded00ddc9d602a0d01a3962b77084c2e93f367ae"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t13_stderr.txt",
+      "path": "probes/t15_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t13_json_result.json",
-      "sha256": "b16395951bd61a0a0cc280fea612fd7304b96badde0420f355ac4794ff98ad34"
+      "path": "probes/t15_json_result.json",
+      "sha256": "c79528933bdcb688223507c2150a6ef7c9d4d1d042aa8a18bd21378a57ff53f2"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "The initial_probe's reference (sequential float64 row-order sum yielding 0.0) does not match the contract's exact real-number target (~4\u201314 per row), so the recorded probe failure (passed=false, relative_error 1.6e13) mis-evaluates the kernel rather than indicating a bug.",
-  "duration_s": 0.192583,
-  "event_id": "t13",
+  "claim_statement": "The final weights and velocity produced by the float32 Triton kernel may exceed the 1e-5 relative tolerance against the float64 target w[6], v[6] for the fixed seeded workload.",
+  "duration_s": 4.299963,
+  "event_id": "t15",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -767,76 +938,148 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t13_probe.py",
-          "sha256": "61a248e8fd4c6a72a1e187ab24f7a15809b6725ca429fec41e404d2767a925c8"
+          "path": "probes/t15_probe.py",
+          "sha256": "d1203a0a7d7eb2160176a505ea53f5a2cb0e0ca848f3aa1850f3424e741fbbb9"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t13_stdout.txt",
-          "sha256": "4f1db3b87bf308d026864fbdf27205d015133001447504633af1176b823bb68e"
+          "path": "probes/t15_stdout.txt",
+          "sha256": "3f1e444d81a61ebfa64b7289ded00ddc9d602a0d01a3962b77084c2e93f367ae"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stder
-...[truncated 2647 chars]
+          "kind": "stderr",
+          "path": "probes/t15_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb9242
+...[truncated 2390 chars]
 
-### t14 - finalize_probe_evidence - ok
+### t16 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t16_probe.py",
+      "sha256": "e872a6ab6d25b85f1f76cff7721081adc40a3a68c08723af5340d9f64be4365b"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t16_stdout.txt",
+      "sha256": "a8138b29532531bcb5ae074dd47058c1336e647f74a307184681d9266ea6f58b"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t16_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t16_json_result.json",
+      "sha256": "d61ffb901f0dd74fe0b6f65335617cb20a85b9aad0452b62225fb01637483fbf"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "The gradients tensor G may be mutated (not byte-for-byte unchanged) after the full six-step sequence, violating the explicit input-mutation requirement.",
+  "duration_s": 4.204097,
+  "event_id": "t16",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t16_probe.py",
+          "sha256": "e872a6ab6d25b85f1f76cff7721081adc40a3a68c08723af5340d9f64be4365b"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t16_stdout.txt",
+          "sha256": "a8138b29532531bcb5ae074dd47058c1336e647f74a307184681d9266ea6f58b"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t16_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7
+...[truncated 1576 chars]
+
+### t17 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Kernel GPU output on the fixed SEED=203635 input matches the exact real-number target (math.fsum in float64) with relative error 7.98e-8, well within the 1e-5 tolerance; structural checks (shape (4,), fp32, finite, X unmodified) pass. No whole small values are lost: the seed-203635 permutation places -2^30 before +2^30, so the correction accumulator never holds a 2^30-scale value while small residues are added. The c1 hypothesized tolerance violation does not occur on the in-scope input.",
+  "summary": "Aliasing mechanism confirmed (all six retained history rows equal w[6] at observation time), but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.00574 is within the 0.025 acceptance tolerance for the fixed seeded workload \u2014 the claim's predicted tolerance violation is rebutted (the history changes too little over 6 steps to breach 0.025).",
   "supports": "rebutted",
-  "tool_event_id": "t12"
+  "tool_event_id": "t14"
 }
 
-### t15 - finalize_probe_evidence - ok
+### t18 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c2.e1",
-  "summary": "Replicated the initial_probe reference: sequential float64 row-order accumulation yields exactly 0.0 per row (ulp(2^80)=2^27 in float64 swallows all smaller terms), while the exact real-number target (math.fsum) is 6.589/8.897/8.743/7.017 \u2014 matching the kernel's output. The recorded probe failure (relative_error 1.6e13) is an artifact of the lossy reference, not a kernel bug.",
-  "supports": "confirmed",
-  "tool_event_id": "t13"
+  "summary": "Final weights and velocity relative errors vs float64 targets are 6.9e-8 and 4.5e-8, both far below the 1e-5 state tolerance; states are finite float32 with correct shapes. Float32 accumulation over 6 steps does not breach the tolerance.",
+  "supports": "rebutted",
+  "tool_event_id": "t15"
 }
 
-### t16 - record_no_new_claims - ok
+### t19 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "rebutted",
+  "evidence_id": "c3.e1",
+  "summary": "G is byte-for-byte unchanged after the full six-step sequence (torch.equal on uint8 views, max_abs_diff 0.0), satisfying the input-immutability requirement.",
+  "supports": "rebutted",
+  "tool_event_id": "t16"
+}
+
+### t20 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c1 is rebutted by direct GPU probe \u2014 on the fixed SEED=203635 input the kernel output matches the exact real-number target (math.fsum) with relative error 7.98e-8, far within the 1e-5 tolerance, and structural checks (shape (4,), fp32, finite, X unmodified) pass; the seed permutation places -2^30 before +2^30, so the hypothesized correction-accumulator loss never occurs on the in-scope input. c2 is confirmed: the initial_probe's float64 sequential reference (0.0) is itself lossy and conflicts with the contract's exact-sum target, so the recorded probe failure mis-evaluates the kernel. The new evidence exposes no material, testable, in-scope problem not covered by these claims.",
+  "reason": "Final review: all three in-scope claims (c1 history aliasing vs float64 H_target, c2 float32 final-state precision, c3 G immutability) were tested with fresh make_inputs() workloads and decisively rebutted \u2014 history error 0.0057 < 0.025, state errors ~7e-8 < 1e-5, G byte-for-byte unchanged. The aliasing behavior is real but contractually sanctioned since only values at observation time matter, and those values pass the stated tolerances on the fixed seeded workload. No remaining testable in-scope defect surface.",
   "reviewed_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reviewed_tool_event_count": 15,
+  "reviewed_tool_event_count": 19,
   "turn": 9
 }
 
-### t17 - record_verdict - ok
+### t21 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.92,
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "On the fixed SEED=203635 workload (the entire in-scope domain per problem.txt), a direct GPU probe shows the kernel output (6.5891, 8.8971, 8.7425, 7.0174) matches the exact real-number target computed by math.fsum in float64 with relative error 7.98e-8, far within the contract's 1e-5 tolerance; shape (4,), float32, finiteness, and input immutability all pass. The only hypothesized in-scope defect (c1, fp32 loss in the correction accumulator) was rebutted: the seed's permutation places -2^30 before +2^30 in every row, so the correction accumulator never sits at 2^30 scale while small residues are added. The artifact's recorded initial_probe failure is explained by c2 (confirmed): its float64 sequential reference yields exactly 0.0 because ulp(2^80) in float64 (~2^27) swallows all smaller terms, and problem.txt explicitly states initial_probe is evidence, not a specification, while the acceptance metric is defined against the exact real-number sum \u2014 the clause that makes the probe's failure a metric artifact rather than a defect. No open claims remain and the Skeptic reviewed the latest evidence with no new concerns.",
+  "reason": "All three contract surfaces were tested with fresh make_inputs() workloads against float64 targets. c1: the retained-history aliasing (all six rows equal w[6] at observation time) was confirmed as a mechanism, but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.0057 is within the 0.025 acceptance tolerance on the fixed seeded workload; the contract explicitly states aliasing is not a failure and only values at observation time matter. c2: final weights/velocity relative errors vs float64 w[6], v[6] are 6.9e-8 and 4.5e-8, far below the 1e-5 state tolerance, finite float32 with correct shapes. c3: G is byte-for-byte unchanged (max_abs_diff 0.0). No open claims remain, and the Skeptic reviewed the latest evidence and found no new concerns. The kernel satisfies the stated acceptance criteria for the benchmark's fixed input domain.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-24T07:15:58Z",
+  "confidence": 0.92,
+  "created_at": "2026-09-24T06:41:58Z",
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "On the fixed SEED=203635 workload (the entire in-scope domain per problem.txt), a direct GPU probe shows the kernel output (6.5891, 8.8971, 8.7425, 7.0174) matches the exact real-number target computed by math.fsum in float64 with relative error 7.98e-8, far within the contract's 1e-5 tolerance; shape (4,), float32, finiteness, and input immutability all pass. The only hypothesized in-scope defect (c1, fp32 loss in the correction accumulator) was rebutted: the seed's permutation places -2^30 before +2^30 in every row, so the correction accumulator never sits at 2^30 scale while small residues are added. The artifact's recorded initial_probe failure is explained by c2 (confirmed): its float64 sequential reference yields exactly 0.0 because ulp(2^80) in float64 (~2^27) swallows all smaller terms, and problem.txt explicitly states initial_probe is evidence, not a specification, while the acceptance metric is defined against the exact real-number sum \u2014 the clause that makes the probe's failure a metric artifact rather than a defect. No open claims remain and the Skeptic reviewed the latest evidence with no new concerns.",
+  "reason": "All three contract surfaces were tested with fresh make_inputs() workloads against float64 targets. c1: the retained-history aliasing (all six rows equal w[6] at observation time) was confirmed as a mechanism, but the measured ||H-H_target||_F / max(||H_target||_F,0.1) = 0.0057 is within the 0.025 acceptance tolerance on the fixed seeded workload; the contract explicitly states aliasing is not a failure and only values at observation time matter. c2: final weights/velocity relative errors vs float64 w[6], v[6] are 6.9e-8 and 4.5e-8, far below the 1e-5 state tolerance, finite float32 with correct shapes. c3: G is byte-for-byte unchanged (max_abs_diff 0.0). No open claims remain, and the Skeptic reviewed the latest evidence and found no new concerns. The kernel satisfies the stated acceptance criteria for the benchmark's fixed input domain.",
   "verdict": "trust"
 }

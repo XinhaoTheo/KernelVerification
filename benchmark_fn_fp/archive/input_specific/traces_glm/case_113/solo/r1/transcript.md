@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_u`
+- Entry: `case_o`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 23.068s across 5 calls | tokens: in=51997 out=1454 total=53451
+- LLM time: 21.818s across 5 calls | tokens: in=51598 out=1486 total=53084
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
 - Confidence: 0.95
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_u",
+    "entry": "case_o",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 
-### Turn 2 - `solo` (4.796941459999999s, in=7337 out=291)
+### Turn 2 - `solo` (5.206141744999999s, in=7383 out=376)
 
 Message:
 
 ```text
-I'll test whether the 6-mode truncation keeps the relative error within the 0.15 contract on the fixed workload.
+The suspicious point: b ≈ 1.125·u + tiny noise, so the residual is tiny and fp32 cancellation in `b - alpha*u` could exceed the 1% relative tolerance. I'll record that claim and run the actual kernel against a float64 reference on the exact fixed workload.
 ```
 
 Tool calls:
@@ -73,15 +73,15 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel sums only k=1..6 while the reference uses all 16 modes; the omitted modes have coefficients ~N(0,0.04) so the truncation error relative to the reference norm (dominated by the ~1.0 DC coefficient) may or may not stay under 0.15.",
+    "rationale": "The workload makes residual ~1e-5 relative to b; fp32 error in alpha (~1e-7 relative) can produce residual relative errors near or above the 1% contract tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15 for the fixed make_inputs workload; the reference uses all sixteen modes but the implementation uses a fixed frequency cutoff as an approximation."
+        "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
       }
     ],
-    "statement": "The kernel's 6-mode truncation yields relative L2 error > 0.15 against the 16-mode float64 reference on the fixed make_inputs() workload."
+    "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference."
   }
   Output summary:
   {
@@ -89,12 +89,12 @@ Tool calls:
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (5.0745801809999875s, in=8015 out=286)
+### Turn 3 - `solo` (3.159164876s, in=8060 out=295)
 
 Message:
 
 ```text
-The claim failed to record due to missing scope_rationale; I'll re-record it properly and then run the probe.
+The claim needs the scope_rationale field; I'll re-send it, then run the kernel against a float64 reference on the fixed workload.
 ```
 
 Tool calls:
@@ -102,38 +102,39 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The kernel sums only k=1..6 while the reference uses all 16 modes; the omitted modes have coefficients ~N(0,0.04) so the truncation error relative to the reference norm (dominated by the ~1.0 DC coefficient) may or may not stay under 0.15.",
+    "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15 for the fixed make_inputs workload; the reference uses all sixteen modes but the implementation uses a fixed frequency cutoff as an approximation."
+        "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
       }
     ],
-    "scope_rationale": "problem.txt fixes the relative-L2 tolerance of 0.15 against the full 16-mode float64 reference on the exact make_inputs() workload; if the 6-mode truncation exceeds this toleranc
-  ...[truncated 194 chars]
+    "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
+    "statement": "On the fix
+  ...[truncated 237 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel sums only k=1..6 while the reference uses all 16 modes; the omitted modes have coefficients ~N(0,0.04) so the truncation error relative to the reference norm (dominated by the ~1.0 DC coefficient) may or may not stay under 0.15.",
+    "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15 for the fixed make_inputs workload; the reference uses all sixteen modes but the implementation uses a fixed frequency cutoff as an approximation."
+        "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
       }
     ],
-    "scope_rationale": "problem.txt fixes the relative-L2 tolerance of 0.15 against the full 16-mode float64 reference on the exact make_inputs() workload; if the 6-mode truncation exceeds this tolerance the kernel violates the contract.",
-    "statement": "The kernel's 6-mode truncation yields relative L2 error > 0.15 against the 16-mode float64 reference on the fixed make_inputs() workload.",
+    "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
+    "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (5.770297298000003s, in=9308 out=355)
+### Turn 4 - `solo` (5.668587982999998s, in=9406 out=347)
 
 Message:
 
 ```text
-I'll run the decisive probe: compute the kernel output and the float64 16-mode reference on the fixed workload, and report the relative L2 error.
+I'll run the kernel on the fixed workload and compare against a float64 reference.
 ```
 
 Tool calls:
@@ -142,8 +143,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport sys, json\nsys.path.insert(0, '/root/numerical_cases/case_u')\nimport numpy as np, torch\nimport kernel\n\ncoeff, offset = kernel.make_inputs(device='cuda')\nout = kernel.run(coeff, offset)\ntorch.cuda.synchronize()\n\nc64 = coeff.double().cpu().numpy()\no64 = float(offset.double().cpu().numpy())\nn = np.arange(64, dtype=np.float64)\nref = np.full(64, o64)\nfor k in range(1, 17):\n    ref += c64[0, k-1]*np.cos(2*np.pi*k*n/64) + c64[1, k-1]*np.sin(2*np.pi*k*n/64)\n\nout_np = out.float().cpu().numpy()\ndiff = out_np.astype(np.float64) - ref\nrel = np.linalg.norm(diff) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n    \"metric\": \"relative L2 error vs float64 16-mode reference\",\n    \"rel_l2\": float(rel),\n    \"tolerance\": 0.15,\n    \"
-  ...[truncated 250 chars]
+    "code": "\nimport numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nfrom kernel import run, make_inputs\n\nu, b = make_inputs()\nout = run(u, b)\n\n# float64 reference (recentring to avoid cancellation in the reference itself)\nu64 = u.cpu().numpy().astype(np.float64)\nb64 = b.cpu().numpy().astype(np.float64)\n# reference: b = 1.125u + eps stored in fp32; compute alpha exactly from stored values\nalpha = (u64*b64).sum() / (u64*u64).sum()\nres = b64 - alpha*u64\n# alternative recentred: use dot of (b - mean-shift) \u2014 but straightforward fp64 is fine here\nref = res / np.linalg.norm(res)\n\no = out.cpu().numpy().astype(np.float64)\nrel = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"relative_l
+  ...[truncated 313 chars]
   Output summary:
   {
     "artifacts": [
@@ -151,41 +152,37 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "49e6164c6112443aec64c680847164b0ae087523957fb48d8c749079719af209"
+        "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "92a0fa8d5990d1d01212721cf92ff63bbe6c39080303355b8637c9009c836302"
+        "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
-        "sha256": "9d6cf12a664ec5d5362e2d94c0e26c2a30da5f24ebeb2bc793442bcdc33b098b"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t7_json_result.json",
-        "sha256": "a9099ace0559e5b826c51e370bb9e072eab9fccc7a4ba63596e2bd9fc93b5a18"
+        "sha256": "f48263b45eec67bb3a2d646e393f7ee1468faa276f13ed77928db853079febdc"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's 6-mode truncation yields relative L2 error > 0.15 against the 16-mode float64 reference on the fixed make_inputs() workload.",
-    "duration_s": 5.988925,
-    "event_id": "t7",
-    "evidence_draft": {
-      "
-  ...[truncated 3502 chars]
+    "claim_statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolera
+  ...[truncated 2715 chars]
 
-### Turn 5 - `solo` (3.192792271000002s, in=11850 out=261)
+### Turn 5 - `solo` (4.703358552000001s, in=11754 out=284)
 
 Message:
 
 ```text
-The probe shows the 6-mode truncation yields relative L2 error 0.0717, well within the 0.15 tolerance. I'll finalize the evidence and record the verdict.
+The probe ran the kernel on the exact fixed workload against a float64 reference: relative L2 error is 0.00154, well within the 1% tolerance, with a finite shape-(32,) output. The claimed precision failure did not materialize. I'll finalize that evidence and record the verdict.
 ```
 
 Tool calls:
@@ -194,20 +191,15 @@ Tool calls:
   Args:
   {
     "data": {
-      "dtype": "torch.float32",
-      "finite": true,
-      "max_abs_err": 0.1988538267047335,
-      "pass": true,
-      "ref_norm": 8.566189857158276,
-      "rel_l2": 0.07170935573821624,
-      "shape": [
-        64
-      ],
-      "tolerance": 0.15
+      "max_abs_err": 0.0005855331971066635,
+      "norm_res": 6.621097760007478e-05,
+      "passes": true,
+      "relative_l2": 0.0015436494833812023,
+      "tolerance": 0.01
     },
     "event_id": "t7",
     "status": "rebutted",
-    "summary": "On the fixed make_inputs() workload, the kernel output is a finite float32 (64,) tensor with relative L2 error 0.0717 against the float64 16-mode reference \u2014 under the 0.15 tolerance, so the truncation-error claim is rebutted.",
+    "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
     "supports": "rebutted"
   }
   Output summary:
@@ -215,17 +207,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload, the kernel output is a finite float32 (64,) tensor with relative L2 error 0.0717 against the float64 16-mode reference \u2014 under the 0.15 tolerance, so the truncation-error claim is rebutted.",
+    "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
     "supports": "rebutted",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (4.232953647999977s, in=15487 out=261)
+### Turn 6 - `solo` (3.0809151890000024s, in=14995 out=184)
 
 Message:
 
 ```text
-The decisive probe is complete: the kernel's 6-mode truncation yields relative L2 error 0.0717 on the fixed make_inputs() workload, well within the 0.15 contract, with a finite float32 (64,) output. No other failure mode is plausible for this closed workload. Recording the verdict.
+The single claim is resolved: the kernel passes the contract tolerance on the exact fixed workload. I'll record the trust verdict.
 ```
 
 Tool calls:
@@ -237,7 +229,7 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the contract's exact test (probe event t7): on the fixed make_inputs() workload, kernel.run returns a finite float32 tensor of shape (64,) whose relative L2 error against the float64 16-mode reference is 0.0717 (ref_norm 8.566, max_abs_err 0.199), satisfying the required bound of 0.15. The only in-scope correctness question \u2014 whether the 6-mode cutoff approximation exceeds the declared tolerance \u2014 is rebutted with runtime evidence. Other coefficient tensors are explicitly out of scope per problem.txt, so no further claims are needed.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
     "verdict": "trust"
   }
   Output summary:
@@ -246,7 +238,7 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the contract's exact test (probe event t7): on the fixed make_inputs() workload, kernel.run returns a finite float32 tensor of shape (64,) whose relative L2 error against the float64 16-mode reference is 0.0717 (ref_norm 8.566, max_abs_err 0.199), satisfying the required bound of 0.15. The only in-scope correctness question \u2014 whether the 6-mode cutoff approximation exceeds the declared tolerance \u2014 is rebutted with runtime evidence. Other coefficient tensors are explicitly out of scope per problem.txt, so no further claims are needed.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
     "verdict": "trust"
   }
 
@@ -258,44 +250,44 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The kernel's 6-mode truncation yields relative L2 error > 0.15 against the 16-mode float64 reference on the fixed make_inputs() workload.
+Statement: On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt fixes the relative-L2 tolerance of 0.15 against the full 16-mode float64 reference on the exact make_inputs() workload; if the 6-mode truncation exceeds this tolerance the kernel violates the contract.
+Scope rationale: The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.
 
 Scope evidence:
-- `problem.txt`: Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15 for the fixed make_inputs workload; the reference uses all sixteen modes but the implementation uses a fixed frequency cutoff as an approximation.
+- `problem.txt`: Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope.
 
-Rationale: The kernel sums only k=1..6 while the reference uses all 16 modes; the omitted modes have coefficients ~N(0,0.04) so the truncation error relative to the reference norm (dominated by the ~1.0 DC coefficient) may or may not stay under 0.15.
+Rationale: b ≈ 1.125·u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: On the fixed make_inputs() workload, the kernel output is a finite float32 (64,) tensor with relative L2 error 0.0717 against the float64 16-mode reference — under the 0.15 tolerance, so the truncation-error claim is rebutted.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t5 - record_claim - error
@@ -309,16 +301,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "The kernel sums only k=1..6 while the reference uses all 16 modes; the omitted modes have coefficients ~N(0,0.04) so the truncation error relative to the reference norm (dominated by the ~1.0 DC coefficient) may or may not stay under 0.15.",
+  "rationale": "b \u2248 1.125\u00b7u + 1e-5 noise, so the residual is ~1e-5 of b's magnitude; fp32 rounding error in alpha (~1e-7 relative) multiplied by u yields residual perturbations comparable to the noise itself, which can push the normalized output beyond the 1% tolerance.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.15 for the fixed make_inputs workload; the reference uses all sixteen modes but the implementation uses a fixed frequency cutoff as an approximation."
+      "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload; only those inputs are in scope."
     }
   ],
-  "scope_rationale": "problem.txt fixes the relative-L2 tolerance of 0.15 against the full 16-mode float64 reference on the exact make_inputs() workload; if the 6-mode truncation exceeds this tolerance the kernel violates the contract.",
-  "statement": "The kernel's 6-mode truncation yields relative L2 error > 0.15 against the 16-mode float64 reference on the fixed make_inputs() workload.",
+  "scope_rationale": "The contract requires the fixed-workload output to be within 1% relative L2 of the float64 reference; if fp32 cancellation in b - alpha*u exceeds that, the kernel violates the stated numeric requirement.",
+  "statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.",
   "status": "open"
 }
 
@@ -330,30 +322,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "49e6164c6112443aec64c680847164b0ae087523957fb48d8c749079719af209"
+      "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "92a0fa8d5990d1d01212721cf92ff63bbe6c39080303355b8637c9009c836302"
+      "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
-      "sha256": "9d6cf12a664ec5d5362e2d94c0e26c2a30da5f24ebeb2bc793442bcdc33b098b"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t7_json_result.json",
-      "sha256": "a9099ace0559e5b826c51e370bb9e072eab9fccc7a4ba63596e2bd9fc93b5a18"
+      "sha256": "f48263b45eec67bb3a2d646e393f7ee1468faa276f13ed77928db853079febdc"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's 6-mode truncation yields relative L2 error > 0.15 against the 16-mode float64 reference on the fixed make_inputs() workload.",
-  "duration_s": 5.988925,
+  "claim_statement": "On the fixed make_inputs workload, the kernel's fp32 computation of alpha and the residual b - alpha*u loses enough precision to the tiny noise residual that the normalized output exceeds the 1% relative-L2 tolerance versus a float64 reference.",
+  "duration_s": 7.878197,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -363,22 +355,19 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "49e6164c6112443aec64c680847164b0ae087523957fb48d8c749079719af209"
+          "sha256": "fd76d74f48753f26ae44e567480bea3df9ba3915341097e979a42c8e37ca4bad"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "92a0fa8d5990d1d01212721cf92ff63bbe6c39080303355b8637c9009c836302"
+          "sha256": "ed165ad77a6f612f6fe7f7085e78e70479fdf1511e9c92416f5a04c3c1ba26f6"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
-          "sha256": "9d6cf12a664ec5d5362e2d94c0e26c2a30da5f24ebeb2bc793442bcdc33b098b"
-        },
-   
-...[truncated 2702 chars]
+          "path": "probes/t7_stderr.
+...[truncated 1915 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
@@ -386,7 +375,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload, the kernel output is a finite float32 (64,) tensor with relative L2 error 0.0717 against the float64 16-mode reference \u2014 under the 0.15 tolerance, so the truncation-error claim is rebutted.",
+  "summary": "On the fixed make_inputs() workload, the kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), output finite with shape (32,). The fp32 cancellation concern did not exceed the 1% tolerance.",
   "supports": "rebutted",
   "tool_event_id": "t7"
 }
@@ -398,7 +387,7 @@ Evidence:
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the contract's exact test (probe event t7): on the fixed make_inputs() workload, kernel.run returns a finite float32 tensor of shape (64,) whose relative L2 error against the float64 16-mode reference is 0.0717 (ref_norm 8.566, max_abs_err 0.199), satisfying the required bound of 0.15. The only in-scope correctness question \u2014 whether the 6-mode cutoff approximation exceeds the declared tolerance \u2014 is rebutted with runtime evidence. Other coefficient tensors are explicitly out of scope per problem.txt, so no further claims are needed.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
   "verdict": "trust"
 }
 
@@ -406,10 +395,10 @@ Evidence:
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-24T01:00:56Z",
+  "created_at": "2026-09-24T00:58:14Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the contract's exact test (probe event t7): on the fixed make_inputs() workload, kernel.run returns a finite float32 tensor of shape (64,) whose relative L2 error against the float64 16-mode reference is 0.0717 (ref_norm 8.566, max_abs_err 0.199), satisfying the required bound of 0.15. The only in-scope correctness question \u2014 whether the 6-mode cutoff approximation exceeds the declared tolerance \u2014 is rebutted with runtime evidence. Other coefficient tensors are explicitly out of scope per problem.txt, so no further claims are needed.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference: relative L2 error 0.00154 <= tolerance 0.01, output finite, shape (32,). The only plausible failure mode (fp32 cancellation in b - alpha*u given residual norm ~6.6e-5 vs ||b||~4.34) was tested and stayed well within tolerance (max abs err 5.9e-4). Claim c1 rebutted; kernel satisfies the contract.",
   "verdict": "trust"
 }

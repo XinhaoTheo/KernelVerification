@@ -1,45 +1,31 @@
-import numpy as np, torch, triton, triton.language as tl, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_w")
-import kernel
+import numpy as np, torch, json, sys
+sys.path.insert(0, "/root/numerical_cases/case_q")
+from kernel import run, make_inputs
 
-# Get the exact pivot values of the fixed workload via fp64 elimination (mask-identical algorithm)
-(m,) = kernel.make_inputs_numpy()
-M = m.astype(np.float64)
-pivots = []
-A = M.copy()
-N = 8
-for k in range(N):
-    p = A[k, k]; pivots.append(p)
-    mult = A[:, k] / p
-    upd = A - np.outer(mult, A[k, :])
-    for i in range(k+1, N):
-        for j in range(k+1, N):
-            A[i, j] = upd[i, j]
-piv = np.array(pivots, dtype=np.float32)
+query, candidates, embeddings = make_inputs()
+out = run(query, candidates, embeddings)
 
-@triton.jit
-def logk(X, O, N: tl.constexpr):
-    i = tl.arange(0, N)
-    x = tl.load(X + i)
-    tl.store(O + i, tl.log(x))
+# exact float64 reference (host copies)
+q = query.cpu().to(torch.float64).numpy()
+c = candidates.cpu().to(torch.float64).numpy()
+e = embeddings.cpu().numpy().astype(np.float64)
+d = ((c - q) ** 2).sum(axis=1)
+ref_idx = int(np.argmin(d))
+ref_out = e[ref_idx]
+out_np = out.cpu().numpy().astype(np.float64)
+rel = float(np.linalg.norm(out_np - ref_out) / max(np.linalg.norm(ref_out), 1e-12))
 
-xg = torch.from_numpy(piv).cuda()
-og = torch.empty(8, device="cuda", dtype=torch.float32)
-logk[(1,)](xg, og, N=8, enable_fp_fusion=False)
-tri = og.cpu().numpy()
-# correctly-rounded reference: fp64 log then round to fp32
-ref = np.log(piv.astype(np.float64)).astype(np.float32)
-ulp = (np.abs(tri.astype(np.float64) - ref.astype(np.float64)) /
-       np.maximum(np.abs(ref.astype(np.float64)) * np.float64(2**-23), 1e-30))
-# also effect on the sum
-tri_sum = float(np.float32(np.sum(tri, dtype=np.float32)))
-ref_sum = float(np.float32(np.sum(ref, dtype=np.float32)))
+# also identify which embedding row the kernel actually returned
+row_errs = [float(np.linalg.norm(out_np - e[i])) for i in range(16)]
+kernel_idx = int(np.argmin(row_errs))
+
 print(json.dumps({
-    "claim": "c2", "pivots_f32": piv.tolist(),
-    "triton_log": tri.tolist(), "correctly_rounded_f32_log": ref.tolist(),
-    "max_abs_log_err": float(np.abs(tri.astype(np.float64)-ref.astype(np.float64)).max()),
-    "max_relative_log_err": float(ulp.max()),
-    "triton_sum_f32": tri_sum, "correctly_rounded_sum_f32": ref_sum,
-    "sum_abs_diff": abs(tri_sum - ref_sum),
-    "metric": "per-value and summed deviation of tl.log vs correctly-rounded fp32 log on actual pivots"
+    "metric": "kernel output vs exact float64 reference on fixed seed-840104 workload",
+    "ref_exact64_index": ref_idx,
+    "kernel_returned_row_index": kernel_idx,
+    "relative_l2": rel,
+    "tolerance": 0.1,
+    "winner_match": bool(kernel_idx == ref_idx),
+    "passes_contract": bool(rel <= 0.1),
+    "exact64_dists": d.tolist(),
 }))

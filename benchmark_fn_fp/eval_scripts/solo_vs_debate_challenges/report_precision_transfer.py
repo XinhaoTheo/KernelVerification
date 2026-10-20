@@ -1,4 +1,4 @@
-"""Report the prospective case_133–case_138 accuracy-based confirmation protocol.
+"""Report the prospective case_139–case_144 accuracy-based confirmation protocol.
 
 Trace validity, costs and outcomes come from the existing audited report.
 Only this cohort's numerical gate differs: accuracy gains must survive
@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "sol
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from benchmark_fn_fp.eval_scripts.solo_vs_debate_challenges import report as base_report
 
-CASES = tuple(f"case_{i + 118:02d}" for i in range(15, 21))
+CASES = tuple(f"case_{i + 124:02d}" for i in range(15, 21))
 TRIALS = ("ea_precision_transfer_r1", "ea_precision_transfer_r2")
 ARMS = base_report.ARMS
 LABEL_OUTCOMES = {"correct", "wrong_verdict", "abstention"}
@@ -97,7 +97,7 @@ def derive():
 
 def render(result):
     gate = result["gate"]
-    lines = [f"生成时间：{result['generated_at']}；题目范围：case_133–case_138。", "",
+    lines = [f"生成时间：{result['generated_at']}；题目范围：case_139–case_144。", "",
         base_report.compact_results(result["rows"]),
         f"新随机种子复验门槛： **{'通过' if gate['replicated_advantage_numerical_gate'] else '未达到'}**; "
         f"复验中重复纠错的题目： {', '.join(gate['replicated_cases']) or 'none'}.", "",

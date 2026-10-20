@@ -13,7 +13,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_107", "case_108")
+CASES = ("case_113", "case_114")
 TOLERANCE = 0.01
 N = 32
 EPSILON = 0.00001
@@ -170,10 +170,10 @@ def build(output_root):
     root = archived_collection(output_root)
     calibration = [_candidate(seed) for seed in CALIBRATION_SEEDS]
     candidates = [_candidate(seed) for seed in SEARCH_SEEDS]
-    selected = {"case_107": min(candidates, key=lambda row: row["error"]),
-                "case_108": max(candidates, key=lambda row: row["error"])}
-    assert selected["case_107"]["error"] <= 0.75 * TOLERANCE
-    assert selected["case_108"]["error"] >= 1.25 * TOLERANCE
+    selected = {"case_113": min(candidates, key=lambda row: row["error"]),
+                "case_114": max(candidates, key=lambda row: row["error"])}
+    assert selected["case_113"]["error"] <= 0.75 * TOLERANCE
+    assert selected["case_114"]["error"] >= 1.25 * TOLERANCE
     answer = {"family": "orthogonal_projection", "budget": TOLERANCE, "cases": {}}
     for case, row in selected.items():
         inputs = _inputs(row["seed"])

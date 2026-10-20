@@ -1,22 +1,26 @@
-import json, torch, importlib.util
-spec = importlib.util.spec_from_file_location("kernel", "/root/evidence_cases/case_e10/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-device = "cuda" if torch.cuda.is_available() else "cpu"
-w, v, G = k.make_inputs(device)
-G0 = G.clone()
-# float64 reference
-w64 = w.double().clone(); v64 = v.double().clone()
-for g in G:
-    v64 = 0.75*v64 + 0.25*g.double()
-    w64 = w64 - 0.03125*v64
-k.run(w, v, G)  # consume all six steps
-if device == "cuda": torch.cuda.synchronize()
-def rel(a, b):
-    return (torch.linalg.vector_norm(a.double()-b.double())/max(torch.linalg.vector_norm(b.double()).item(), 0.1)).item()
-werr = rel(w, w64); verr = rel(v, v64)
-g_same = torch.equal(G.view(torch.uint8), G0.view(torch.uint8))
-finite = bool(torch.isfinite(w).all() and torch.isfinite(v).all() and w.dtype == torch.float32 and v.dtype == torch.float32 and w.shape == (128,) and v.shape == (128,))
-out = {"final_weights_relative_error": werr, "final_velocity_relative_error": verr,
-       "state_tolerance": 1e-5, "state_ok": werr <= 1e-5 and verr <= 1e-5,
-       "G_byte_identical": g_same, "finite_correct_shapes": finite}
-print(json.dumps(out))
+import sys, json, itertools
+import numpy as np, torch
+sys.path.insert(0, "/root/evidence_cases/case_e04")
+import kernel as K
+
+cpu = K.make_inputs_numpy()
+gpu = K.make_inputs()
+
+def reference(word):
+    ref = cpu[0].astype(np.float64).copy()
+    for op in word:
+        ref = ref[cpu[2][op]].copy() if op < 2 else ref + cpu[1].astype(np.float64)
+    return ref
+
+words = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]
+assert len(words) == 121
+fails, worst = [], 0.0
+for w in words:
+    actual = K.run_sequence(*gpu, w).detach().cpu().numpy()
+    err = float(np.max(np.abs(actual.astype(np.float64) - reference(w))))
+    ok = actual.shape == (K.N, K.D) and actual.dtype == np.float32 and np.isfinite(actual).all() and err <= 1e-5
+    worst = max(worst, err)
+    if not ok:
+        fails.append({"operations": list(w), "max_absolute_error": err})
+print(json.dumps({"num_words": len(words), "num_fail": len(fails), "worst_error": worst,
+                  "first_fails": fails[:10]}))

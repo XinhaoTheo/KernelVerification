@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_l`
-- Turns: 10
-- Tool events: 17
+- Entry: `case_f`
+- Turns: 12
+- Tool events: 16
 - Claims: 2
 - Description updates: 2
-- LLM time: 111.942s across 9 calls | tokens: in=186706 out=6068 total=192774
+- LLM time: 111.662s across 11 calls | tokens: in=242054 out=6299 total=248353
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.97
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_l",
+    "entry": "case_f",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_l"
+    "entry": "case_f"
   }
 
-### Turn 2 - `describer` (18.866623813000004s, in=4904 out=1180)
+### Turn 2 - `describer` (15.145374345000008s, in=5052 out=947)
 
 Message:
 
 ```text
-I have full context from the loaded artifact; I'll record the description model now. The kernel is a Richardson iteration (state += residual) with unit step over 64 iterations, run against a fixed SPD system whose eigenvalues span 0.03125–1.75. Key observation for the risk map: the smallest eigenvalue 0.03125 gives a per-step contraction factor of only 0.96875, so 64 steps leave ~13% residual along that mode, which is above the 8% tolerance — but confirming that is the Skeptic's job.
+I have the full kernel source and contract already loaded. Key observation: the kernel stores intermediate states in fp16 after every step (line 16: `.to(tl.float16).to(tl.float32)`), which quantizes state values to fp16 precision across 64 recurrence steps — likely accumulating relative error well above the 0.002 tolerance. The final output is fp32, but each step's rounding to fp16 (~2^-11 relative) accumulates through a stable-but-near-unity spectral norm (diagonal 0.875–0.96875). I'll record the description model now.
 ```
 
 Tool calls:
@@ -75,34 +75,37 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
-      "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
-      "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+      "Reference is a 64-step linear recurrence: state = matrix @ state + drive[t], computed in float64 on the float32 inputs from make_inputs(); only that fixed workload is in scope.",
+      "Output must be a finite float32-shape (16,) vector with relative L2 error <= 0.002 versus reference, using denominator max(||ref||_2, 0.001*sqrt(16)).",
+      "Intermediate-state approximation is explicitly permitted by the contract; only the final output error matters.",
+      "Target device is an NVIDIA T4; alternative inputs are out of scope."
     ],
     "kernel_model": [
-      "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
-      "
-  ...[truncated 1888 chars]
+      "Triton kernel with a single program: loads the full 16x16 matrix, initial state (cast to fp32), and iterates 64 steps, each computing tl.sum(matrix * state) + forcing (line 13-15).",
+      "Critical detail (line 16
+  ...[truncated 2623 chars]
   Output summary:
   {
     "contract_model": [
-      "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
-      "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
-      "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+      "Reference is a 64-step linear recurrence: state = matrix @ state + drive[t], computed in float64 on the float32 inputs from make_inputs(); only that fixed workload is in scope.",
+      "Output must be a finite float32-shape (16,) vector with relative L2 error <= 0.002 versus reference, using denominator max(||ref||_2, 0.001*sqrt(16)).",
+      "Intermediate-state approximation is explicitly permitted by the contract; only the final output error matters.",
+      "Target device is an NVIDIA T4; alternative inputs are out of scope."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
-      "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
-      "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed
-  ...[truncated 1612 chars]
+      "Triton kernel with a single program: loads the full 16x16 matrix, initial state (cast to fp32), and iterates 64 steps, each computing tl.sum(matrix * state) + forcing (line 13-15).",
+      "Critical detail (line 16): after every step, state is cast to fp16 and back to fp32, quantizing each intermediate state at ~2^-11 relative precision before the next step.",
+      "Final state is stored as float32 (line 17), so the output dtype is fine, but the accumulated fp16 rounding across 64 steps is the main risk surface.",
+      "run() launches exactly one block with N=16, STEPS=64 hardcoded, 
+  ...[truncated 2323 chars]
 
-### Turn 3 - `skeptic` (7.406294484s, in=11261 out=579)
+### Turn 3 - `skeptic` (11.468844074000003s, in=12022 out=586)
 
 Message:
 
 ```text
-The core risk is already clear from the source: unit-step Richardson over 64 iterations cannot fully converge along the λ=0.03125 eigenmode. I'll record that as the decisive in-scope claim, plus a secondary float32 accumulation note.
+The kernel's dominant risk is clear from source line 16: every intermediate state is quantized to fp16 across 64 steps. I'll record that as the primary in-scope claim, plus a secondary claim about the reduction dtype as a lower-risk hypothesis.
 ```
 
 Tool calls:
@@ -110,154 +113,212 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. This needs numeric quantification against the actual seeded inputs.",
+    "rationale": "Each step introduces a ~2^-11 relative rounding error that is then propagated by near-unity eigenvalues (0.875\u20130.96875) of the orthogonal-similar matrix, so errors decay only slowly and accumulate over 64 steps; the budgeted error of ~4.9e-4 per step (2^-11) compounding additively over ~64 steps can plausibly exceed 0.002 relative L2 against the float64 reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
+        "summary": "Output must be a finite vector of shape (16,) with relative L2 error at most 0.002 versus the float64 reference on the exact fixed workload produced by make_inputs() (matrix 16x16, initial 16, drive 64x16, seeds 20260923 and 202002)."
       }
     ],
-    "statement": "After exactly 64 unit-step Richardson iterations, run(*make
-  ...[truncated 224 chars]
+    "statement": "On the fixed seeded workload from make_inputs(
+  ...[truncated 252 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
-- `record_claim -> t7 error`
+- `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to the truncation error near the tolerance boundary, or the sum over axis=1 may differ from a float64 reference emulation; worth measuring separately.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
-      }
-    ],
-    "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ide
-  ...[truncated 72 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 4 - `skeptic` (8.015655691000006s, in=12798 out=604)
-
-Message:
-
-```text
-Both prior record_claim calls were rejected for missing scope_rationale — resending them properly.
-```
-
-Tool calls:
-
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
-      }
-    ],
-    "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03b
-  ...[truncated 471 chars]
+    "rationale": "tl.sum over 16 fp32 products plus forcing is computed in fp32 with enable_fp_fusion disabled, which should be near-exact; but if Triton promotes the products to a lower-precision accumulation or reorders catastrophically, per-step error could add to the fp16 error. Worth a decisive probe distinguishing fp16-state error from reduction error.",
+    "scope": "unknown",
+    "scope_rationale": "The contract only bounds final relative L2 error; whether per-step fp32 reduction error matters is unknown until the fp16 claim is measured \u2014 reduction-order error alone is far below tolerance and likely not contract-decisive.",
+    "statement": "The per-step matvec reduction tl.sum(matrix * state[None,:], axis=1) computed in fp32 contributes negligible error compared to the fp16 state q
+  ...[truncated 105 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
-      }
-    ],
-    "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03bb_min = 0.03125) and requires relative L2 error \u2264 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.",
-    "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenm
-  ...[truncated 105 chars]
-- `record_claim -> t9 ok`
-  Args:
-  {
-    "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
-      }
-    ],
-    "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
-    "s
-  ...[truncated 256 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
-      }
-    ],
-    "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
-    "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.",
+    "rationale": "tl.sum over 16 fp32 products plus forcing is computed in fp32 with enable_fp_fusion disabled, which should be near-exact; but if Triton promotes the products to a lower-precision accumulation or reorders catastrophically, per-step error could add to the fp16 error. Worth a decisive probe distinguishing fp16-state error from reduction error.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "The contract only bounds final relative L2 error; whether per-step fp32 reduction error matters is unknown until the fp16 claim is measured \u2014 reduction-order error alone is far below tolerance and likely not contract-decisive.",
+    "statement": "The per-step matvec reduction tl.sum(matrix * state[None,:], axis=1) computed in fp32 contributes negligible error compared to the fp16 state quantization, i.e., a hypothetical variant kernel without the fp16 cast would meet the 0.002 tolerance.",
     "status": "open"
   }
 
-### Turn 5 - `describer` (18.513913518999985s, in=14047 out=1244)
+### Turn 4 - `experimenter` (14.660424335000002s, in=14202 out=823)
 
 Message:
 
 ```text
-The description model is already recorded and the source is fully understood; the two open claims need numeric evidence, not more description. I'll add a targeted analytical refinement (per-mode error magnitudes under the actual eigenstructure) plus open questions tied to claims c1 and c2, so the Skeptic/Experimenter can resolve them efficiently.
+I'll probe claim c1 directly: run both the actual kernel and a modified Triton kernel with the fp16 cast removed, and compare each to the float64 reference on the fixed seeded workload.
 ```
 
 Tool calls:
 
-- `record_description_update -> t10 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
-    "impact_on_claims": [
-      "Analytic support for c1: per-mode Richardson truncation error relative to ||x|| is ~0.96875^64 \u2248 0.13 regardless of rhs projection weights, because the \u03bb_min mode dominates both error and ||x||; Experimenter should confirm numerically (c1).",
-      "c2 remains unresolvable by source analysis alone: float32 rounding must be measured by comparing float32 vs float64 simulations of the same 64-step iteration."
-    ],
-    "kernel_model": [
-      "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
-      "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min
-  ...[truncated 2831 chars]
+    "claim_id": "c1",
+    "code": "import json, sys, torch, numpy as np, triton, triton.language as tl\nsys.path.insert(0, \"/root/numerical_cases/case_f\")\nimport kernel as K\n\n@triton.jit\ndef _variant(Matrix, Initial, Drive, Output, N: tl.constexpr, STEPS: tl.constexpr):\n    i = tl.arange(0, N)\n    j = tl.arange(0, N)\n    matrix = tl.load(Matrix + i[:, None] * N + j[None, :])\n    state = tl.load(Initial + i).to(tl.float32)\n    for step in range(STEPS):\n        forcing = tl.load(Drive + step * N + i)\n        next_state = tl.sum(matrix * state[None, :], axis=1) + forcing\n        state = next_state  # no fp16 quantization\n    tl.store(Output + i, state)\n\nmatrix, initial, drive = K.make_inputs(\"cuda\")\n\n# float64 reference on the float32 inputs\nm64 = matrix.double().cpu().num
+  ...[truncated 1178 chars]
   Output summary:
   {
-    "contract_model": [],
-    "impact_on_claims": [
-      "Analytic support for c1: per-mode Richardson truncation error relative to ||x|| is ~0.96875^64 \u2248 0.13 regardless of rhs projection weights, because the \u03bb_min mode dominates both error and ||x||; Experimenter should confirm numerically (c1).",
-      "c2 remains unresolvable by source analysis alone: float32 rounding must be measured by comparing float32 vs float64 simulations of the same 64-step iteration."
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "4831e508e0e7d824afdf37ecf08c93dea4ada02a9aaef139cc4ec209dfa2cd38"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "494f7145be4323801922804a9459faaea9bda14b1f96bd7338cc747c3ba4161c"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t8_json_result.json",
+        "sha256": "503728b38366215213c0448a26033868ede96aecf7d7fe3edb6f8e886a4f83a4"
+      }
     ],
-    "kernel_model": [
-      "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
-      "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other am
-  ...[truncated 2519 chars]
+    "claim_id": "c1",
+    "claim_statement": "The per-step matvec reduction tl.sum(matrix * state[None,:], axis=1) computed in fp32 contributes negligible error compared to the fp16 state quantization, i.e., a hypothetical variant kernel without the fp16 cast
+  ...[truncated 3195 chars]
 
-### Turn 6 - `skeptic` (5.153442721999994s, in=22553 out=237)
+### Turn 5 - `experimenter` (9.730701228000001s, in=17134 out=541)
 
 Message:
 
 ```text
-Both decisive in-scope claims (c1 slow-mode truncation, c2 fp32 rounding) are already recorded and need numeric probes from the Experimenter, not more skepticism. No new high-quality claims to add.
+The t8 probe is decisive: the variant without the fp16 cast achieves 1.1e-6 relative L2 (far under the 0.002 tolerance), so the fp32 reduction error is negligible — confirming c1. The same probe also measured the actual kernel's fp16-quantized error at 0.0049, which exceeds the contract tolerance; I'll record that number in the evidence data so the Judge has it available. Finalizing now.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t11 ok`
+- `finalize_probe_evidence -> t9 ok`
   Args:
   {
-    "reason": "The two open in-scope claims (c1: lambda_min=0.03125 mode leaves ~0.96875^64 \u2248 0.13 residual after 64 unit-step Richardson iterations, likely exceeding the 0.08 relative L2 tolerance; c2: fp32 rounding accumulation) already cover the full risk surface of this deterministic workload. The kernel has no other attack surfaces in scope (fixed 16x16 workload, single Triton program, no indexing/dtype/stride concerns at N=16 with contiguous make_inputs tensors). Resolving these claims requires the pending numeric probes against the seeded inputs, not new claims.",
+    "data": {
+      "note_fp16_kernel_exceeds_tolerance": 0.0049078394023965525,
+      "rel_l2_fp16_kernel": 0.0049078394023965525,
+      "rel_l2_variant_no_fp16": 1.1069859558201343e-06,
+      "tolerance": 0.002
+    },
+    "event_id": "t8",
+    "summary": "On the fixed seeded workload, the variant kernel identical to the artifact kernel except with the fp16 cast removed achieves relative L2 error 1.11e-06 vs the float64 reference (tolerance 0.002), so the fp32 tl.sum reduction (with enable_fp_fusion=False) contributes negligible error relative to the fp16 state quantization. Decisively confirms c1. The same probe measured the actual kernel (with fp16 intermediate quantization) at rel L2 0.00491, exceeding the 0.002 tolerance \u2014 recorded here as supporting measurement for the Judge's overall verdict
+  ...[truncated 64 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "On the fixed seeded workload, the variant kernel identical to the artifact kernel except with the fp16 cast removed achieves relative L2 error 1.11e-06 vs the float64 reference (tolerance 0.002), so the fp32 tl.sum reduction (with enable_fp_fusion=False) contributes negligible error relative to the fp16 state quantization. Decisively confirms c1. The same probe measured the actual kernel (with fp16 intermediate quantization) at rel L2 0.00491, exceeding the 0.002 tolerance \u2014 recorded here as supporting measurement for the Judge's overall verdict; outputs finite, ref_norm 162.41.",
+    "supports": "confirmed",
+    "tool_event_id": "t8"
+  }
+
+### Turn 6 - `skeptic` (7.519902997999992s, in=20820 out=528)
+
+Message:
+
+```text
+The failed t6 call means the key in-scope claim (the fp16-quantized kernel itself exceeding tolerance) was never recorded — c1 only covers the reduction-error variant, though the decisive measurement (0.0049 > 0.002) exists in evidence. On this review turn, I'll re-record that claim properly with scope evidence so the Judge has it as an explicit claim.
+```
+
+Tool calls:
+
+- `record_claim -> t10 ok`
+  Args:
+  {
+    "rationale": "Source line 16 quantizes every intermediate state to fp16 (~2^-11 relative) before propagating it through a near-unity spectral-norm matrix over 64 steps, so rounding errors accumulate rather than wash out; probe t8 measured the actual kernel at relative L2 0.00491 versus the 0.002 tolerance on the exact fixed seeded workload.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract requires run(*make_inputs()) on the fixed seeded workload (matrix 16x16, initial (16,), drive (64,16), float32) to produce a finite (16,) output with relative L2 error at most 0.002 versus the float64 reference recurrence."
+      }
+    ],
+    "scope_rationale": "The contract in problem.txt fixes the exact input workload from make_inputs() and
+  ...[truncated 626 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "Source line 16 quantizes every intermediate state to fp16 (~2^-11 relative) before propagating it through a near-unity spectral-norm matrix over 64 steps, so rounding errors accumulate rather than wash out; probe t8 measured the actual kernel at relative L2 0.00491 versus the 0.002 tolerance on the exact fixed seeded workload.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract requires run(*make_inputs()) on the fixed seeded workload (matrix 16x16, initial (16,), drive (64,16), float32) to produce a finite (16,) output with relative L2 error at most 0.002 versus the float64 reference recurrence."
+      }
+    ],
+    "scope_rationale": "The contract in problem.txt fixes the exact input workload from make_inputs() and requires final relative L2 error <= 0.002 versus the float64 reference; probe t8 ran exactly that workload and measured 0.00491, exceeding the stated bound. This is a direct violation of a stated numeric requirement on the contract's own inputs.",
+    "statement": "On the fixed seeded workload from make_inputs(), run() rounds every intermediate state to fp16 (kernel.py line 16, .to(tl
+  ...[truncated 260 chars]
+
+### Turn 7 - `describer` (13.164815690000012s, in=20874 out=978)
+
+Message:
+
+```text
+The description model's open questions about fp16 accumulation have now been answered by probe t8, so I'll update the model to reflect that evidence while leaving claim adjudication to the Skeptic and Judge.
+```
+
+Tool calls:
+
+- `record_description_update -> t11 ok`
+  Args:
+  {
+    "contract_model": [
+      "Reference is a 64-step linear recurrence: state = matrix @ state + drive[t], computed in float64 on the float32 inputs from make_inputs(); only that fixed workload is in scope.",
+      "Output must be a finite float32-shape (16,) vector with relative L2 error <= 0.002 versus reference, using denominator max(||ref||_2, 0.001*sqrt(16)).",
+      "Intermediate-state approximation is explicitly permitted by the contract; only the final output error matters.",
+      "Target device is an NVIDIA T4; alternative inputs are out of scope."
+    ],
+    "impact_on_claims": [
+      "Prior open question about whether fp16 accumulation exceeds tolerance is now measured: it does (0.00491 > 0.002), directly informing open claim c2.",
+      "Prior open question about reduction-order error is re
+  ...[truncated 3040 chars]
+  Output summary:
+  {
+    "contract_model": [
+      "Reference is a 64-step linear recurrence: state = matrix @ state + drive[t], computed in float64 on the float32 inputs from make_inputs(); only that fixed workload is in scope.",
+      "Output must be a finite float32-shape (16,) vector with relative L2 error <= 0.002 versus reference, using denominator max(||ref||_2, 0.001*sqrt(16)).",
+      "Intermediate-state approximation is explicitly permitted by the contract; only the final output error matters.",
+      "Target device is an NVIDIA T4; alternative inputs are out of scope."
+    ],
+    "impact_on_claims": [
+      "Prior open question about whether fp16 accumulation exceeds tolerance is now measured: it does (0.00491 > 0.002), directly informing open claim c2.",
+      "Prior open question about reduction-order error is resolved: it is negligible (1.11e-06 without the fp16 cast), consistent with confirmed claim c1."
+    ],
+    "kernel_model": [
+      "Triton kernel with a single program: loads the full 16x16 matrix, initial state (cast to fp32), and iterates 64 steps, each computing tl.sum(matrix * state) + forcing (lines 13-15).",
+      "Critical detail (line 16): after every step, state is cast to fp16 and back to fp32, 
+  ...[truncated 2704 chars]
+
+### Turn 8 - `skeptic` (7.607598287000002s, in=28237 out=287)
+
+Message:
+
+```text
+This is the final review turn. The decisive in-scope claim (c2: fp16 intermediate quantization violates the 0.002 tolerance, measured at 0.00491 on the exact contract workload) is already recorded and backed by probe t8's runtime evidence; the isolating variant (c1, 1.11e-06 without the cast) is confirmed. No new evidence exposes any uncovered problem, so I'll record no new claims.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t12 ok`
+  Args:
+  {
+    "reason": "Final review: the only material in-scope failure mode (accumulated fp16 intermediate-state quantization) is captured by claim c2 and directly measured by probe t8 on the exact contract workload (rel L2 0.00491 vs tolerance 0.002, ~2.5x over), with the fp32-reduction-only variant confirmed near-exact (1.11e-06) by c1.e1, isolating fp16 rounding as the sole error source. Output is finite, shapes/dtypes match the contract, and the only fixed workload is in scope. No additional testable, in-scope problem is exposed by the new evidence.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -266,67 +327,30 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The two open in-scope claims (c1: lambda_min=0.03125 mode leaves ~0.96875^64 \u2248 0.13 residual after 64 unit-step Richardson iterations, likely exceeding the 0.08 relative L2 tolerance; c2: fp32 rounding accumulation) already cover the full risk surface of this deterministic workload. The kernel has no other attack surfaces in scope (fixed 16x16 workload, single Triton program, no indexing/dtype/stride concerns at N=16 with contiguous make_inputs tensors). Resolving these claims requires the pending numeric probes against the seeded inputs, not new claims.",
+    "reason": "Final review: the only material in-scope failure mode (accumulated fp16 intermediate-state quantization) is captured by claim c2 and directly measured by probe t8 on the exact contract workload (rel L2 0.00491 vs tolerance 0.002, ~2.5x over), with the fp32-reduction-only variant confirmed near-exact (1.11e-06) by c1.e1, isolating fp16 rounding as the sole error source. Output is finite, shapes/dtypes match the contract, and the only fixed workload is in scope. No additional testable, in-scope problem is exposed by the new evidence.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 10,
-    "turn": 6
+    "reviewed_tool_event_count": 11,
+    "turn": 8
   }
 
-### Turn 7 - `experimenter` (10.66204881600001s, in=23737 out=882)
+### Turn 9 - `experimenter` (10.198841068000007s, in=28450 out=514)
 
 Message:
 
 ```text
-I'll launch two independent probes: c1 runs the actual kernel on the seeded inputs and measures the contract's relative L2 error vs the exact float64 solve; c2 compares a float32-simulated 64-step iteration against a float64-simulated one to isolate rounding error.
+Claim c2 is open with no evidence attached to it (the t8 measurement was recorded under c1). I'll run a dedicated probe for c2 that measures the actual kernel's output on the exact seeded workload against the float64 reference.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t12 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "\nimport json\nimport numpy as np\nimport torch\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_l\")\nimport kernel as K\n\nmatrix, rhs = K.make_inputs()\nout = K.run(matrix, rhs)\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nA = matrix.cpu().numpy().astype(np.float64)\nb = rhs.cpu().numpy().astype(np.float64)\nx = np.linalg.solve(A, b)\n\ndenom = max(np.linalg.norm(x), 0.001*np.sqrt(16))\nrel = np.linalg.norm(out_np - x) / denom\n\n# per-mode diagnostics\nw, V = np.linalg.eigh(A)\nc = V.T @ b\n# error in eigenbasis\nerr_e = V.T @ (out_np - x)\nx_e = V.T @ x\nres = {\"rel_l2_error\": float(rel),\n       \"tolerance\": 0.08,\n       \"exceeds_tolerance\": bool(rel > 0.08),\n       \"norm_x\": float(np.linalg.norm(x)),\n       \"c_mi
-  ...[truncated 407 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "826cd49894d04e437cb10000880d6aedd2ff9dc81535f569c7550833f72d48a1"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converg
-  ...[truncated 3608 chars]
 - `run_claim_probe -> t13 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport json\nimport numpy as np\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_l\")\nimport kernel as K\n\nmatrix, rhs = K.make_inputs_numpy()\nA32 = matrix.astype(np.float32)\nb32 = rhs.astype(np.float32)\n\ndef iterate(A, b, dtype):\n    state = np.zeros(16, dtype=dtype)\n    A_ = A.astype(dtype); b_ = b.astype(dtype)\n    for _ in range(64):\n        residual = b_ - (A_ * state[None, :]).sum(axis=1, dtype=dtype)\n        state = state + residual\n    return state\n\nx64 = iterate(matrix, rhs, np.float64)\nx32 = iterate(matrix, rhs, np.float32)\nx_exact = np.linalg.solve(matrix.astype(np.float64), rhs.astype(np.float64))\ndenom = max(np.linalg.norm(x_exact), 0.001*np.sqrt(16))\n\nrel32_exact = np.linalg.norm(x32.astype(np.float64) - x_exac
+    "code": "import json, sys, torch, numpy as np\nsys.path.insert(0, \"/root/numerical_cases/case_f\")\nimport kernel as K\n\nmatrix, initial, drive = K.make_inputs(\"cuda\")\n\nm64 = matrix.double().cpu().numpy()\ns64 = initial.double().cpu().numpy().astype(np.float64)\nd64 = drive.double().cpu().numpy().astype(np.float64)\nref = s64.copy()\nfor t in range(64):\n    ref = m64 @ ref + d64[t]\n\nout = K.run(matrix, initial, drive).cpu().numpy()\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(16))\nrel = np.linalg.norm(out.astype(np.float64) - ref)/denom\n\n# error decomposition: per-step fp16 rounding of intermediate states (source line 16)\nsim = s64.copy()\nfor t in range(64):\n    nxt = m64 @ sim + d64[t]\n    sim = nxt.astype(np.float16).astype(np.float64)\nrel_sim 
   ...[truncated 675 chars]
   Output summary:
   {
@@ -335,13 +359,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t13_probe.py",
-        "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+        "sha256": "846f13c47b9d346775d176e144f8dd450980d167208819f58cd11ca2ba89aa06"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t13_stdout.txt",
-        "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+        "sha256": "7707393dca5b435fc9d448bb2f461a01d7b512bd3aa70efee2b4b790e7ce7481"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -353,19 +377,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t13_json_result.json",
-        "sha256": "2ef2c06a64836b8671e48def2524456251706ed598819d13975030b7fe0e5df2"
+        "sha256": "3d3cdcdd5c48802156b240d40427fb1d7529ce90be12c3e4b08b1507ccd5e7f6"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration woul
-  ...[truncated 3353 chars]
+    "claim_statement": "On the fixed seeded workload from make_inputs(), run() rounds every intermediate state to fp16 (kernel.py line 16, .to(tl.float16).to(tl.float32)), and the accumulated quantization error over 64 recurrence ste
+  ...[truncated 3736 chars]
 
-### Turn 8 - `experimenter` (19.346130404999997s, in=28002 out=627)
+### Turn 10 - `experimenter` (6.766284501999991s, in=29636 out=367)
 
 Message:
 
 ```text
-Both probes completed. The actual kernel run gives relative L2 error 0.1244 (tolerance 0.08), dominated by the λ_min mode error, confirming c1; fp32 vs fp64 64-step simulations differ by only 8e-12, so rounding is not the deciding factor — c2 is rebutted. Finalizing both now.
+Probe t13 directly measured the actual kernel on the exact contract workload: rel L2 = 0.0049078 > 0.002 tolerance, and the fp16-per-step simulation reproduces the kernel error exactly (0.0049078), isolating the fp16 cast as the error source. Finalizing c2 as confirmed; both claims are then fully evidenced.
 ```
 
 Tool calls:
@@ -374,69 +398,45 @@ Tool calls:
   Args:
   {
     "data": {
-      "c_min_abs": 0.5398499052971611,
-      "c_second_abs": 0.3423996251076437,
-      "err_eig_min": -2.2645018696784973,
-      "exceeds_tolerance": true,
-      "lambda_min": 0.03125,
-      "norm_x": 18.216566495477316,
-      "output_finite": true,
-      "rel_l2_error": 0.12440399903958174,
-      "tolerance": 0.08,
-      "x_eig_min": 17.27519696950914
-    },
-    "event_id": "t12",
-    "status": "confirmed",
-    "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncati
-  ...[truncated 43 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.",
-    "supports": "confirmed",
-    "tool_event_id": "t12"
-  }
-- `finalize_probe_evidence -> t15 ok`
-  Args:
-  {
-    "data": {
-      "fp32_rounding_meaningful": false,
-      "rel_fp32_iteration_vs_exact": 0.12440403301072775,
-      "rel_fp64_iteration_vs_exact": 0.12440403300244632,
-      "rounding_shift_abs": 8.281431096435199e-12,
-      "tolerance": 0.08
+      "max_rel_l2": 0.0049078394023965525,
+      "out_dtype": "float32",
+      "out_finite": true,
+      "out_shape": [
+        16
+      ],
+      "ref_norm": 162.41431887628192,
+      "rel_l2_fp16_per_step_sim": 0.0049078394023965525,
+      "rel_l2_kernel": 0.0049078394023965525,
+      "tolerance": 0.002
     },
     "event_id": "t13",
-    "status": "rebutted",
-    "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
-    "supports": "rebutted"
-  }
+    "status": "confirmed",
+    "summary": "On the exact fixed seeded workload from make_inputs(), the actual kernel run() produces a finite float32 (16,) output with relative L2 error 0.0049078 vs the float64 reference, ~2.45x the contract tolerance of 0.002 \u2014 a direct contract violation. A float64 simulation that rounds each intermediate state to fp16 per kernel line 16 reproduces the kernel error exactly (0.0049078), confirming the accumulated fp16 state quantization
+  ...[truncated 95 chars]
   Output summary:
   {
     "claim_id": "c2",
-    "claim_status": "rebutted",
+    "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
-    "supports": "rebutted",
+    "summary": "On the exact fixed seeded workload from make_inputs(), the actual kernel run() produces a finite float32 (16,) output with relative L2 error 0.0049078 vs the float64 reference, ~2.45x the contract tolerance of 0.002 \u2014 a direct contract violation. A float64 simulation that rounds each intermediate state to fp16 per kernel line 16 reproduces the kernel error exactly (0.0049078), confirming the accumulated fp16 state quantization is the sole and sufficient error source. Decisively confirms c2.",
+    "supports": "confirmed",
     "tool_event_id": "t13"
   }
 
-### Turn 9 - `skeptic` (7.3471393590000105s, in=34597 out=290)
+### Turn 11 - `skeptic` (7.1269333519999805s, in=32690 out=297)
 
 Message:
 
 ```text
-The evidence is decisive: c1 is confirmed with a runtime probe on the exact contract workload (relative L2 error 0.1244 vs the 0.08 tolerance, dominated by the λ_min mode exactly as predicted), and c2 is rebutted (fp32 rounding shifts error by only 8e-12). No new claims needed.
+This is the final review turn. Both claims (c1, c2) are confirmed with decisive runtime evidence on the exact contract workload: the kernel's per-step fp16 quantization yields relative L2 0.00491 versus the 0.002 tolerance, and the no-cast variant isolates that as the sole error source. No uncovered material problem remains.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_no_new_claims -> t15 ok`
   Args:
   {
-    "reason": "Final review: c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244, 1.55x above the 0.08 tolerance, dominated by the lambda_min=0.03125 eigenmode error (-2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the claim's mechanism exactly. c2 is rebutted (fp32 vs fp64 64-step iterations differ by 8.3e-12; rounding cannot cross the tolerance boundary). No other in-scope attack surface exists: the workload is fully deterministic, output is finite and shape (16,), and the single failure mode is already covered by a confirmed in-scope claim with direct evidence.",
+    "reason": "Final review after probe t13: the sole material in-scope failure mode is captured by claim c2, now decisively confirmed \u2014 on the exact fixed seeded workload from make_inputs(), run() produces a finite float32 (16,) output with relative L2 error 0.0049078 vs the float64 reference, ~2.45x the contract tolerance of 0.002. A per-step fp16 rounding simulation reproduces the kernel error exactly, and the identical no-cast variant (c1, confirmed) achieves 1.11e-06, isolating the fp16 intermediate cast (kernel.py line 16) as the sole and sufficient error source. Shapes, dtype, finiteness, and workload all match the contract; alternative inputs are out of scope per problem.txt. No additional testable in-scope problem is exposed.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -445,144 +445,149 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244, 1.55x above the 0.08 tolerance, dominated by the lambda_min=0.03125 eigenmode error (-2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the claim's mechanism exactly. c2 is rebutted (fp32 vs fp64 64-step iterations differ by 8.3e-12; rounding cannot cross the tolerance boundary). No other in-scope attack surface exists: the workload is fully deterministic, output is finite and shape (16,), and the single failure mode is already covered by a confirmed in-scope claim with direct evidence.",
+    "reason": "Final review after probe t13: the sole material in-scope failure mode is captured by claim c2, now decisively confirmed \u2014 on the exact fixed seeded workload from make_inputs(), run() produces a finite float32 (16,) output with relative L2 error 0.0049078 vs the float64 reference, ~2.45x the contract tolerance of 0.002. A per-step fp16 rounding simulation reproduces the kernel error exactly, and the identical no-cast variant (c1, confirmed) achieves 1.11e-06, isolating the fp16 intermediate cast (kernel.py line 16) as the sole and sufficient error source. Shapes, dtype, finiteness, and workload all match the contract; alternative inputs are out of scope per problem.txt. No additional testable in-scope problem is exposed.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 15,
-    "turn": 9
+    "reviewed_tool_event_count": 14,
+    "turn": 11
   }
 
-### Turn 10 - `judge` (16.630868437000004s, in=34807 out=425)
+### Turn 12 - `judge` (8.272383039000005s, in=32937 out=431)
 
 Message:
 
 ```text
-The evidence is decisive: claim c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload — relative L2 error 0.1244 vs the 0.08 tolerance, dominated by the λ_min=0.03125 slow-mode truncation exactly as predicted. Claim c2 (fp32 rounding) is rebutted. Skeptic signed off with no new claims, and no open claims remain.
+Evidence is decisive: claim c2 is confirmed, in_scope, and backed by two independent GPU probes (t8, t13) on the exact contract workload showing relative L2 error 0.00491 vs the 0.002 tolerance, with the fp16 intermediate cast isolated as the sole error source. Skeptic signed off, no open claims. Recording reject.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `record_verdict -> t16 ok`
   Args:
   {
     "confidence": 0.97,
     "decisive_claims": [
-      "c1"
+      "c2"
     ],
-    "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated itera
-  ...[truncated 483 chars]
+    "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the contract's own input domain: problem.txt fixes the exact seeded workload from make_inputs() and requires run(*make_inputs()) to produce a finite (16,) float32 output with relative L2 error at most 0.002 versus the float64 64-step recurrence reference. Probes t8 and t13 (GPU, exact seeded workload) both measured the actual kernel at relative L2 0.0049078 \u2014 ~2.45x the tolerance \u2014 while the identical variant without the fp16 intermediate cast achieves 1.11e-06 (claim c1, confirmed), and a float64 simulation rounding each intermediate state to fp16 reproduces the kernel error exactly. This isolates the fp16 quantization at kernel.py line 
+  ...[truncated 620 chars]
   Output summary:
   {
     "confidence": 0.97,
     "decisive_claims": [
-      "c1"
+      "c2"
     ],
-    "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated iterations differ by only 8.3e-12 and both are equally above tolerance, so truncation error alone breaches the contract. This is not an acceptable deviation under any contract clause \u2014 the tolerance is an explicit numeric requirement the kernel fails on the single in-scope deterministic workload. Scope evidence ties the claim directly to the make_inputs() input domain per problem.txt, and the Skep
-  ...[truncated 83 chars]
+    "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the contract's own input domain: problem.txt fixes the exact seeded workload from make_inputs() and requires run(*make_inputs()) to produce a finite (16,) float32 output with relative L2 error at most 0.002 versus the float64 64-step recurrence reference. Probes t8 and t13 (GPU, exact seeded workload) both measured the actual kernel at relative L2 0.0049078 \u2014 ~2.45x the tolerance \u2014 while the identical variant without the fp16 intermediate cast achieves 1.11e-06 (claim c1, confirmed), and a float64 simulation rounding each intermediate state to fp16 reproduces the kernel error exactly. This isolates the fp16 quantization at kernel.py line 16 (.to(tl.float16).to(tl.float32)) as the sole and sufficient error source. Note the contract explicitly permits intermediate-state approximation but binds the FINAL output error to <= 0.002; since the final output violates that explicit numeric requirement on the contract's only in-scope workload, this is a defect, not an acceptable approximation. The only caveat (probe hardware not verified to 
+  ...[truncated 220 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
-    "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
-    "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+    "Reference is a 64-step linear recurrence: state = matrix @ state + drive[t], computed in float64 on the float32 inputs from make_inputs(); only that fixed workload is in scope.",
+    "Output must be a finite float32-shape (16,) vector with relative L2 error <= 0.002 versus reference, using denominator max(||ref||_2, 0.001*sqrt(16)).",
+    "Intermediate-state approximation is explicitly permitted by the contract; only the final output error matters.",
+    "Target device is an NVIDIA T4; alternative inputs are out of scope."
   ],
   "kernel_model": [
-    "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
-    "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
-    "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002).",
-    "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
-    "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
-    "Float32 rounding: each iteration does 16-term dot products and
-...[truncated 3203 chars]
+    "Triton kernel with a single program: loads the full 16x16 matrix, initial state (cast to fp32), and iterates 64 steps, each computing tl.sum(matrix * state) + forcing (line 13-15).",
+    "Critical detail (line 16): after every step, state is cast to fp16 and back to fp32, quantizing each intermediate state at ~2^-11 relative precision before the next step.",
+    "Final state is stored as float32 (line 17), so the output dtype is fine, but the accumulated fp16 rounding across 64 steps is the main risk surface.",
+    "run() launches exactly one block with N=16, STEPS=64 hardcoded, matching the fixed workload shapes; no shape checks, no guards on non-fixed inputs (out of scope per contract).",
+    "Input generator uses a structurally orthogonal matrix with diagonal eigenvalues in [0.875, 0.96875], so state magnitudes stay bounded but not strongly damped, and forcing is N(0,0.1) per step.",
+    "Triton kernel with a single program: loads the full 16x16 matrix, initial state (cast to fp32), and iterates 64 steps, each computing tl.sum(matrix * state) + forcing (lines 13-15).",
+    "Critical detail (line 16): after every step, state is cast to fp16 and back to fp32, quantizing each intermediate state at ~2^-11 relative precision before the next step; this is the sole difference from the near-exact no-cast variant.",
+    "Final state is stored as float32 (line 17); output is finite on the fixed w
+...[truncated 3527 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Case_l: Richardson-iteration (state += residual, unit step, 64 steps) solver for a fixed 16x16 SPD system with eigenvalues 0.03125–1.75. Contract allows any approximate solver with relative L2 error ≤ 0.08 vs the float64 exact solution.
-- `du2` tasks=`initial`: Refinement for case_l: analytic per-mode error analysis shows the relative L2 error of the 64-step Richardson iteration is dominated by the λ_min=0.03125 mode at ~0.96875^64 ≈ 0.13 of that mode's contribution to ||x||; float32 rounding is ~3 orders smaller. Claims c1/c2 need a numeric probe with the seeded inputs.
+- `du1` tasks=`initial`: Kernel runs a 64-step 16-state linear recurrence in one Triton program, quantizing each intermediate state to fp16 before the next step, outputting final state in fp32. Contract requires relative L2 error <= 0.002 vs a float64 reference on the fixed seeded workload.
+- `du2` tasks=`initial`: Evidence from probe t8 resolves the prior open questions: on the exact fixed seeded workload, the kernel's per-step fp16 state quantization yields relative L2 error 0.00491 (> 0.002 tolerance), while the identical variant without the fp16 cast achieves 1.11e-06, isolating fp16 intermediate rounding as the sole error source. Description model updated; remaining questions are only about hardware-environment fidelity of the probe versus the T4 target.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the λ_min=0.03125 eigenmode converges only by factor 0.96875 per step (≈13% residual after 64 steps).
+Statement: The per-step matvec reduction tl.sum(matrix * state[None,:], axis=1) computed in fp32 contributes negligible error compared to the fp16 state quantization, i.e., a hypothetical variant kernel without the fp16 cast would meet the 0.002 tolerance.
+
+Scope: `unknown`
+
+Scope rationale: The contract only bounds final relative L2 error; whether per-step fp32 reduction error matters is unknown until the fp16 claim is measured — reduction-order error alone is far below tolerance and likely not contract-decisive.
+
+Rationale: tl.sum over 16 fp32 products plus forcing is computed in fp32 with enable_fp_fusion disabled, which should be near-exact; but if Triton promotes the products to a lower-precision accumulation or reorders catastrophically, per-step error could add to the fp16 error. Worth a decisive probe distinguishing fp16-state error from reduction error.
+
+Evidence:
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: On the fixed seeded workload, the variant kernel identical to the artifact kernel except with the fp16 cast removed achieves relative L2 error 1.11e-06 vs the float64 reference (tolerance 0.002), so the fp32 tl.sum reduction (with enable_fp_fusion=False) contributes negligible error relative to the fp16 state quantization. Decisively confirms c1. The same probe measured the actual kernel (with fp16 intermediate quantization) at rel L2 0.00491, exceeding the 0.002 tolerance — recorded here as supporting measurement for the Judge's overall verdict; outputs finite, ref_norm 162.41.
+
+### c2 - `confirmed`
+
+Statement: On the fixed seeded workload from make_inputs(), run() rounds every intermediate state to fp16 (kernel.py line 16, .to(tl.float16).to(tl.float32)), and the accumulated quantization error over 64 recurrence steps makes the final output violate the contract's relative L2 tolerance of 0.002 versus the float64 reference (measured 0.00491, ~2.5x the tolerance).
 
 Scope: `in_scope`
 
-Scope rationale: The contract fixes the exact make_inputs() workload (λ_min = 0.03125) and requires relative L2 error ≤ 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.
+Scope rationale: The contract in problem.txt fixes the exact input workload from make_inputs() and requires final relative L2 error <= 0.002 versus the float64 reference; probe t8 ran exactly that workload and measured 0.00491, exceeding the stated bound. This is a direct violation of a stated numeric requirement on the contract's own inputs.
 
 Scope evidence:
-- `problem.txt`: Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125.
+- `problem.txt`: The contract requires run(*make_inputs()) on the fixed seeded workload (matrix 16x16, initial (16,), drive (64,16), float32) to produce a finite (16,) output with relative L2 error at most 0.002 versus the float64 reference recurrence.
 
-Rationale: Richardson error along eigenvector k is (1-λ_k)^64 * (rhs component)/λ_k. For λ=0.03125, 0.96875^64 ≈ 0.13, so the error component relative to x's λ^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution — 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 ≈ 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.
-
-### c2 - `rebutted`
-
-Statement: The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.
-
-Scope: `in_scope`
-
-Scope rationale: The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.
-
-Scope evidence:
-- `problem.txt`: Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget.
-
-Rationale: 64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.
+Rationale: Source line 16 quantizes every intermediate state to fp16 (~2^-11 relative) before propagating it through a near-unity spectral-norm matrix over 64 steps, so rounding errors accumulate rather than wash out; probe t8 measured the actual kernel at relative L2 0.00491 versus the 0.002 tolerance on the exact fixed seeded workload.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: On the exact fixed seeded workload from make_inputs(), the actual kernel run() produces a finite float32 (16,) output with relative L2 error 0.0049078 vs the float64 reference, ~2.45x the contract tolerance of 0.002 — a direct contract violation. A float64 simulation that rounds each intermediate state to fp16 per kernel line 16 reproduces the kernel error exactly (0.0049078), confirming the accumulated fp16 state quantization is the sole and sufficient error source. Decisively confirms c2.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_l"
+  "entry": "case_f"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Solve the fixed SPD 16x16 system matrix @ x = rhs for the exact tensors from make_inputs(); reference x is computed in float64 from the original float32 inputs (the true solution, not a finite iteration).",
-    "Output must be a finite (16,) vector with relative L2 error ||out - x||/max(||x||, 0.001*sqrt(16)) at most 0.08; approximate solvers are allowed.",
-    "Scope is only this deterministic workload (seed 701002, fixed eigenvalue set); other matrices/rhs are out of scope. Target device NVIDIA T4, float32 inputs."
+    "Reference is a 64-step linear recurrence: state = matrix @ state + drive[t], computed in float64 on the float32 inputs from make_inputs(); only that fixed workload is in scope.",
+    "Output must be a finite float32-shape (16,) vector with relative L2 error <= 0.002 versus reference, using denominator max(||ref||_2, 0.001*sqrt(16)).",
+    "Intermediate-state approximation is explicitly permitted by the contract; only the final output error matters.",
+    "Target device is an NVIDIA T4; alternative inputs are out of scope."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Kernel loads the full 16x16 matrix and rhs into registers (single program, N=16 constexpr) and runs 64 fixed Richardson iterations: state += rhs - A@state, i.e. update x_{k+1} = x_k + r_k with unit step length.",
-    "No step-size/damping parameter, no convergence check; output is float32 state after exactly STEPS=64; enable_fp_fusion=False and num_warps=4.",
-    "Iteration in float32; matrix entries are float32 casts of the float64-constructed orthogonal-scaled eigenvalue matrix (eigenvalues 0.03125..1.75, scaled Hadamard-style orthogonal basis); rhs is a unit-norm normal vector (seed 701002)."
+    "Triton kernel with a single program: loads the full 16x16 matrix, initial state (cast to fp32), and iterates 64 steps, each computing tl.sum(matrix * state) + forcing (line 13-15).",
+    "Critical detail (line 16): after every step, state is cast to fp16 and back to fp32, quantizing each intermediate state at ~2^-11 relative precision before the next step.",
+    "Final state is stored as float32 (line 17), so the output dtype is fine, but the accumulated fp16 rounding across 64 steps is the main risk surface.",
+    "run() launches exactly one block with N=16, STEPS=64 hardcoded, matching the fixed workload shapes; no shape checks, no guards on non-fixed inputs (out of scope per contract).",
+    "Input generator uses a structurally orthogonal matrix with diagonal eigenvalues in [0.875, 0.96875], so state magnitudes stay bounded but not strongly damped, and forcing is N(0,0.1) per step."
   ],
-  "open_questions": [],
+  "open_questions": [
+    "Does the accumulated fp16 quantization error actually exceed 0.002 relative L2 on this exact seeded workload, or does the fp16 grid snap most entries to values whose compounding stays under tolerance?",
+    "Does tl.load of a float32 matrix keep values exactly representable in fp16 (avoiding further rounding in the multiply itself), and does sum order matter at this precision?"
+  ],
   "resolved_tasks": [],
   "risk_map": [
-    "Richardson with unit step requires all eigenvalues in (0,2); here max eigenvalue is 1.75 so iteration is stable, but min eigenvalue 0.03125 gives per-step factor |1-0.03125|=0.96875, and 0.96875^64 \u2248 0.13 residual along that mode \u2014 relative to x (where that mode is amplified by 1/lambda = 32), the dominant slow mode may leave error near ~13%, above the 0.08 tolerance. Skeptic should quantify the actual per-mode residual against rhs's components.",
-    "Error relative to max(||x||, 0.001*sqrt(16)): ||x|| is large due to the 1/0.03125 amplification, which partially offsets the slow-mode residual; the exact relative error depends on rhs's projection onto the smallest eigenvectors \u2014 needs numeri
-...[truncated 812 chars]
+    "Accumulated fp16 roundin
+...[truncated 1523 chars]
 
 ### t6 - record_claim - error
 
@@ -591,112 +596,51 @@ Evidence:
   "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t7 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t8 - record_claim - ok
+### t7 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Richardson error along eigenvector k is (1-\u03bb_k)^64 * (rhs component)/\u03bb_k. For \u03bb=0.03125, 0.96875^64 \u2248 0.13, so the error component relative to x's \u03bb^{-1}-amplified component can approach ~13%, exceeding the 0.08 tolerance depending on rhs's projection onto that eigenvector. Needs numeric quantification against the actual seeded inputs.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Output must have relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) at most 0.08, where x is the exact float64 solution; the workload is the deterministic make_inputs() system with eigenvalues down to 0.03125."
-    }
-  ],
-  "scope_rationale": "The contract fixes the exact make_inputs() workload (\u03bb_min = 0.03125) and requires relative L2 error \u2264 0.08 vs the exact float64 solution; the deterministic slow-converging eigenmode is part of that required workload.",
-  "statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps).",
+  "rationale": "tl.sum over 16 fp32 products plus forcing is computed in fp32 with enable_fp_fusion disabled, which should be near-exact; but if Triton promotes the products to a lower-precision accumulation or reorders catastrophically, per-step error could add to the fp16 error. Worth a decisive probe distinguishing fp16-state error from reduction error.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "The contract only bounds final relative L2 error; whether per-step fp32 reduction error matters is unknown until the fp16 claim is measured \u2014 reduction-order error alone is far below tolerance and likely not contract-decisive.",
+  "statement": "The per-step matvec reduction tl.sum(matrix * state[None,:], axis=1) computed in fp32 contributes negligible error compared to the fp16 state quantization, i.e., a hypothetical variant kernel without the fp16 cast would meet the 0.002 tolerance.",
   "status": "open"
 }
 
-### t9 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "64 iterations of state += (rhs - A@state) in float32 with enable_fp_fusion=False accumulate rounding error that could add to truncation error near the tolerance boundary; worth measuring separately from the truncation error.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Reference is the exact float64 solution of matrix @ x = rhs with the supplied float32 values; kernel output must be within 0.08 relative L2, so any float32-rounding deviation counts toward the error budget."
-    }
-  ],
-  "scope_rationale": "The contract compares the kernel's float32 output against the exact float64 solution with a 0.08 relative L2 budget, so float32 rounding over 64 iterations counts toward that budget on the required workload.",
-  "statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.",
-  "status": "open"
-}
-
-### t10 - record_description_update - ok
-
-{
-  "contract_model": [],
-  "impact_on_claims": [
-    "Analytic support for c1: per-mode Richardson truncation error relative to ||x|| is ~0.96875^64 \u2248 0.13 regardless of rhs projection weights, because the \u03bb_min mode dominates both error and ||x||; Experimenter should confirm numerically (c1).",
-    "c2 remains unresolvable by source analysis alone: float32 rounding must be measured by comparing float32 vs float64 simulations of the same 64-step iteration."
-  ],
-  "kernel_model": [
-    "Eigenbasis note: the Hadamard-like orthogonal matrix scaled by 1/4 gives an orthonormal basis (rows have norm 16*(1/4)^2 = 1), so rhs components c_k = (basis^T rhs) have ||c||_2 = 1 spread over 16 modes, each typically |c_k| ~ 0.2-0.3.",
-    "Per-mode analysis: x_k = c_k/\u03bb_k, so ||x|| is dominated by the \u03bb_min=0.03125 mode (~|c_min|/0.03125); the post-64-step error along that mode is |1-\u03bb_min|^64 * |c_min|/\u03bb_min, i.e. exactly 0.96875^64 \u2248 0.130 times x's dominant component. Since the same mode dominates both error and ||x||, the relative L2 error is ~0.13 * (|c_min|/||x||-share) \u2014 close to but potentially slightly below 0.13 depending on c_min versus other amplified modes (\u03bb=0.0625 gives 0.017).",
-    "Float32 rounding: each iteration does 16-term dot products and a state update in fp32 with fp_fusion disabled; per-step rounding ~1e-6 relative, over 64 steps likely ~1e-4 \u2014 far below the 0.08 budget, so truncation error is the decisive factor (c2)."
-  ],
-  "open_questions": [
-    "What is the exact relative L2 error of the 64-step float32 iteration on the seeded inputs (needs a runtime or simulation probe)?",
-    "How large is c_min = |projection of rhs onto the \u03bb=0.03125 eigenvector| relative to the projections on \u03bb=0.0625 and 0.125 modes \u2014 i.e., is the relative error actually above or below the 0.08 threshold given the ~0.13 slow-mode factor?",
-    "Does the float32 iteration's rounding meaningfully shift the total er
-...[truncated 1719 chars]
-
-### t11 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "The two open in-scope claims (c1: lambda_min=0.03125 mode leaves ~0.96875^64 \u2248 0.13 residual after 64 unit-step Richardson iterations, likely exceeding the 0.08 relative L2 tolerance; c2: fp32 rounding accumulation) already cover the full risk surface of this deterministic workload. The kernel has no other attack surfaces in scope (fixed 16x16 workload, single Triton program, no indexing/dtype/stride concerns at N=16 with contiguous make_inputs tensors). Resolving these claims requires the pending numeric probes against the seeded inputs, not new claims.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 10,
-  "turn": 6
-}
-
-### t12 - run_claim_probe - ok
+### t8 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
+      "path": "probes/t8_probe.py",
+      "sha256": "4831e508e0e7d824afdf37ecf08c93dea4ada02a9aaef139cc4ec209dfa2cd38"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
+      "path": "probes/t8_stdout.txt",
+      "sha256": "494f7145be4323801922804a9459faaea9bda14b1f96bd7338cc747c3ba4161c"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
+      "path": "probes/t8_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "826cd49894d04e437cb10000880d6aedd2ff9dc81535f569c7550833f72d48a1"
+      "path": "probes/t8_json_result.json",
+      "sha256": "503728b38366215213c0448a26033868ede96aecf7d7fe3edb6f8e886a4f83a4"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "After exactly 64 unit-step Richardson iterations, run(*make_inputs()) produces an output whose relative L2 error against the exact float64 solution exceeds 0.08 because the \u03bb_min=0.03125 eigenmode converges only by factor 0.96875 per step (\u224813% residual after 64 steps).",
-  "duration_s": 6.049202,
-  "event_id": "t12",
+  "claim_statement": "The per-step matvec reduction tl.sum(matrix * state[None,:], axis=1) computed in fp32 contributes negligible error compared to the fp16 state quantization, i.e., a hypothetical variant kernel without the fp16 cast would meet the 0.002 tolerance.",
+  "duration_s": 5.70213,
+  "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -704,19 +648,83 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "95162e916dee7ee971461f6502b26532e7cb64600ae6f174bb96200cc1f6c113"
+          "path": "probes/t8_probe.py",
+          "sha256": "4831e508e0e7d824afdf37ecf08c93dea4ada02a9aaef139cc4ec209dfa2cd38"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "b810eaa2ff5104f2d81ea6e975364a3b72c4d67e89b0f2b696a3131efbc45005"
+          "path": "probes/t8_stdout.txt",
+          "sha256": "494f7145be4323801922804a9459faaea9bda14b1f96bd7338cc747c3ba4161c"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "st
-...[truncated 2808 chars]
+          "kind": "stderr",
+          "path": "probes/t8_stderr.
+...[truncated 2395 chars]
+
+### t9 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "On the fixed seeded workload, the variant kernel identical to the artifact kernel except with the fp16 cast removed achieves relative L2 error 1.11e-06 vs the float64 reference (tolerance 0.002), so the fp32 tl.sum reduction (with enable_fp_fusion=False) contributes negligible error relative to the fp16 state quantization. Decisively confirms c1. The same probe measured the actual kernel (with fp16 intermediate quantization) at rel L2 0.00491, exceeding the 0.002 tolerance \u2014 recorded here as supporting measurement for the Judge's overall verdict; outputs finite, ref_norm 162.41.",
+  "supports": "confirmed",
+  "tool_event_id": "t8"
+}
+
+### t10 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "Source line 16 quantizes every intermediate state to fp16 (~2^-11 relative) before propagating it through a near-unity spectral-norm matrix over 64 steps, so rounding errors accumulate rather than wash out; probe t8 measured the actual kernel at relative L2 0.00491 versus the 0.002 tolerance on the exact fixed seeded workload.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "The contract requires run(*make_inputs()) on the fixed seeded workload (matrix 16x16, initial (16,), drive (64,16), float32) to produce a finite (16,) output with relative L2 error at most 0.002 versus the float64 reference recurrence."
+    }
+  ],
+  "scope_rationale": "The contract in problem.txt fixes the exact input workload from make_inputs() and requires final relative L2 error <= 0.002 versus the float64 reference; probe t8 ran exactly that workload and measured 0.00491, exceeding the stated bound. This is a direct violation of a stated numeric requirement on the contract's own inputs.",
+  "statement": "On the fixed seeded workload from make_inputs(), run() rounds every intermediate state to fp16 (kernel.py line 16, .to(tl.float16).to(tl.float32)), and the accumulated quantization error over 64 recurrence steps makes the final output violate the contract's relative L2 tolerance of 0.002 versus the float64 reference (measured 0.00491, ~2.5x the tolerance).",
+  "status": "open"
+}
+
+### t11 - record_description_update - ok
+
+{
+  "contract_model": [
+    "Reference is a 64-step linear recurrence: state = matrix @ state + drive[t], computed in float64 on the float32 inputs from make_inputs(); only that fixed workload is in scope.",
+    "Output must be a finite float32-shape (16,) vector with relative L2 error <= 0.002 versus reference, using denominator max(||ref||_2, 0.001*sqrt(16)).",
+    "Intermediate-state approximation is explicitly permitted by the contract; only the final output error matters.",
+    "Target device is an NVIDIA T4; alternative inputs are out of scope."
+  ],
+  "impact_on_claims": [
+    "Prior open question about whether fp16 accumulation exceeds tolerance is now measured: it does (0.00491 > 0.002), directly informing open claim c2.",
+    "Prior open question about reduction-order error is resolved: it is negligible (1.11e-06 without the fp16 cast), consistent with confirmed claim c1."
+  ],
+  "kernel_model": [
+    "Triton kernel with a single program: loads the full 16x16 matrix, initial state (cast to fp32), and iterates 64 steps, each computing tl.sum(matrix * state) + forcing (lines 13-15).",
+    "Critical detail (line 16): after every step, state is cast to fp16 and back to fp32, quantizing each intermediate state at ~2^-11 relative precision before the next step; this is the sole difference from the near-exact no-cast variant.",
+    "Final state is stored as float32 (line 17); output is finite on the fixed workload (probe t8).",
+    "run() launches exactly one block with N=16, STEPS=64 hardcoded, matching the fixed workload shapes; no shape checks, out of scope per contract.",
+    "Input generator uses a structurally orthogonal matrix with diagonal eigenvalues in [0.875, 0.96875] so errors decay only slowly over 64 steps; forcing is N(0,0.1) per step.",
+    "Probe t8 (GPU, exact seeded workload): actual kernel rel L2 = 0.0049078 vs float64 reference (tolerance 0.002); identical variant without the fp16 cast = 1.11e-06, so the fp32 tl.sum reduction path is numerica
+...[truncated 1904 chars]
+
+### t12 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "Final review: the only material in-scope failure mode (accumulated fp16 intermediate-state quantization) is captured by claim c2 and directly measured by probe t8 on the exact contract workload (rel L2 0.00491 vs tolerance 0.002, ~2.5x over), with the fp32-reduction-only variant confirmed near-exact (1.11e-06) by c1.e1, isolating fp16 rounding as the sole error source. Output is finite, shapes/dtypes match the contract, and the only fixed workload is in scope. No additional testable, in-scope problem is exposed by the new evidence.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 11,
+  "turn": 8
+}
 
 ### t13 - run_claim_probe - ok
 
@@ -726,13 +734,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t13_probe.py",
-      "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+      "sha256": "846f13c47b9d346775d176e144f8dd450980d167208819f58cd11ca2ba89aa06"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t13_stdout.txt",
-      "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+      "sha256": "7707393dca5b435fc9d448bb2f461a01d7b512bd3aa70efee2b4b790e7ce7481"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -744,12 +752,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t13_json_result.json",
-      "sha256": "2ef2c06a64836b8671e48def2524456251706ed598819d13975030b7fe0e5df2"
+      "sha256": "3d3cdcdd5c48802156b240d40427fb1d7529ce90be12c3e4b08b1507ccd5e7f6"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "The float32 iterative accumulation over 64 steps adds rounding error on top of the truncation error, which could push the total relative L2 error above 0.08 even if the ideal (float64-simulated) iteration would land just under the tolerance.",
-  "duration_s": 3.307741,
+  "claim_statement": "On the fixed seeded workload from make_inputs(), run() rounds every intermediate state to fp16 (kernel.py line 16, .to(tl.float16).to(tl.float32)), and the accumulated quantization error over 64 recurrence steps makes the final output violate the contract's relative L2 tolerance of 0.002 versus the float64 reference (measured 0.00491, ~2.5x the tolerance).",
+  "duration_s": 4.910693,
   "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
@@ -759,63 +767,50 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t13_probe.py",
-          "sha256": "80426885439a9f89ceaf3858de82520411a609ac7e4341e9d37ccc12d94e36fb"
+          "sha256": "846f13c47b9d346775d176e144f8dd450980d167208819f58cd11ca2ba89aa06"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t13_stdout.txt",
-          "sha256": "410bd44fd5b56aedcb56393194f55888f0d33b1628aa16c8f7036d3fa5b83a83"
+          "sha256": "7707393dca5b435fc9d448bb2f461a01d7b512bd3aa70efee2b4b790e7ce7481"
         },
         {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t13_st
-...[truncated 2553 chars]
+          "
+...[truncated 2936 chars]
 
 ### t14 - finalize_probe_evidence - ok
 
 {
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Actual kernel run on the exact make_inputs() workload produced a finite (16,) output with relative L2 error 0.1244 vs the exact float64 solution \u2014 1.55x above the 0.08 tolerance. The error is dominated by the lambda_min=0.03125 eigenmode (eigenbasis error -2.2645 along that mode vs x component 17.28, ratio 0.131 \u2248 0.96875^64), exactly matching the claim's slow-mode truncation mechanism.",
-  "supports": "confirmed",
-  "tool_event_id": "t12"
-}
-
-### t15 - finalize_probe_evidence - ok
-
-{
   "claim_id": "c2",
-  "claim_status": "rebutted",
+  "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Float32 vs float64 simulation of the same 64-step Richardson iteration differ by only 8.3e-12 in relative L2 error against the exact solution, and both are equally far above tolerance (0.1244). The failure is pure truncation error from the slow lambda_min mode (c1), not float32 rounding; rounding cannot push the result across the 0.08 boundary because the ideal fp64 iteration is already far above it.",
-  "supports": "rebutted",
+  "summary": "On the exact fixed seeded workload from make_inputs(), the actual kernel run() produces a finite float32 (16,) output with relative L2 error 0.0049078 vs the float64 reference, ~2.45x the contract tolerance of 0.002 \u2014 a direct contract violation. A float64 simulation that rounds each intermediate state to fp16 per kernel line 16 reproduces the kernel error exactly (0.0049078), confirming the accumulated fp16 state quantization is the sole and sufficient error source. Decisively confirms c2.",
+  "supports": "confirmed",
   "tool_event_id": "t13"
 }
 
-### t16 - record_no_new_claims - ok
+### t15 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c1 is confirmed by a runtime probe of the actual kernel on the exact make_inputs() workload \u2014 relative L2 error 0.1244, 1.55x above the 0.08 tolerance, dominated by the lambda_min=0.03125 eigenmode error (-2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the claim's mechanism exactly. c2 is rebutted (fp32 vs fp64 64-step iterations differ by 8.3e-12; rounding cannot cross the tolerance boundary). No other in-scope attack surface exists: the workload is fully deterministic, output is finite and shape (16,), and the single failure mode is already covered by a confirmed in-scope claim with direct evidence.",
+  "reason": "Final review after probe t13: the sole material in-scope failure mode is captured by claim c2, now decisively confirmed \u2014 on the exact fixed seeded workload from make_inputs(), run() produces a finite float32 (16,) output with relative L2 error 0.0049078 vs the float64 reference, ~2.45x the contract tolerance of 0.002. A per-step fp16 rounding simulation reproduces the kernel error exactly, and the identical no-cast variant (c1, confirmed) achieves 1.11e-06, isolating the fp16 intermediate cast (kernel.py line 16) as the sole and sufficient error source. Shapes, dtype, finiteness, and workload all match the contract; alternative inputs are out of scope per problem.txt. No additional testable in-scope problem is exposed.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 15,
-  "turn": 9
+  "reviewed_tool_event_count": 14,
+  "turn": 11
 }
 
-### t17 - record_verdict - ok
+### t16 - record_verdict - ok
 
 {
   "confidence": 0.97,
   "decisive_claims": [
-    "c1"
+    "c2"
   ],
-  "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated iterations differ by only 8.3e-12 and both are equally above tolerance, so truncation error alone breaches the contract. This is not an acceptable deviation under any contract clause \u2014 the tolerance is an explicit numeric requirement the kernel fails on the single in-scope deterministic workload. Scope evidence ties the claim directly to the make_inputs() input domain per problem.txt, and the Skeptic reviewed the final evidence and raised no new claims.",
+  "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the contract's own input domain: problem.txt fixes the exact seeded workload from make_inputs() and requires run(*make_inputs()) to produce a finite (16,) float32 output with relative L2 error at most 0.002 versus the float64 64-step recurrence reference. Probes t8 and t13 (GPU, exact seeded workload) both measured the actual kernel at relative L2 0.0049078 \u2014 ~2.45x the tolerance \u2014 while the identical variant without the fp16 intermediate cast achieves 1.11e-06 (claim c1, confirmed), and a float64 simulation rounding each intermediate state to fp16 reproduces the kernel error exactly. This isolates the fp16 quantization at kernel.py line 16 (.to(tl.float16).to(tl.float32)) as the sole and sufficient error source. Note the contract explicitly permits intermediate-state approximation but binds the FINAL output error to <= 0.002; since the final output violates that explicit numeric requirement on the contract's only in-scope workload, this is a defect, not an acceptable approximation. The only caveat (probe hardware not verified to be exactly a T4) is immaterial given the ~2.5x margin and deterministic fp16 round-to-nearest behavior. Skeptic reviewed the latest evidence and recorded no new claims; all claims have evidence.",
   "verdict": "reject"
 }
 
@@ -823,10 +818,10 @@ Evidence:
 
 {
   "confidence": 0.97,
-  "created_at": "2026-09-24T00:18:12Z",
+  "created_at": "2026-09-23T21:37:41Z",
   "decisive_claims": [
-    "c1"
+    "c2"
   ],
-  "reason": "The contract (problem.txt) requires run(*make_inputs()) to output a finite (16,) vector within relative L2 error \u2264 0.08 of the exact float64 solution of matrix @ x = rhs. A runtime probe of the actual kernel on the exact seeded workload (probe t12) measured relative L2 error 0.1244 \u2014 1.55x above the 0.08 tolerance \u2014 with the error dominated by the \u03bb_min=0.03125 eigenmode (eigenbasis error -2.2645 vs x component 17.28, ratio 0.131 \u2248 0.96875^64), matching the confirmed in-scope claim c1's mechanism: 64 unit-step Richardson iterations converge too slowly along the smallest-eigenvalue mode. The alternate explanation (fp32 rounding, claim c2) was rebutted by probe t13: fp32 vs fp64 simulated iterations differ by only 8.3e-12 and both are equally above tolerance, so truncation error alone breaches the contract. This is not an acceptable deviation under any contract clause \u2014 the tolerance is an explicit numeric requirement the kernel fails on the single in-scope deterministic workload. Scope evidence ties the claim directly to the make_inputs() input domain per problem.txt, and the Skeptic reviewed the final evidence and raised no new claims.",
+  "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the contract's own input domain: problem.txt fixes the exact seeded workload from make_inputs() and requires run(*make_inputs()) to produce a finite (16,) float32 output with relative L2 error at most 0.002 versus the float64 64-step recurrence reference. Probes t8 and t13 (GPU, exact seeded workload) both measured the actual kernel at relative L2 0.0049078 \u2014 ~2.45x the tolerance \u2014 while the identical variant without the fp16 intermediate cast achieves 1.11e-06 (claim c1, confirmed), and a float64 simulation rounding each intermediate state to fp16 reproduces the kernel error exactly. This isolates the fp16 quantization at kernel.py line 16 (.to(tl.float16).to(tl.float32)) as the sole and sufficient error source. Note the contract explicitly permits intermediate-state approximation but binds the FINAL output error to <= 0.002; since the final output violates that explicit numeric requirement on the contract's only in-scope workload, this is a defect, not an acceptable approximation. The only caveat (probe hardware not verified to be exactly a T4) is immaterial given the ~2.5x margin and deterministic fp16 round-to-nearest behavior. Skeptic reviewed the latest evidence and recorded no new claims; all claims have evidence.",
   "verdict": "reject"
 }

@@ -16,6 +16,11 @@ import sys
 
 import modal
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.archive_paths import (
+    canonical_case_rows, frozen_case_rows,
+)
+
 ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 app = modal.App("kv-numerical-challenges-oracle")
 image = (modal.Image.debian_slim(python_version="3.11")
@@ -55,7 +60,7 @@ def cpu_answers(root: Path) -> dict:
             if name in cases:
                 raise ValueError(f"Multiple CPU labels for {name}")
             cases[name] = row
-    return cases
+    return canonical_case_rows(root, "numerical_challenges", cases)
 
 
 def check_cpu_agreement(result: dict, cpu: dict) -> None:
@@ -157,7 +162,7 @@ def main(cases: str = ""):
     for row in result["cases"].values():
         row["environment"] = result["environment"]
     previous.update({key: value for key, value in result.items() if key != "cases"})
-    previous["cases"].update(result["cases"])
+    previous["cases"].update(frozen_case_rows(ROOT, "numerical_challenges", result["cases"]))
     temporary = dest.with_suffix(".tmp")
     temporary.write_text(json.dumps(previous, indent=2) + "\n")
     temporary.replace(dest)

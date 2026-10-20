@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_105`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_99`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 18.872s across 4 calls | tokens: in=42971 out=943 total=43914
+- LLM time: 29.486s across 5 calls | tokens: in=55711 out=1332 total=57043
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.97
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,156 +25,187 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_105"
+    "entry": "case_99"
   }
   Output summary:
   {
-    "entry": "case_105"
+    "entry": "case_99"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_105"
+    "entry": "case_99"
   }
   Output summary:
   {
-    "entry": "case_105"
+    "entry": "case_99"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_105"
+    "entry": "case_99"
   }
   Output summary:
   {
-    "entry": "case_105"
+    "entry": "case_99"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_105",
+    "entry": "case_99",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_105"
+    "entry": "case_99"
   }
 
-### Turn 2 - `solo` (4.3524968430000115s, in=8168 out=232)
+### Turn 2 - `solo` (5.224859502000072s, in=8313 out=232)
 
 Message:
 
 ```text
-I'll record the compliance claim and run the exact workload probe.
+I'll record a claim about the compliance metric and run the exact workload.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel replaces W by symmetric 7-level quantized weights (floor(w/scale+0.5)*scale), which can cause large per-output error; the adversarial input mixes the quantization residual direction into x, so E may exceed the 0.12 budget.",
+    "rationale": "The kernel computes softmax in fp32 but rounds probabilities to fp16 before the weighted sum, and the workload is adversarially constructed so the output is a residual of near-cancelling values (v is shifted by 0.5*(p@v)), which can amplify fp16 rounding beyond the E<=0.001 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) must be <= 0.12 with all outputs finite on exactly the make_inputs() workload."
+        "summary": "Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) <= 0.001 on exactly the make_inputs() workload."
       }
     ],
-    "scope_rationale": "The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; this claim tests that directly.",
-    "statement": "The kernel's simulated int7 quantization of W makes the output deviate from the float64 reference with E > 0.12 on the specifi
-  ...[truncated 15 chars]
+    "statement": "On the specified workload (make_inputs with seed 812, n=64, d=32), the kernel output violates the contract by having E > 0.001 or non-finite outputs."
+  }
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 3 - `solo` (4.568900873000075s, in=8978 out=282)
+
+Message:
+
+```text
+Re-recording the claim with scope_rationale, then running the exact workload probe.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "The kernel rounds softmax probabilities to fp16 before the weighted sum, and the workload shifts v by 0.5*(p@v) so the output is a residual of near-cancelling values; fp16 rounding of p can be amplified beyond the E<=0.001 budget.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) <= 0.001 on exactly the make_inputs() workload (seed 812, n=64, d=32)."
+      }
+    ],
+    "scope_rationale": "The contract requires, on the single make_inputs() workload, that all outputs are finite and E <= 0.001; this claim tests whether the kernel's fp16-rounded probabilities break that budget on that exact workload.",
+    "statement": "
+  ...[truncated 152 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel replaces W by symmetric 7-level quantized weights (floor(w/scale+0.5)*scale), which can cause large per-output error; the adversarial input mixes the quantization residual direction into x, so E may exceed the 0.12 budget.",
+    "rationale": "The kernel rounds softmax probabilities to fp16 before the weighted sum, and the workload shifts v by 0.5*(p@v) so the output is a residual of near-cancelling values; fp16 rounding of p can be amplified beyond the E<=0.001 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) must be <= 0.12 with all outputs finite on exactly the make_inputs() workload."
+        "summary": "The contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) <= 0.001 on exactly the make_inputs() workload (seed 812, n=64, d=32)."
       }
     ],
-    "scope_rationale": "The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; this claim tests that directly.",
-    "statement": "The kernel's simulated int7 quantization of W makes the output deviate from the float64 reference with E > 0.12 on the specified workload.",
+    "scope_rationale": "The contract requires, on the single make_inputs() workload, that all outputs are finite and E <= 0.001; this claim tests whether the kernel's fp16-rounded probabilities break that budget on that exact workload.",
+    "statement": "On the specified workload (make_inputs with seed 812, n=64, d=32), the kernel output violates the contract by having E > 0.001 or non-finite outputs.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (4.012624189999997s, in=9286 out=212)
+### Turn 4 - `solo` (5.5324329579999585s, in=10276 out=318)
 
 Message:
 
 ```text
-Running the exact workload probe to compute E against the float64 reference.
+I'll run the exact workload and compute the contract metric E against a float64 reference.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json, torch, numpy as np\nsys.path.insert(0, '/root/pilot_cases/case_105')\nfrom kernel import make_inputs, run\n\nx, w = make_inputs('cuda')\nout = run(x, w)\nref = w.detach().cpu().numpy().astype(np.float64) @ x.detach().cpu().numpy().astype(np.float64)\no = out.detach().cpu().numpy().astype(np.float64)\ndiff = o - ref\nn = ref.size\nE = np.linalg.norm(diff) / max(np.linalg.norm(ref), 0.001*np.sqrt(n))\nprint(json.dumps({\"E\": float(E), \"finite\": bool(np.isfinite(o).all()), \"ref_norm\": float(np.linalg.norm(ref)), \"diff_norm\": float(np.linalg.norm(diff)), \"max_abs_err\": float(np.abs(diff).max())}))"
-  }
+    "code": "import sys, json\nsys.path.insert(0, \"/root/pilot_cases/case_99\")\nimport torch, numpy as np\nfrom kernel import run, make_inputs\n\nq, k, v = make_inputs(\"cuda\")\nout = run(q, k, v)\ntorch.cuda.synchronize()\nout = out.float()\n\n# float64 reference on same float32 input values\nq64 = q.double().cpu().numpy(); k64 = k.double().cpu().numpy(); v64 = v.double().cpu().numpy()\nz = k64 @ q64 / np.sqrt(q64.shape[0])\ne = np.exp(z - z.max()); p = e / e.sum()\nref = p @ v64\n\ndiff = out.cpu().numpy().astype(np.float64) - ref\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nE = np.linalg.norm(diff) / denom\nfinite = bool(np.all(np.isfinite(out.cpu().numpy())))\nprint(json.dumps({\"E\": float(E), \"finite\": finite, \"ref_norm\": float(np.linalg.norm
+  ...[truncated 245 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "c4356da2868603828fd90c8ce1a37c94b8f848fd01f000e04b7f257f2fe4d2b7"
+        "path": "probes/t7_probe.py",
+        "sha256": "7f0e1b3c01c69fd7aea41f2559eea70ebb093f94b5437dc26a09443aa08d03e3"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "42387e1e356fd8bd9e3b2ec2ba5ae1bd7171c5ff3405aef2addbece13f617770"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "2d398eee4ff1d9e90f55836c23ace03b61a2e3e3692db4c0c83051cef25a34f8"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
+        "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "5420161ad78ad9181b39c94a284f8f5adc1a10c95e8614fef95ee64617a98465"
+        "path": "probes/t7_json_result.json",
+        "sha256": "fd2d079de857de118f2638961d0cec1590430c8764231a53695a98eb004ba37f"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's simulated int7 quantization of W makes the output deviate from the float64 reference with E > 0.12 on the specified workload.",
-    "duration_s": 4.690163,
-    "event_id": "t6",
-    "evidence_draft": {
-      
-  ...[truncated 2277 chars]
+    "claim_statement": "On the specified workload (make_inputs with seed 812, n=64, d=32), the kernel output violates the contract by having E > 0.001 or non-finite outputs.",
+    "duration_s": 5.269174,
+    "event_id": "t7",
+    "evidence_dra
+  ...[truncated 2485 chars]
 
-### Turn 4 - `solo` (5.045099053000001s, in=11198 out=266)
+### Turn 5 - `solo` (5.3060026640000615s, in=12445 out=280)
 
 Message:
 
 ```text
-The probe ran the exact workload: E = 0.0852 ≤ 0.12, all outputs finite. The quantization-error hypothesis is rebutted. I'll record the evidence, resolve the claim, and issue the verdict.
+The probe ran the exact workload and the kernel passes the budget (E ≈ 0.00041 ≤ 0.001, all outputs finite). I'll record that as evidence rebutting the violation claim, then issue the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "E": 0.08521481293475935,
-      "diff_norm": 1.0034447282619656,
+      "E": 0.0004127042148687193,
+      "denominator": 0.37084809733843765,
       "finite": true,
-      "max_abs_err": 0.33062341346824464,
-      "ref_norm": 11.775472992356447
+      "max_abs_err": 5.1589049966334344e-05,
+      "ref_norm": 0.37084809733843765,
+      "shape": [
+        32
+      ]
     },
-    "event_id": "t6",
+    "event_id": "t7",
     "status": "rebutted",
-    "summary": "On the exact make_inputs() workload, the kernel output is finite and E = 0.0852, within the 0.12 budget (ref_norm 11.78, diff_norm 1.003, max_abs_err 0.331). The quantization deviation does not violate the contract.",
+    "summary": "On the exact make_inputs workload (seed 812, n=64, d=32), the kernel output is finite and E = 0.0004127 against the float64 reference, well within the E <= 0.001 budget; max abs error 5.16e-05. The claim of a budget violation is rebutted.",
     "supports": "rebutted"
   }
   Output summary:
@@ -182,38 +213,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the exact make_inputs() workload, the kernel output is finite and E = 0.0852, within the 0.12 budget (ref_norm 11.78, diff_norm 1.003, max_abs_err 0.331). The quantization deviation does not violate the contract.",
+    "summary": "On the exact make_inputs workload (seed 812, n=64, d=32), the kernel output is finite and E = 0.0004127 against the float64 reference, well within the E <= 0.001 budget; max abs error 5.16e-05. The claim of a budget violation is rebutted.",
     "supports": "rebutted",
-    "tool_event_id": "t6"
+    "tool_event_id": "t7"
   }
 
-### Turn 5 - `solo` (5.461455970000003s, in=14319 out=233)
+### Turn 6 - `solo` (8.853598764999902s, in=15699 out=220)
 
 Message:
 
 ```text
-The exact-workload probe (t6) is decisive: all outputs finite, E = 0.0852 ≤ 0.12. The only in-scope claim is rebutted. I'll record the verdict.
+The single in-scope claim has been tested on the exact workload: the kernel output is finite and E ≈ 0.00041, well within the 0.001 budget. I'll record the trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the exact make_inputs() workload (tool event t6) comparing kernel output against the float64 reference on the same float32 inputs. All outputs are finite and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.0852 <= 0.12 (ref_norm 11.775, diff_norm 1.003). The kernel's 7-level quantization deviation is within the explicitly permitted error budget on the single specified workload, so the quantization-violation hypothesis (c1) is rebutted.",
+    "reason": "Ran the exact contract workload (make_inputs, seed 812, n=64, d=32) via probe t7 and computed E against the float64 reference on the same float32 inputs. Result: all outputs finite, E = 0.0004127 <= 0.001 (max abs error 5.16e-05, ref norm 0.3708). The only in-scope claim (c1, a hypothesized budget violation) was rebutted by this runtime evidence. The fp16 rounding of softmax probabilities is explicitly permitted reduced precision and stays within budget. Contract satisfied.",
     "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the exact make_inputs() workload (tool event t6) comparing kernel output against the float64 reference on the same float32 inputs. All outputs are finite and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.0852 <= 0.12 (ref_norm 11.775, diff_norm 1.003). The kernel's 7-level quantization deviation is within the explicitly permitted error budget on the single specified workload, so the quantization-violation hypothesis (c1) is rebutted.",
+    "reason": "Ran the exact contract workload (make_inputs, seed 812, n=64, d=32) via probe t7 and computed E against the float64 reference on the same float32 inputs. Result: all outputs finite, E = 0.0004127 <= 0.001 (max abs error 5.16e-05, ref norm 0.3708). The only in-scope claim (c1, a hypothesized budget violation) was rebutted by this runtime evidence. The fp16 rounding of softmax probabilities is explicitly permitted reduced precision and stays within budget. Contract satisfied.",
     "verdict": "trust"
   }
 
@@ -225,96 +256,103 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The kernel's simulated int7 quantization of W makes the output deviate from the float64 reference with E > 0.12 on the specified workload.
+Statement: On the specified workload (make_inputs with seed 812, n=64, d=32), the kernel output violates the contract by having E > 0.001 or non-finite outputs.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; this claim tests that directly.
+Scope rationale: The contract requires, on the single make_inputs() workload, that all outputs are finite and E <= 0.001; this claim tests whether the kernel's fp16-rounded probabilities break that budget on that exact workload.
 
 Scope evidence:
-- `problem.txt`: E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) must be <= 0.12 with all outputs finite on exactly the make_inputs() workload.
+- `problem.txt`: The contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) <= 0.001 on exactly the make_inputs() workload (seed 812, n=64, d=32).
 
-Rationale: The kernel replaces W by symmetric 7-level quantized weights (floor(w/scale+0.5)*scale), which can cause large per-output error; the adversarial input mixes the quantization residual direction into x, so E may exceed the 0.12 budget.
+Rationale: The kernel rounds softmax probabilities to fp16 before the weighted sum, and the workload shifts v by 0.5*(p@v) so the output is a residual of near-cancelling values; fp16 rounding of p can be amplified beyond the E<=0.001 budget.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: On the exact make_inputs() workload, the kernel output is finite and E = 0.0852, within the 0.12 budget (ref_norm 11.78, diff_norm 1.003, max_abs_err 0.331). The quantization deviation does not violate the contract.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: On the exact make_inputs workload (seed 812, n=64, d=32), the kernel output is finite and E = 0.0004127 against the float64 reference, well within the E <= 0.001 budget; max abs error 5.16e-05. The claim of a budget violation is rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_105"
+  "entry": "case_99"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_105"
+  "entry": "case_99"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_105"
+  "entry": "case_99"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_105"
+  "entry": "case_99"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel replaces W by symmetric 7-level quantized weights (floor(w/scale+0.5)*scale), which can cause large per-output error; the adversarial input mixes the quantization residual direction into x, so E may exceed the 0.12 budget.",
+  "rationale": "The kernel rounds softmax probabilities to fp16 before the weighted sum, and the workload shifts v by 0.5*(p@v) so the output is a residual of near-cancelling values; fp16 rounding of p can be amplified beyond the E<=0.001 budget.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) must be <= 0.12 with all outputs finite on exactly the make_inputs() workload."
+      "summary": "The contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n_out)) <= 0.001 on exactly the make_inputs() workload (seed 812, n=64, d=32)."
     }
   ],
-  "scope_rationale": "The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; this claim tests that directly.",
-  "statement": "The kernel's simulated int7 quantization of W makes the output deviate from the float64 reference with E > 0.12 on the specified workload.",
+  "scope_rationale": "The contract requires, on the single make_inputs() workload, that all outputs are finite and E <= 0.001; this claim tests whether the kernel's fp16-rounded probabilities break that budget on that exact workload.",
+  "statement": "On the specified workload (make_inputs with seed 812, n=64, d=32), the kernel output violates the contract by having E > 0.001 or non-finite outputs.",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "c4356da2868603828fd90c8ce1a37c94b8f848fd01f000e04b7f257f2fe4d2b7"
+      "path": "probes/t7_probe.py",
+      "sha256": "7f0e1b3c01c69fd7aea41f2559eea70ebb093f94b5437dc26a09443aa08d03e3"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "42387e1e356fd8bd9e3b2ec2ba5ae1bd7171c5ff3405aef2addbece13f617770"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "2d398eee4ff1d9e90f55836c23ace03b61a2e3e3692db4c0c83051cef25a34f8"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
+      "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "5420161ad78ad9181b39c94a284f8f5adc1a10c95e8614fef95ee64617a98465"
+      "path": "probes/t7_json_result.json",
+      "sha256": "fd2d079de857de118f2638961d0cec1590430c8764231a53695a98eb004ba37f"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's simulated int7 quantization of W makes the output deviate from the float64 reference with E > 0.12 on the specified workload.",
-  "duration_s": 4.690163,
-  "event_id": "t6",
+  "claim_statement": "On the specified workload (make_inputs with seed 812, n=64, d=32), the kernel output violates the contract by having E > 0.001 or non-finite outputs.",
+  "duration_s": 5.269174,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -322,54 +360,53 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "c4356da2868603828fd90c8ce1a37c94b8f848fd01f000e04b7f257f2fe4d2b7"
+          "path": "probes/t7_probe.py",
+          "sha256": "7f0e1b3c01c69fd7aea41f2559eea70ebb093f94b5437dc26a09443aa08d03e3"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "42387e1e356fd8bd9e3b2ec2ba5ae1bd7171c5ff3405aef2addbece13f617770"
+          "path": "probes/t7_stdout.txt",
+          "sha256": "2d398eee4ff1d9e90f55836c23ace03b61a2e3e3692db4c0c83051cef25a34f8"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
+          "path": "probes/t7_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
   
-...[truncated 1477 chars]
+...[truncated 1685 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the exact make_inputs() workload, the kernel output is finite and E = 0.0852, within the 0.12 budget (ref_norm 11.78, diff_norm 1.003, max_abs_err 0.331). The quantization deviation does not violate the contract.",
+  "summary": "On the exact make_inputs workload (seed 812, n=64, d=32), the kernel output is finite and E = 0.0004127 against the float64 reference, well within the E <= 0.001 budget; max abs error 5.16e-05. The claim of a budget violation is rebutted.",
   "supports": "rebutted",
-  "tool_event_id": "t6"
+  "tool_event_id": "t7"
 }
 
-### t8 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the exact make_inputs() workload (tool event t6) comparing kernel output against the float64 reference on the same float32 inputs. All outputs are finite and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.0852 <= 0.12 (ref_norm 11.775, diff_norm 1.003). The kernel's 7-level quantization deviation is within the explicitly permitted error budget on the single specified workload, so the quantization-violation hypothesis (c1) is rebutted.",
+  "reason": "Ran the exact contract workload (make_inputs, seed 812, n=64, d=32) via probe t7 and computed E against the float64 reference on the same float32 inputs. Result: all outputs finite, E = 0.0004127 <= 0.001 (max abs error 5.16e-05, ref norm 0.3708). The only in-scope claim (c1, a hypothesized budget violation) was rebutted by this runtime evidence. The fp16 rounding of softmax probabilities is explicitly permitted reduced precision and stays within budget. Contract satisfied.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T08:54:55Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T09:05:42Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the exact make_inputs() workload (tool event t6) comparing kernel output against the float64 reference on the same float32 inputs. All outputs are finite and E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.0852 <= 0.12 (ref_norm 11.775, diff_norm 1.003). The kernel's 7-level quantization deviation is within the explicitly permitted error budget on the single specified workload, so the quantization-violation hypothesis (c1) is rebutted.",
+  "reason": "Ran the exact contract workload (make_inputs, seed 812, n=64, d=32) via probe t7 and computed E against the float64 reference on the same float32 inputs. Result: all outputs finite, E = 0.0004127 <= 0.001 (max abs error 5.16e-05, ref norm 0.3708). The only in-scope claim (c1, a hypothesized budget violation) was rebutted by this runtime evidence. The fp16 rounding of softmax probabilities is explicitly permitted reduced precision and stays within budget. Contract satisfied.",
   "verdict": "trust"
 }

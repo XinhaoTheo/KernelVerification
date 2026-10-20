@@ -88,10 +88,13 @@ def main():
         else:
             archived.append(case)
     active_cases = [case for cases in groups.values() for case in cases]
+    next_active = registry.get("next_active_case_number") or (
+        max((case_sort_key(case)[1] for case in active_cases
+             if case_sort_key(case)[0] == 0), default=0) + 1)
     lines = ["# Benchmark 案例总索引", "",
-        "所有题库和 traces 共用 `case_数字` 编号。本次重排后的编号、旧编号与来源记录在 case_map.json，部分题库共用统一公开目录。",
+        "本页、题目目录和 traces 使用同一套当前 `case_数字` 编号。来源和历史映射保存在 case_map.json。",
         "本页是说明与答案侧索引，不作为模型输入。编号描述实验来源，不保证某种方法一定获胜。", "",
-        f"当前 {len(active_cases)} 题；另有 {len(archived)} 题已归档。当前编号：{_case_ranges(active_cases)}。归档题不进入默认实验，新增题使用后续未用编号。", "",
+        f"当前 {len(active_cases)} 题；另有 {len(archived)} 题已归档。当前编号：{_case_ranges(active_cases)}。归档题不进入默认实验，也不计入当前题数。", "",
         "| 编号范围 | 数量 | 测什么 | 说明与题目 |", "|---|---:|---|---|"]
     for dataset, cases in groups.items():
         path = cases_dir(ROOT.parent, dataset).relative_to(ROOT).as_posix()
@@ -100,18 +103,17 @@ def main():
         lines.append(f"| {_case_ranges(cases)} | {len(cases)} | "
                      f"{DATASET_LABELS.get(dataset, dataset)} | [说明]({guide}) · [题目]({path}/) |")
     if archived:
-        lines += ["", "| 归档 | 数量 | 保留内容 |", "|---|---:|---|"]
+        lines += ["", "| 归档 | 编号范围 | 数量 | 保留内容 |", "|---|---|---:|---|"]
         for archive, cases in archived_case_groups(details).items():
             lines.append(f"| [{ARCHIVE_LABELS.get(archive, archive)}]({archive}/README.md) | "
-                         f"{len(cases)} | 题目、原始标签、构造记录与历史 traces；不计入当前题库 |")
+                         f"{_case_ranges(cases)} | {len(cases)} | "
+                         "题目、原始标签、构造记录与历史 traces；不计入当前题库 |")
     lines += [""] + curation_lines(details)
-    retired = ", ".join(f"`{name}`" for name in registry.get("retired_ids", [])) or "无"
-    lines += ["", f"当前编号体系的退休编号：{retired}。下一可用编号从 {registry.get('next_case_number', '注册表')} 开始。",
+    lines += ["", f"新增当前题接在当前题库末尾编号；下一当前编号为 `case_{next_active:02}`。归档编号不表示当前题数。",
         "`real_kernel_challenges/` 保存真实源码衍生的专门构造挑战；标签针对固定实现与合同，结果单独统计。", "",
-        "2026-10-19 重排：当前题 case_01–case_90；归档题 case_91–case_162。旧 case_03 的退休记录留在注册表迁移历史中。", "",
-        "每道题的完整对应关系如下。旧编号仅用于查阅历史记录，今后运行请使用新编号。", "",
-        "| 统一编号 | 状态 | 旧编号 | 题库 / 来源机制 | 公开题目 | GLM traces |",
-        "|---|---|---|---|---|---|"]
+        "下表只使用当前编号。归档条目单独标明，不属于当前实验题库。", "",
+        "| 编号 | 状态 | 题库 / 来源机制 | 公开题目 | GLM traces |",
+        "|---|---|---|---|---|"]
     for case, row in sorted(details.items(), key=lambda item: case_sort_key(item[0])):
         public = _relative(row["public_dir"])
         if not (ROOT / public / "kernel.py").is_file():
@@ -124,18 +126,17 @@ def main():
         archive = case_archive_root(row)
         trace_root = f"{archive}/traces_glm" if archive else "traces_glm"
         traces = f"[记录]({trace_root}/{case}/)" if (ROOT / trace_root / case).is_dir() else "无 GLM 记录"
-        lines.append(f"| `{case}` | {state} | `{row.get('previous_id', case)}` | {source} | "
+        lines.append(f"| `{case}` | {state} | {source} | "
                      f"[kernel]({public}/kernel.py) · [合同]({public}/problem.txt) | {traces} |")
     lines += ["", "## 如何读 traces", "",
         "`traces_glm/<case>/<arm>/<trial>/` 中，`single_call` 是无工具单次调用，`solo` 是单 agent 加工具，"
         "`debate` 是多角色加工具。各组批次目录统一为 `r1`、`r2` 等运行序号；原批次名保留在 "
         "`trace_meta.json` 的 `original_trial` 中。同名 `r1` 不代表模型、预算或实验配置相同。",
         "[GLM 逐次运行索引](traces_glm/INDEX.md) 保留不同配置、复测与失败尝试；题库编号相同不代表三组都已跑齐。",
-        "目录已统一编号；历史请求、回复和 probe 代码保留原始字节；目录和 metadata 的身份、迁移字段按索引更新。"
-        "原始内容中的旧编号不是另一道题，读取程序根据当前目录与本注册表核对身份。",
+        "目录使用当前编号；历史请求、回复、metadata 和 probe 代码保留原始字节。"
+        "读取程序根据当前目录和注册表核对历史记录的身份。",
         "归档案例的公开题目与 traces 按上表移入对应归档目录，历史来源字段和原始调用内容不改写。",
-        "早期数值 pilot（case_139–case_162）和它的 72 条 GLM 记录移入 archive/numerical_pilot，已从当前 GLM 索引与默认评分移出；"
-        "过去 104 题的历史报告保留原结论。", "",
+        "早期数值 pilot 的题目和历史记录保存在 archive/numerical_pilot，已从当前 GLM 索引与默认评分移出。", "",
         "## 文件清理说明", "",
         "各来源组的 `private_data/` 保存答案、搜索过程和 GPU 真值校验；这些是实验可复现性依据。归档组的资料留在归档目录。",
         "当前题目统一在 `triton_eval_cases/`，构造、校验与报告程序统一在 `eval_scripts/` 的对应目录；已归档的公开题目不再留在当前目录。",

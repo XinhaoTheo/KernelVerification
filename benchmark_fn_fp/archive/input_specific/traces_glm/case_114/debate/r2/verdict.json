@@ -1,9 +1,9 @@
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-24T01:10:39Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-24T01:07:14Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Problem.txt is the operative contract (no test.py/get_inputs beyond make_inputs in kernel.py, which the probe used directly). The contract explicitly requires ||output - float64 16-mode reference||_2 / max(||ref||_2,1e-12) <= 0.15 for the fixed make_inputs() workload. Runtime probe t10 measured relative L2 ratio 0.23046427 on exactly that input, exceeding the bound. The measured ratio matches the analytic dropped-mode (k=7..16) energy ratio to within 1e-8, confirming the entire error is the 6-mode cutoff \u2014 not indexing, float32 rounding, or fusion. Although problem.txt acknowledges the cutoff as an approximation, it does not exempt the output from the 0.15 tolerance clause, so this is a confirmed in-scope contract violation. Output validity checks (finite, float32, shape (64,)) passed; no other claims are open.",
+  "reason": "The contract (problem.txt, the operative artifact since test_code is empty) admits only the fixed seeded workload from make_inputs() and requires ||output-ref||_2 / max(||ref||_2,1e-12) <= 0.01 with a float64 reference. Runtime probes on exactly that workload (t15) show the actual kernel output is finite, shape (32,), but has relative L2 error 0.0605 \u2014 ~6x the 0.01 tolerance. Channel isolation (t12) confirms the cause: the fp32-sequential-accumulation alpha (1.12499952) deviates from the float64 alpha (1.12499998) by 4.6e-7, injecting a systematic (\u0394\u03b1)\u00b7u error of RMS 4.97e-7 into a residual of only ~7e-6, which alone yields 5.9% relative L2 error. The alternative cancellation channel (c2) was isolated and measured at only 0.0041, below tolerance, and is rebutted \u2014 so the violation is not a metric artifact. This is a genuine failure of the explicitly required accuracy bound on the one in-scope input, not a permitted implementation-precision deviation: the contract acknowledges fp32 arithmetic but still mandates the 1% bound, which the kernel exceeds.",
   "verdict": "reject"
 }

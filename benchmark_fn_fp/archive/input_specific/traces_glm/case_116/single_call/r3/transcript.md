@@ -21,22 +21,24 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Compute the natural logarithm of the determinant of one SPD matrix.
+Select a nearest candidate and return its embedding on a fixed workload.
 
-The entire workload is the float32 matrix of shape (8, 8) returned by
-make_inputs() in kernel.py. The mathematical reference is log(det(A)) for
-the actual stored float32 entries of A, evaluated in float64. A is positive
-definite. The integer Gram construction and diagonal regularizer are only
-the input generator; use the supplied entries, not an idealized matrix.
+Only make_inputs() supplies the inputs in scope: query is float32 of shape
+(32,), candidates is float32 of shape (16, 32), embeddings is float32 of shape
+(16, 8). For the reference, use the original supplied float32 coordinates
+without quantization. Compute squared Euclidean distances in float64:
+  d[i] = sum_j (candidates[i,j] - query[j])**2.
+Select the index with smallest d[i], breaking ties in favour of the smallest
+index. The reference output is embeddings[index, :].
 
-Return a finite float32 vector of shape (1,). The numerical error is
-  ||output-reference||_2 / max(||reference||_2, 1.0).
-This error must be <= 0.0001. The requirement concerns this fixed workload;
-arbitrary alternative matrices and seeds are outside its scope.
+The kernel returns a finite vector of shape (8,). It satisfies the contract iff
+  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.1.
 
-The implementation uses elimination without pivoting and accumulates the
-logarithms of its diagonal pivots. FP multiply/add fusion is disabled, and
-division of the multipliers uses round-to-nearest float32 division.
+Decide whether this implementation meets the numerical contract for this fixed
+generated workload. Alternative queries, candidates and embeddings are outside
+the scope. The kernel's approximate route quantizes coordinates to a grid
+using floor(x*8+0.5)/8, then uses float32 squared distances and the same tie rule.
+The final embedding values are gathered without quantization.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -49,37 +51,40 @@ import triton.language as tl
 
 
 @triton.jit
-def _logdet_kernel(Matrix, Output, N: tl.constexpr):
-    rows = tl.arange(0, N)
-    columns = tl.arange(0, N)
-    matrix = tl.load(Matrix + rows[:, None] * N + columns[None, :]).to(tl.float32)
-    output = tl.full((), 0.0, tl.float32)
-    for k in tl.static_range(0, N):
-        pivot = tl.sum(tl.sum(tl.where((rows[:, None] == k) &
-                                      (columns[None, :] == k), matrix, 0.0), 0), 0)
-        column = tl.sum(tl.where(columns[None, :] == k, matrix, 0.0), 1)
-        pivot_row = tl.sum(tl.where(rows[:, None] == k, matrix, 0.0), 0)
-        multiplier = tl.div_rn(column, pivot)
-        product = multiplier[:, None] * pivot_row[None, :]
-        updated = matrix - product
-        matrix = tl.where((rows[:, None] > k) & (columns[None, :] > k),
-                          updated, matrix)
-        output = output + tl.log(pivot)
-    tl.store(Output, output)
+def _route_kernel(Query, Candidates, Embeddings, Output, N: tl.constexpr,
+                  D: tl.constexpr, E: tl.constexpr):
+    row = tl.arange(0, N)
+    distances = tl.full((N,), 0.0, tl.float32)
+    for j in tl.static_range(0, D):
+        query = tl.load(Query + j).to(tl.float32)
+        candidate = tl.load(Candidates + row * D + j).to(tl.float32)
+        query_q = tl.floor(query * 8.0 + 0.5) * 0.125
+        candidate_q = tl.floor(candidate * 8.0 + 0.5) * 0.125
+        delta = candidate_q - query_q
+        distances = distances + delta * delta
+    minimum = tl.min(distances, axis=0)
+    winner = tl.min(tl.where(distances == minimum, row, 2147483647), axis=0)
+    component = tl.arange(0, E)
+    result = tl.load(Embeddings + winner * E + component)
+    tl.store(Output + component, result)
 
 
-def run(matrix):
-    output = torch.empty((1,), device=matrix.device, dtype=torch.float32)
-    _logdet_kernel[(1,)](matrix, output, N=8, num_warps=1, enable_fp_fusion=False)
+def run(query, candidates, embeddings):
+    output = torch.empty((8,), device=query.device, dtype=torch.float32)
+    _route_kernel[(1,)](query, candidates, embeddings, output, N=16, D=32, E=8,
+                        num_warps=1, enable_fp_fusion=False)
     return output
 
 
 def make_inputs_numpy():
-    rng = np.random.Generator(np.random.PCG64(98262))
-    factor = rng.integers(-8, 9, (8, 7), dtype=np.int64)
-    gram = np.sum(factor[:, None, :] * factor[None, :, :], axis=2, dtype=np.int64)
-    matrix = (gram.astype(np.float64) + (1.0 / 1024.0) * np.eye(8)).astype(np.float32)
-    return (matrix,)
+    rng = np.random.Generator(np.random.PCG64(840101))
+    query = rng.normal(0.0, 0.3, 32).astype(np.float32)
+    offsets = rng.normal(size=(16, 32))
+    offsets /= np.linalg.norm(offsets, axis=1, keepdims=True)
+    radii = 1.0 + rng.uniform(-0.002, 0.002, 16)
+    candidates = (query.astype(np.float64)[None, :] + offsets * radii[:, None]).astype(np.float32)
+    embeddings = rng.normal(size=(16, 8)).astype(np.float32)
+    return query, candidates, embeddings
 
 
 def make_inputs(device="cuda"):
@@ -91,24 +96,20 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Check elimination without pivoting on SPD 8x8 — fine mathematically. The kernel computes Gaussian elimination without pivoting; SPD guarantees positive pivots. But wait: the multiplier column computation at step k: column = matrix[:, k], but matrix rows above k already eliminated? Only rows/cols > k updated, so rows > k have updated entries in columns > k. Rows above k keep original entries in column k... column uses full column k; for rows < k, entries unchanged, but the update only writes rows>k, cols>k, so those rows' multipliers don't affect anything later except product... Actually product = multiplier ⊗ pivot_row; only entries with rows>k, cols>k are used, so fine.
+Quantization to grid /8 with candidates ~1 distance from query... tie risk: distances differ by tiny amounts; quantization could collapse them or change winner. Let's approximate. Candidates = query + unit offset * ~1 radius. Query entries ~N(0,0.3). Quantization floor(x*8+0.5)/8 has error up to 1/16 per coordinate, so per-coordinate quantized difference error can be up to 1/8, squared distances in quantized space can differ by ~O(1) across candidates... wait but delta magnitude ~1/32-ish? Actually offsets normalized, each entry ~1/sqrt(32)≈0.177. Quantized delta error up to 0.125 per coordinate. Distance sum ~ sum(delta^2) ≈1. Quantization error in distance could be ~sum(2*delta*err) up to ~0.04*32... could change winner, but contract only requires output embedding relative error ≤0.1 — winner change breaks that generally unless embeddings similar? Embeddings random N(0,1), different rows → large error. So need actual computation? This is the classic "quantization could pick wrong winner" scenario. But contract says kernel's approximate route quantizes... and problem says decide if it meets numerical contract for the fixed workload. Need to simulate mentally — impossible exactly. Key question: do quantized distances preserve argmin? True distances: radii 1±0.002, so true distances all ≈1 (squared distance = radius^2 ≈ 1±0.004). So true argmin is the candidate with smallest radius, roughly. Quantized distances: query and candidate quantized to grid 1/8; delta per coordinate = difference of quantized values. Since candidate ≈ query + offset with offset entries ~0.177, quantization of both to 1/8 grid... delta_q ∈ multiples of 1/8, approximating offset entries (±0.004). Offsets entries ~±0.177, quantization error in delta up to 1/8? Actually delta_q = floor(c*8+0.5)-floor(q*8+0.5) divided by 8. The true delta d≈0.177±0.004; delta_q approximates it within 1/8 = 0.125? No: delta_q is a multiple of 0.125 approximating d within 0.125 (since each quantization error ≤0.0625, combined ≤0.125). So delta_q^2 could vary hugely: d=0.177 → delta_q could be 0.125 or 0.25 (multiples of 0.125 nearest). 0.125 vs 0.25: squares 0.0156 vs 0.0625. Sum over 32 coords: quantized distance dominated by rounding, variance huge — essentially random which candidate wins. True winner determined by tiny radius differences; quantized winner essentially random → likely wrong row → embedding mismatch >> 0.1. So reject.
 
-Pivot = matrix[k,k] at step k — diagonal entries for rows>k were updated, correct.
-
-Concern: does elimination without pivoting in fp32 give error ≤ 1e-4 relative? Reference is logdet in float64 of actual entries. Error tolerance 1e-4 relative to max(|ref|,1). Pivots may be small due to regularizer 1/1024; log precision in float32 is ~1e-7 relative, sum of 8 logs fine. fp32 elimination error: for SPD gram matrix, could be fine. Gram entries can be up to ~8^2*7≈450. logdet maybe ~ tens. Accumulated fp32 errors likely within 1e-4. Likely trust.
-
-One subtle: tl.div_rn — fine. Also log computed on float32 pivot each step, accumulated. Seems correct.
+But wait — some entries: many offset entries small? Normal/sqrt(32): std 0.177, so values spread. Quantized distances sum ≈ sum delta_q^2, which differs across candidates by O(1) while true differences are 0.004. So winner almost surely wrong with high probability. Verdict: reject. Confidence moderate-high, since it's probabilistic but strongly so.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.85, "reason": "The kernel performs standard Gaussian elimination without pivoting, which is valid for SPD matrices (all pivots positive), updating only the trailing submatrix and accumulating log(pivot) for each step. The masked-reduction indexing reproduces the reference algorithm, and fp32 precision with div_rn and no fusion should meet the 1e-4 tolerance for this fixed 8x8 workload."}
+{"verdict": "reject", "confidence": 0.8, "reason": "True squared distances are all ≈1 and differ only by ~0.004 (radii 1±0.002), so the true argmin is decided by tiny differences; but the 1/8-grid quantization perturbs each per-coordinate delta by up to 0.125, making quantized squared distances differ by O(1) across candidates. The quantized winner is therefore essentially random and almost surely not the true winner, returning the wrong embedding row and failing the 0.1 relative-error contract."}
 
 ## Verdict
 
 {
-  "verdict": "trust",
-  "confidence": 0.85,
-  "reason": "The kernel performs standard Gaussian elimination without pivoting, which is valid for SPD matrices (all pivots positive), updating only the trailing submatrix and accumulating log(pivot) for each step. The masked-reduction indexing reproduces the reference algorithm, and fp32 precision with div_rn and no fusion should meet the 1e-4 tolerance for this fixed 8x8 workload."
+  "verdict": "reject",
+  "confidence": 0.8,
+  "reason": "True squared distances are all ≈1 and differ only by ~0.004 (radii 1±0.002), so the true argmin is decided by tiny differences; but the 1/8-grid quantization perturbs each per-coordinate delta by up to 0.125, making quantized squared distances differ by O(1) across candidates. The quantized winner is therefore essentially random and almost surely not the true winner, returning the wrong embedding row and failing the 0.1 relative-error contract."
 }
 
 ## Usage and stop reason
@@ -117,22 +118,22 @@ One subtle: tl.div_rn — fine. Also log computed on float32 pivot each step, ac
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "trust",
-    "confidence": 0.85,
-    "reason": "The kernel performs standard Gaussian elimination without pivoting, which is valid for SPD matrices (all pivots positive), updating only the trailing submatrix and accumulating log(pivot) for each step. The masked-reduction indexing reproduces the reference algorithm, and fp32 precision with div_rn and no fusion should meet the 1e-4 tolerance for this fixed 8x8 workload."
+    "verdict": "reject",
+    "confidence": 0.8,
+    "reason": "True squared distances are all ≈1 and differ only by ~0.004 (radii 1±0.002), so the true argmin is decided by tiny differences; but the 1/8-grid quantization perturbs each per-coordinate delta by up to 0.125, making quantized squared distances differ by O(1) across candidates. The quantized winner is therefore essentially random and almost surely not the true winner, returning the wrong embedding row and failing the 0.1 relative-error contract."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 967,
-    "output_tokens": 429
+    "input_tokens": 1046,
+    "output_tokens": 864
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 7.806970750214532,
-  "kernel_sha256": "c484ce30bf1e415230cd87366da701d0673410e3c8331d4cdbedbb57089175bc",
-  "problem_sha256": "4d641b7f2c6a60b216311afe62e7c40c2b7a23e30aa343d5f8f2c9de4cd460cf",
+  "elapsed_s": 12.411184250144288,
+  "kernel_sha256": "c654cb5f5a76cd8adde459716d3b05317b29d893c39f8b61f21c86cf1b20bc92",
+  "problem_sha256": "f361b282f4f16d1350cf0306fc947a0c7ff633bacaed5289f89f9d2101d3a2dd",
   "prompt_variant": "original",
-  "estimated_usd": 0.0007426600000000001,
+  "estimated_usd": 0.0012432800000000003,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

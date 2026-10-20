@@ -21,26 +21,23 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Compute one normalized radial-basis-function regression prediction.
+Integrate four oscillatory real functions over the interval [0, 1].
 
-The only workload in scope is the float32 data returned by make_inputs()
-in kernel.py: query has shape (32,), anchors has shape (16, 32), and values
-has shape (16,). Define the mathematical reference from these actual stored
-float32 values, with all the following arithmetic evaluated in float64:
-  distance[i] = sum_k (anchors[i,k] - query[k])**2
-  weight[i] = exp(-16 * distance[i])
-  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].
+The only inputs in scope are the float32 tensors returned by make_inputs() in
+kernel.py. amplitudes, frequencies, and phases each have shape (4, 8). The exact
+real function for row r is defined by the supplied float32 values:
+  f_r(t) = 1 + sum_{k=0}^{7} amplitudes[r,k] * sin(frequencies[r,k]*t + phases[r,k]).
+The mathematical reference is integral_0^1 f_r(t) dt, evaluated in float64:
+  reference[r] = 1 + sum_k amplitudes[r,k] *
+      (cos(phases[r,k])-cos(phases[r,k]+frequencies[r,k])) / frequencies[r,k].
+This is the continuous integral; the 32-point grid in the implementation is an
+approximation method, not the definition of the reference.
 
-The output must be a finite vector of shape (1,). Its numerical error is
-  ||output-reference||_2 / max(||reference||_2, 0.05).
-The implementation satisfies the contract iff this error is <= 0.05.
-The contract concerns the final normalized prediction. It does not impose
-separate error requirements on intermediate distances or individual weights.
-Alternative inputs and seeds are outside the scope of this fixed workload.
-
-The implementation uses the expanded squared-distance identity and clamps
-negative computed distances to zero before the exponential. Its norm and
-dot-product accumulators round to float32 each step. FP fusion is disabled.
+Output must be a finite float32 vector of shape (4,). The numerical contract is
+  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035.
+Decide whether this implementation satisfies that contract for this fixed
+public workload. Other amplitudes, frequencies, or phases are outside scope.
+The launch disables FP multiply/add fusion.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -53,45 +50,36 @@ import triton.language as tl
 
 
 @triton.jit
-def _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):
-    row = tl.arange(0, N)
-    anchor_norm = tl.full((N,), 0.0, tl.float32)
-    query_norm = tl.full((), 0.0, tl.float32)
-    dot = tl.full((N,), 0.0, tl.float32)
-    for k in tl.static_range(0, D):
-        anchor = tl.load(Anchors + row * D + k).to(tl.float32)
-        query = tl.load(Query + k).to(tl.float32)
-        anchor_square = anchor * anchor
-        query_square = query * query
-        cross = anchor * query
-        anchor_norm = anchor_norm + anchor_square
-        query_norm = query_norm + query_square
-        dot = dot + cross
-    norm_sum = anchor_norm + query_norm
-    twice_dot = 2.0 * dot
-    distance = tl.maximum(norm_sum - twice_dot, 0.0)
-    weight = tl.exp(-16.0 * distance)
-    value = tl.load(Values + row).to(tl.float32)
-    numerator = tl.sum(weight * value, 0)
-    denominator = tl.sum(weight, 0)
-    output = tl.div_rn(numerator, denominator)
-    tl.store(Output, output)
+def _integrate(Amplitudes, Frequencies, Phases, Output,
+               TERMS: tl.constexpr, GRID: tl.constexpr):
+    row = tl.program_id(0)
+    cell = tl.arange(0, GRID)
+    point = (cell.to(tl.float32) + 0.5) / GRID
+    value = tl.full((GRID,), 1.0, tl.float32)
+    for k in tl.static_range(0, TERMS):
+        amplitude = tl.load(Amplitudes + row * TERMS + k)
+        frequency = tl.load(Frequencies + row * TERMS + k)
+        phase = tl.load(Phases + row * TERMS + k)
+        angle = frequency * point
+        angle = angle + phase
+        value = value + amplitude * tl.sin(angle)
+    estimate = tl.sum(value, axis=0) / GRID
+    tl.store(Output + row, estimate)
 
 
-def run(query, anchors, values):
-    output = torch.empty((1,), device=query.device, dtype=torch.float32)
-    _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,
-                      num_warps=1, enable_fp_fusion=False)
+def run(amplitudes, frequencies, phases):
+    output = torch.empty((4,), device=amplitudes.device, dtype=torch.float32)
+    _integrate[(4,)](amplitudes, frequencies, phases, output,
+                     TERMS=8, GRID=32, num_warps=1, enable_fp_fusion=False)
     return output
 
 
 def make_inputs_numpy():
-    rng = np.random.Generator(np.random.PCG64(119130))
-    query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)
-    anchors = (query.astype(np.float64)[None, :] +
-               rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)
-    values = rng.normal(0.0, 1.0, 16).astype(np.float32)
-    return query, anchors, values
+    rng = np.random.Generator(np.random.PCG64(711165))
+    amplitudes = rng.normal(0.0, 0.1, (4, 8)).astype(np.float32)
+    frequencies = rng.uniform(0.5, 220.0, (4, 8)).astype(np.float32)
+    phases = rng.uniform(-np.pi, np.pi, (4, 8)).astype(np.float32)
+    return amplitudes, frequencies, phases
 
 
 def make_inputs(device="cuda"):
@@ -103,18 +91,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Anchor-query differences ~0.0156 per coordinate; distance = sum of squares ~32*(0.0156^2)≈0.0078, times -16 → weight ≈ exp(-0.125)≈0.88. Fine. Expanded identity in fp32: anchor_norm ~16^2*32≈8192; dot similar; catastrophic cancellation? distance ≈ norm_sum - 2*dot where each ~16384, difference ~0.008. fp32 relative error ~1e-7 → absolute error ~0.002 in distance, times 16 → error in exponent ~0.03. Weights still positive, small relative weight errors, but weights all similar magnitude (~0.88 each, clamped nonnegative). Since all weights nearly equal and sum dominates, normalized prediction error small. Also clamping to 0: distance error ±0.003, could be clamped but true distance ~0.008 positive; error mostly fine. Estimate: distance error up to ~1e-3ish; exponent error ~0.016 → weight relative error ~1.6%. Since weights nearly uniform, normalized average changes ~1.6%/√16 ≈ small. Reference values average ~0 with norm maybe ~0.3... tolerance denominator max(||ref||,0.05). Error likely well under 0.05. Trust.
+Midpoint rule with 32 points for frequencies up to 220. Nyquist-like concerns: midpoint rule error per term ~ amplitude * freq * h^2/8? Actually error of midpoint rule for integral of sin(ωt+φ): error ~ ω h² /24 per... total error ≈ ω/(24·GRID²)? With ω=220, GRID=32: 220/(24·1024)≈0.009 per term amplitude-scaled (amplitude ~0.1) → tiny. Also sin aliasing: sin(ωt) midpoint sum with ω up to 220: midpoint rule gives (1/N)Σ sin(ω(k+0.5)/N) ≈ integral exactly with small correction since midpoint quadrature error small. Also point computed in float32 with +0.5/32 — fine. Error tolerance 0.035 relative easily met. Trust.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.7, "reason": "The expanded squared-distance identity suffers some float32 cancellation (operands ~1e4, true distance ~0.008), giving distance errors on the order of 1e-3 and exponent errors ~0.02, so weights have ~2% relative error; but all 16 weights are near-equal (~exp(-0.125)) and errors partially cancel in the normalized ratio, keeping the final prediction error well within the 0.05 tolerance."}
+{"verdict": "trust", "confidence": 0.9, "reason": "The 32-point midpoint rule integrates the constant 1 exactly, and for each sinusoid with frequency up to 220 the midpoint quadrature error scales like amplitude*ω/(24*GRID^2) ≈ 0.1*220/24576 ≈ 0.001 per term, far below the 0.035 relative tolerance; float32 evaluation is also well within tolerance. The output shape, dtype, and launch configuration match the contract."}
 
 ## Verdict
 
 {
   "verdict": "trust",
-  "confidence": 0.7,
-  "reason": "The expanded squared-distance identity suffers some float32 cancellation (operands ~1e4, true distance ~0.008), giving distance errors on the order of 1e-3 and exponent errors ~0.02, so weights have ~2% relative error; but all 16 weights are near-equal (~exp(-0.125)) and errors partially cancel in the normalized ratio, keeping the final prediction error well within the 0.05 tolerance."
+  "confidence": 0.9,
+  "reason": "The 32-point midpoint rule integrates the constant 1 exactly, and for each sinusoid with frequency up to 220 the midpoint quadrature error scales like amplitude*ω/(24*GRID^2) ≈ 0.1*220/24576 ≈ 0.001 per term, far below the 0.035 relative tolerance; float32 evaluation is also well within tolerance. The output shape, dtype, and launch configuration match the contract."
 }
 
 ## Usage and stop reason
@@ -124,21 +112,21 @@ Anchor-query differences ~0.0156 per coordinate; distance = sum of squares ~32*(
   "provider": "fireworks",
   "response": {
     "verdict": "trust",
-    "confidence": 0.7,
-    "reason": "The expanded squared-distance identity suffers some float32 cancellation (operands ~1e4, true distance ~0.008), giving distance errors on the order of 1e-3 and exponent errors ~0.02, so weights have ~2% relative error; but all 16 weights are near-equal (~exp(-0.125)) and errors partially cancel in the normalized ratio, keeping the final prediction error well within the 0.05 tolerance."
+    "confidence": 0.9,
+    "reason": "The 32-point midpoint rule integrates the constant 1 exactly, and for each sinusoid with frequency up to 220 the midpoint quadrature error scales like amplitude*ω/(24*GRID^2) ≈ 0.1*220/24576 ≈ 0.001 per term, far below the 0.035 relative tolerance; float32 evaluation is also well within tolerance. The output shape, dtype, and launch configuration match the contract."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1073,
-    "output_tokens": 404
+    "input_tokens": 987,
+    "output_tokens": 309
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 6.164233542047441,
-  "kernel_sha256": "273c25366a24b4ff66e08dedf6ff525ef277a78d4e55c89fe60c99b0af7b2c29",
-  "problem_sha256": "9166ba4e7a298df188217bf4b3cf6007a29be5178d6832ff420f3cff9d288494",
+  "elapsed_s": 5.342605791985989,
+  "kernel_sha256": "73cbae63a58592279634fcea8e56dd994aa173e296771ef23ecefc8f6523bdb3",
+  "problem_sha256": "e299086c42ea184b86e2bf465c80419e79465a5e8cbc8607e0e0fec7890a3ace",
   "prompt_variant": "original",
-  "estimated_usd": 0.0007448400000000002,
+  "estimated_usd": 0.00061626,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

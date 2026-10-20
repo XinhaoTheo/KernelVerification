@@ -1,23 +1,23 @@
 ## Problem statement (contract + reference behavior)
 
-Compute a normalized orthogonal projection for a fixed public workload.
+Implement LayerNorm without an affine transform for this fixed workload.
 
-Only the two float32 vectors u and b returned by make_inputs() are in scope.
-Each has shape (32,). The mathematical reference on these actual stored inputs is
-  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]
-  residual[j] = b[j] - alpha*u[j]
-  reference = residual / ||residual||_2.
-Use at least float64 accuracy for the reference. Algebraically equivalent
-recentring is allowed to avoid numerical cancellation in the reference itself.
-The residual on this workload is nonzero.
+The only input in scope is the float32 vector x returned by make_inputs() in
+kernel.py. Its shape is (128,), and its complete contents and element order are
+specified by that public deterministic generator.
 
-The output must be a finite vector of shape (32,), and
-  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.
+The reference uses the original float32 input values, evaluated in float64:
+  mean = sum_i x[i] / 128
+  variance = sum_i (x[i] - mean)**2 / 128
+  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)
+Use population variance, with no degrees-of-freedom correction.
 
-Decide whether this kernel satisfies that contract for the fixed generated
-workload. Arbitrary alternative vectors are outside the scope. The kernel uses
-float32 arithmetic, sequential accumulations and separately rounded products
-and sums; its launch disables FP multiply/add fusion.
+The output must be one finite vector with shape (128,). Its relative L2 error is
+  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).
+The numerical contract requires this error to be <= 0.02.
+
+Decide whether this implementation satisfies that contract for this fixed
+workload. Arbitrary alternative tensors are outside this question's scope.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -30,40 +30,32 @@ import triton.language as tl
 
 
 @triton.jit
-def _projection_kernel(U, B, Output, N: tl.constexpr):
-    numerator = tl.full((), 0.0, tl.float32)
-    denominator = tl.full((), 0.0, tl.float32)
-    for j in tl.static_range(0, N):
-        u = tl.load(U + j).to(tl.float32)
-        b = tl.load(B + j).to(tl.float32)
-        numerator = numerator + u * b
-        denominator = denominator + u * u
-    coefficient = tl.div_rn(numerator, denominator)
-    norm_squared = tl.full((), 0.0, tl.float32)
-    for j in tl.static_range(0, N):
-        u = tl.load(U + j).to(tl.float32)
-        b = tl.load(B + j).to(tl.float32)
-        residual = b - u * coefficient
-        norm_squared = norm_squared + residual * residual
-    norm = tl.sqrt(norm_squared)
-    j = tl.arange(0, N)
-    u = tl.load(U + j).to(tl.float32)
-    b = tl.load(B + j).to(tl.float32)
-    residual = b - u * coefficient
-    tl.store(Output + j, tl.div_rn(residual, norm))
+def _layer_norm_kernel(X, Output, N: tl.constexpr):
+    total = tl.full((), 0.0, tl.float32)
+    squares = tl.full((), 0.0, tl.float32)
+    for i in range(0, N):
+        value = tl.load(X + i).to(tl.float32)
+        total = total + value
+        squares = squares + value * value
+    mean = total / N
+    variance = tl.maximum(squares / N - mean * mean, 0.0)
+    denominator = tl.sqrt(variance + 0.00001)
+    offsets = tl.arange(0, N)
+    values = tl.load(X + offsets).to(tl.float32)
+    tl.store(Output + offsets, (values - mean) / denominator)
 
 
-def run(u, b):
-    output = torch.empty((32,), device=u.device, dtype=torch.float32)
-    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)
+def run(x):
+    output = torch.empty((128,), device=x.device, dtype=torch.float32)
+    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,
+                            enable_fp_fusion=False)
     return output
 
 
 def make_inputs_numpy():
-    rng = np.random.Generator(np.random.PCG64(830228))
-    u = rng.normal(size=32).astype(np.float32)
-    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)
-    return u, b
+    rng = np.random.Generator(np.random.PCG64(782406))
+    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)
+    return (x,)
 
 
 def make_inputs(device="cuda"):

@@ -1,0 +1,11 @@
+float16 rounding each step: relative error ~5e-4 per step, but h decays 0.99^t, values ~0.01. fp16 rounding relative error per step ~2^-11 ≈ 4.9e-4 relative. Accumulated over 768 steps randomly, error relative to h magnitude ~ maybe 1e-3 relative. Budget E <= 0.003 relative to reference norm. Rounding to fp16 each step gives relative error per step ~2^-11; errors partially random, RMS relative error ~ 5e-4 (per-step) sqrt(accumulation)... actually error propagates through recurrence too, decaying at 0.99. Rough estimate: relative error ~ 5e-4 * sqrt(some factor). Likely under 0.003. Also bias 0.01 constant, values nonzero so relative fine. fp16 has enough precision for ~0.01 values (min normal 6e-5). h stays around 0.01 scale, fine.
+
+Estimate error: each step h = a*h+b then round to fp16, relative error ≤ 2^-11 ≈ 4.88e-4. These errors propagate: e_t = 0.99 e_{t-1} + rounding_t. Steady-state relative error magnitude ~ 4.88e-4/sqrt(1-0.99²) ≈ 4.88e-4/0.141 ≈ 3.5e-3? Hmm, that's if errors align; with random signs RMS = 4.88e-4/sqrt(2)/sqrt(1-0.9801) ≈ 4.88e-4*0.707/0.141 ≈ 2.4e-3. Borderline near 0.003! Uniform rounding error RMS is half-range/sqrt(3): half-range 2^-11, RMS ≈ 2.8e-4. Then /0.141 ≈ 2e-3. Plus error relative to ||reference|| norm — errors across d=32 independent, RMS overall ~2e-3. Budget 0.003. Hmm close.
+
+More carefully: relative error per step ε_t, transmitted with decay. Steady state variance: Var = σ²/(1-0.99²) where σ² per-step relative variance (2.8e-4)² = 7.9e-8. Var_total = 7.9e-8/0.0199 = 3.97e-6, std ≈ 2e-3 relative to |h| per element. But h elements are iid; error at each time step relative to h. Relative L2 error ≈ 2e-3 < 0.003. OK, likely passes. Also fp16 bias value 0.01 well representable.
+
+But wait: does relative error stay relative? h values with bias 0.01 and noise 0.001: h ≈ 0.01/(1-0.99) = 1 at steady state actually! h = 0.99h + b, steady mean ≈ b_mean/(1-0.99)=0.01/0.01=1. So h ~1, fine in fp16. Relative error per step 4.9e-4 max. Good, error ~2e-3 relative — within budget.
+
+Also the reference denominator: max(||ref||, 0.001*sqrt(N)). Fine.
+
+Verdict: trust, moderate confidence.

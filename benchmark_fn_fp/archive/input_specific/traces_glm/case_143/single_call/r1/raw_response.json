@@ -1,0 +1,44 @@
+{
+  "id": "chatcmpl-994f6cbcb35a4f3ea2211ea09281f8a4",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.9, \"reason\": \"This is Kahan compensated summation over each row in float32: the huge 2^80/-2^80 terms cancel in `total` while the small values' rounding losses are captured in `correction`, and `enable_fp_fusion=False` prevents FMA fusion from invalidating the compensation, so the final row sums match the exact target well within 1e-5; the prior probe failure came from a naive-sum implementation, not this one.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Row sums: with 2^80 and -2^80 present, the sum is small (values ~1-12). Naive float32 accumulation fails (probe shows error). Compensated summation: but even Kahan in float32 \u2014 the first element 2^80 dominates; adding 2^30 gives 2^80+2^30 = 2^80 exactly (2^30 lost, correction captures it though). Kahan handles this: lost is captured. Then -2^30, then small values ~1: total \u2248 2^80, adding 1 loses it, but correction captures it. Then -2^80 added to total gives 0 (total exactly 2^80 if nothing else accumulated into it... but values are at columns permuted). Actually with Kahan, total stays 2^80 while small stuff goes into correction; final -2^80 cancels total to 0, plus correction \u2248 sum of small values. So Kahan works here. But correction accumulation itself is in float32; small values ~0.25-1.75 plus 2^30 and -2^30 correction terms. The corrections from 2^30 pairs: 2^80+2^30 rounds to 2^80, lost = (total - updated)+value = (2^80-2^80)+2^30 = 2^30. Then next -2^30: |total| >= |value|, updated=2^80, lost = 0 + (-2^30) = -2^30. correction = 2^30 - 2^30 = 0. Then small values: each addition to 2^80 loses the value, captured in correction. Then -2^80: total becomes 0. Final total+correction = sum of small values \u2248 target. Precision: correction accumulates 8 values ~0.25-1.75 in float32, error tiny relative to ~7-10. Fine.\n\nBut wait: 2^80 as float32 \u2014 fine, it's representable (2^80 exact in float32, exponent within range, max ~3.4e38, 2^80\u22481.2e24). Yes.\n\nAlso enable_fp_fusion=False ensures the Kahan arithmetic isn't fused (FMA could break the compensation? Actually fusion would compute (total-updated)+value incorrectly). They disabled it. Good.\n\nOne subtlety: tl.where in Triton evaluates both branches, fine. total = tl.full((), ...) scalar \u2014 tl.load with scalar pointer works? X + row*COLS + column \u2014 row is scalar tensor; loads scalar. Should work in Triton. Verdict: trust.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1790234079,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 686,
+    "prompt_tokens": 1360,
+    "total_tokens": 2046,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 570,
+      "rejected_prediction_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 10
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 570
+    }
+  }
+}

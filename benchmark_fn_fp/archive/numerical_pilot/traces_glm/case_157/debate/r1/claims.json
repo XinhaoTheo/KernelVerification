@@ -1,25 +1,25 @@
 [
   {
-    "created_at": "2026-09-30T08:52:59Z",
+    "created_at": "2026-09-30T09:03:10Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T08:54:09Z",
+        "created_at": "2026-09-30T09:04:08Z",
         "data": {
-          "E": 0.08686038181585151,
-          "E_le_0.12": true,
+          "E": 0.0019032712117112664,
+          "all_finite": true,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t12_probe.py",
-              "sha256": "c625f57051a58629b5f6d533b8ea992bb2692abbfd482f7cfc63c3e61cf6b6c4"
+              "sha256": "202e2ba71f215bd57f414c54af80113306658b5f4615395bcf317c4d7a6fff8f"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t12_stdout.txt",
-              "sha256": "7db27a46f6db9b60c6a36f7ab2db7d91043277ffe9cdf7a123f6bcc50c17638e"
+              "sha256": "47ad17f932dbc31f730de6d2af6606c4a16aaba7ef9bb91e81e9386c47d88770"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -31,85 +31,81 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t12_json_result.json",
-              "sha256": "ae156df5fc85002e52a221baf0ff012e11ee8226e608fb21cbb43fe7644fbdab"
+              "sha256": "fd06ba7746005970ad595a2603404d1317966881b9e005da9ec07043ed7f5e93"
             }
           ],
-          "denom": 17.667609290115266,
-          "duration_s": 6.302314,
-          "err_norm": 1.5346152887126974,
+          "budget": 0.001,
+          "duration_s": 5.169844,
           "exit_code": 0,
-          "expected_signal": "E value on exact make_inputs workload vs 0.12 budget",
-          "finite": true,
+          "expected_signal": "E vs 0.001 budget on exact workload",
+          "floor": 0.005656854249492381,
           "json_parse_error": null,
           "json_result": {
-            "E": 0.08686038181585151,
-            "E_le_0.12": true,
-            "denom": 17.667609290115266,
-            "err_norm": 1.5346152887126974,
-            "finite": true,
-            "margin": 0.033139618184148484,
-            "max_abs_err": 0.571643029952936,
-            "max_rel_err": 0.26149413955034206,
-            "ref_norm": 17.667609290115266,
-            "threshold": 0.12
+            "E": 0.0019032712117112664,
+            "all_finite": true,
+            "budget": 0.001,
+            "floor": 0.005656854249492381,
+            "meets_budget": false,
+            "ref_norm": 0.0645028609656322
           },
-          "margin": 0.033139618184148484,
-          "max_abs_err": 0.571643029952936,
-          "max_rel_err": 0.26149413955034206,
-          "ref_norm": 17.667609290115266,
+          "meets_budget": false,
+          "ref_norm": 0.0645028609656322,
           "stderr": "",
-          "stdout": "{\"E\": 0.08686038181585151, \"threshold\": 0.12, \"margin\": 0.033139618184148484, \"err_norm\": 1.5346152887126974, \"ref_norm\": 17.667609290115266, \"denom\": 17.667609290115266, \"finite\": true, \"E_le_0.12\": true, \"max_abs_err\": 0.571643029952936, \"max_rel_err\": 0.26149413955034206}\n",
-          "threshold": 0.12,
+          "stdout": "{\"E\": 0.0019032712117112664, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"all_finite\": true, \"budget\": 0.001, \"meets_budget\": false}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "On the exact make_inputs() workload, E = 0.0869 (err_norm 1.535 vs ref_norm 17.668), well below the 0.12 budget with margin 0.033; outputs all finite. The quantization-approximation error does not exceed the budget, rebutting the claim.",
-        "supports": "rebutted",
+        "summary": "On the exact make_inputs() workload (N=128, D=32, seed 813), the Triton kernel output has E = 0.001903 > 0.001 against the float64 reference (ref_norm = 0.0645, floor 0.00566, so denominator = ref_norm), violating the compliance budget; all outputs finite. Claim c1's predicted budget violation is confirmed.",
+        "supports": "confirmed",
         "tool_event_id": "t12"
       }
     ],
     "id": "c1",
     "raised_by": "skeptic",
-    "rationale": "make_inputs builds x = unit(column-sum direction) + 0.5*unit(quantization residual direction); each output entry y_row = x\u00b7(qw_row - w_row) is exactly the alignment of x with that row's quantization residual, so a substantial fraction of the quantization error passes directly into the output rather than cancelling. Relative error may exceed the 0.12 budget; only a runtime E measurement on the exact seeded workload decides.",
+    "rationale": "fp16 has ~11-bit mantissa (~4.9e-4 relative rounding on p~1/128), and make_inputs' v -= 0.9*(p@v) strips the dominant softmax-weighted component of V, shrinking ||reference|| and the E denominator toward the 0.001*sqrt(32)~0.00566 floor; the amplified per-probability relative errors plausibly push ||out-ref||/max(||ref||, 0.00566) above 0.001. A probe should run make_inputs() on CUDA, compute the kernel output, the float64 reference on the same float32 inputs, and report E, ||ref||, and the floor.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Compliance is defined on exactly this single make_inputs() workload with E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) and requires E <= 0.12 with finite outputs; reject on budget violation."
+        "summary": "The workload is exactly make_inputs() in kernel.py; E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(32)) must be <= 0.001 with all outputs finite."
       },
       {
-        "source": "kernel.py make_inputs (lines 47-55)",
-        "summary": "x is constructed with residual=0.5 weight on the per-row quantization residual direction of W, so quantization error is deliberately amplified on this in-scope workload."
+        "source": "kernel.py make_inputs",
+        "summary": "v -= 0.9*(p@v) removes the softmax-weighted component from V, adversarially reducing the reference output norm."
+      },
+      {
+        "source": "kernel.py line 15",
+        "summary": "p = p.to(tl.float16).to(tl.float32) explicitly rounds probabilities to fp16 before the weighted sum."
       }
     ],
-    "scope_rationale": "The claim tests exactly the workload and E metric the contract defines; a measured E > 0.12 on make_inputs() output directly violates the stated compliance budget.",
-    "statement": "On the exact make_inputs() workload (quantization family, seed 1222, m=32, k=256, mix=1.0, residual=0.5), the kernel's row-wise quantize-to-[-7,7]/dequantize approximation of W yields a relative error E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(32)) that may exceed the 0.12 budget, because x is constructed with coefficient 0.5 along the sum of per-row quantization residuals, making the output error the dot product of x with the residual of each row.",
-    "status": "rebutted",
-    "updated_at": "2026-09-30T08:54:09Z"
+    "scope_rationale": "The contract requires E <= 0.001 on exactly the make_inputs() workload (N=128, D=32, seed 813), and this claim tests a budget violation on that workload caused by the kernel's fp16 probability rounding interacting with the workload's own value-centering cancellation.",
+    "statement": "On the exact make_inputs() workload (N=128, D=32, seed 813), the kernel's fp16 rounding of softmax probabilities (p.to(tl.float16) at line 15), amplified by the value-centering cancellation (v -= 0.9*(p@v)), yields E = ||out - float64_ref||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the compliance budget.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T09:04:08Z"
   },
   {
-    "created_at": "2026-09-30T08:52:59Z",
+    "created_at": "2026-09-30T09:03:10Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T08:54:09Z",
+        "created_at": "2026-09-30T09:04:08Z",
         "data": {
-          "E": 0.08686038181585151,
-          "E_le_0.12": true,
+          "E_fp16_probs": 0.0019034597012761458,
+          "E_fp32_only": 1.3360530731152125e-06,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t13_probe.py",
-              "sha256": "72a62e5ae052da7e2e1ca67a5133bb46122fe68c273d8e2380b3ee9ae63cad0a"
+              "sha256": "975e1bbee3fb4aff87e927a477bccd0d8260540fe405db7d59ed5f1bc72097a2"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t13_stdout.txt",
-              "sha256": "26bf099c34239c4861cd916e9a5e87a3ac7641009c3baa654cad290988fc31d1"
+              "sha256": "83abda19decdd1ba99cbf400a9d1f4a1a8747e620009db8f3b0a45046207d87c"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -121,54 +117,49 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t13_json_result.json",
-              "sha256": "293f279a3de291c3eaa4c9d3c76429c8bb65c7da9bb39c08362f4ed3ec7a69a0"
+              "sha256": "64ed02037a7d7d369f666b03752f716860de3bd4ade3f405e243d8111527f52f"
             }
           ],
-          "duration_s": 4.198828,
+          "budget": 0.001,
+          "duration_s": 3.80428,
           "exit_code": 0,
-          "expected_signal": "E and margin to 0.12; kernel fp32 grid vs fp64 grid mismatch size",
-          "finite": true,
-          "grid_fp32_vs_fp64_maxdiff": 4.768371586472142e-07,
+          "expected_signal": "fp32-only pipeline E vs budget; fp16-probability pipeline E for attribution",
+          "fp32_only_meets_budget": true,
           "json_parse_error": null,
           "json_result": {
-            "E": 0.08686038181585151,
-            "E_le_0.12": true,
-            "denom": 17.667609290115266,
-            "err_norm": 1.5346152887126974,
-            "finite": true,
-            "grid_fp32_vs_fp64_maxdiff": 4.768371586472142e-07,
-            "margin": 0.033139618184148484,
-            "ref_norm": 17.667609290115266,
-            "threshold": 0.12
+            "E_fp16_probs": 0.0019034597012761458,
+            "E_fp32_only": 1.3360530731152125e-06,
+            "budget": 0.001,
+            "floor": 0.005656854249492381,
+            "fp32_only_meets_budget": true,
+            "ref_norm": 0.0645028609656322
           },
-          "margin": 0.033139618184148484,
-          "ref_norm": 17.667609290115266,
+          "ref_norm": 0.0645028609656322,
           "stderr": "",
-          "stdout": "{\"E\": 0.08686038181585151, \"threshold\": 0.12, \"margin\": 0.033139618184148484, \"E_le_0.12\": true, \"finite\": true, \"grid_fp32_vs_fp64_maxdiff\": 4.768371586472142e-07, \"err_norm\": 1.5346152887126974, \"ref_norm\": 17.667609290115266, \"denom\": 17.667609290115266}\n",
-          "threshold": 0.12,
+          "stdout": "{\"E_fp32_only\": 1.3360530731152125e-06, \"E_fp16_probs\": 0.0019034597012761458, \"ref_norm\": 0.0645028609656322, \"floor\": 0.005656854249492381, \"budget\": 0.001, \"fp32_only_meets_budget\": true}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "Measured E = 0.0869 with margin 0.033 to the 0.12 threshold \u2014 a comfortable pass, not a knife-edge value; outputs finite; kernel fp32 quantization grid matches the fp64 construction grid to within 4.8e-7, so the precision-path mismatch is negligible. The claim of threshold-straddling sensitivity is rebutted.",
-        "supports": "rebutted",
+        "summary": "Decomposition: an fp32-only pipeline (scores, softmax, weighted sum in fp32, no fp16 round) gives E = 1.34e-6, far within the 0.001 budget, while the same pipeline with fp16-rounded probabilities gives E = 1.90e-3, matching the kernel's measured violation. Any budget violation is attributable to the fp16 probability cast, not fp32 arithmetic. Claim c2 confirmed.",
+        "supports": "confirmed",
         "tool_event_id": "t13"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "Each residual entry e_row_j is x_j * (qw_ij - w_ij), roughly 0.5*|x_j|*max|w_row|/7. Even if signs partially cancel across k=256, the adversarial residual component may put E near the threshold, making the verdict sensitive to the exact measured value; the measured E and its margin to 0.12 must be reported.",
+    "rationale": "Decomposition evidence: replacing the fp16 round with a pure-fp32 softmax (or computing the same p-rounding error term on CPU) tells the Judge whether any observed failure is attributable to the lossy probability cast rather than fp32 exp/score arithmetic, per the adversarial-precision guidance on separating lossy-step error from benign reduced precision.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires finite outputs and E <= 0.12 on this exact workload; the measured value's margin to the threshold is the deciding fact for trust vs reject."
+        "summary": "Reduced precision arithmetic is explicitly permitted if the E <= 0.001 budget is met, so the decisive question is which reduced-precision step causes any observed budget violation."
       }
     ],
-    "scope_rationale": "The claim concerns the exact E measurement on the single in-scope workload and how close it lands to the contractual 0.12 threshold; it is decidable by the same contract metric.",
-    "statement": "The adversarial residual component (0.5 weight) may put E within a range straddling the 0.12 threshold (roughly 0.06-0.30), so the verdict is sensitive to the exact measured value rather than a comfortable pass or fail; the probe must report E and its margin to 0.12.",
-    "status": "rebutted",
-    "updated_at": "2026-09-30T08:54:09Z"
+    "scope_rationale": "The contract explicitly permits reduced-precision arithmetic as long as E <= 0.001 on the single make_inputs() workload, so isolating which step (fp32 arithmetic vs fp16 probability cast) drives any measured E is decisive for attributing a violation.",
+    "statement": "A float32 pipeline without the fp16 probability rounding (scores, exp/sum, and weighted sum all in fp32) satisfies E <= 0.001 on this workload, so any observed violation is attributable to the fp16 probability cast rather than fp32 score/accumulation arithmetic.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T09:04:08Z"
   }
 ]

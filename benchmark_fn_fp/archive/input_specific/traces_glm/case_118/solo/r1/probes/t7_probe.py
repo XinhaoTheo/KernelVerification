@@ -1,28 +1,14 @@
-import numpy as np, torch, json, math, sys
-sys.path.insert(0, "/root/numerical_cases/case_z")
-from kernel import run, make_inputs_numpy
 
-query_np, anchors_np, values_np = make_inputs_numpy()
-q = torch.from_numpy(query_np).cuda()
-a = torch.from_numpy(anchors_np).cuda()
-v = torch.from_numpy(values_np).cuda()
+import json, sys, math
+sys.path.insert(0, "/root/numerical_cases/case_t")
+import numpy as np, torch
+from kernel import make_inputs, run
 
-out = run(q, a, v)
-out_val = float(out.cpu().numpy()[0])
-
-# float64 reference from stored float32 values
-q64 = query_np.astype(np.float64); a64 = anchors_np.astype(np.float64); v64 = values_np.astype(np.float64)
-d = ((a64 - q64)**2).sum(axis=1)
-w = np.exp(-16.0 * d)
-ref = float((w * v64).sum() / w.sum())
-
-err = abs(out_val - ref) / max(abs(ref), 0.05)
-print(json.dumps({
-  "metric": "contract error |output-ref|/max(|ref|,0.05)",
-  "output": out_val, "reference": ref,
-  "abs_diff": abs(out_val - ref),
-  "error": err, "bound": 0.05, "passes": err <= 0.05,
-  "finite": math.isfinite(out_val), "shape": list(out.shape),
-  "distances_min_max": [float(d.min()), float(d.max())],
-  "weights_min_max": [float(w.min()), float(w.max())]
-}))
+a, f, p = make_inputs()
+out = run(a, f, p).cpu().numpy()
+A, F, P = a.cpu().numpy().astype(np.float64), f.cpu().numpy().astype(np.float64), p.cpu().numpy().astype(np.float64)
+ref = 1.0 + (A*(np.cos(P)-np.cos(P+F))/F)).sum(axis=1)
+rel = np.linalg.norm(out.astype(np.float64)-ref)/max(np.linalg.norm(ref),1e-12)
+print(json.dumps({"output": out.tolist(), "reference": ref.tolist(),
+                  "rel_l2": float(rel), "finite": bool(np.all(np.isfinite(out))),
+                  "tolerance": 0.035, "passes": bool(rel<=0.035)}))

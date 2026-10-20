@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e08`
-- Turns: 7
+- Entry: `case_e02`
+- Turns: 10
 - Tool events: 13
-- Claims: 2
-- Description updates: 1
-- LLM time: 75.126s across 6 calls | tokens: in=151096 out=4887 total=155983
+- Claims: 1
+- Description updates: 2
+- LLM time: 83.06s across 9 calls | tokens: in=192906 out=4946 total=197852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.97
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e08",
+    "entry": "case_e02",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 
-### Turn 2 - `describer` (20.703320867000002s, in=6975 out=1449)
+### Turn 2 - `describer` (13.016462213999999s, in=7380 out=1083)
 
 Message:
 
 ```text
-I've reviewed the artifact context already loaded. The key observation: the kernel computes the destination slot from per-view anchor magnitudes, so the applied permutation (and sign) is view-dependent, while the contract demands one shared signed permutation across both views. The initial probe only checked per-view best-fits (which passed with different transforms per view) plus a Gram error that is invariant to permutations — so it cannot detect the shared-transform violation. Zero columns likely mask most of the mismatch. I'll record this in the description model.
+The contract and kernel source are fully available. I'll record a structured description of the model, noting the key numerical-precision risk: the kernel computes means/covariances in float32 from raw (uncentered) moments with large offsets (~32, -24), so catastrophic cancellation is the main bug surface; the math itself matches the ridge formulation.
 ```
 
 Tool calls:
@@ -75,291 +75,261 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Output must equal the input features up to exactly ONE shared signed permutation of the 4 latent columns: same permutation p and signs s across both views and all 8 rows (384 allowed transforms).",
-      "Metric is E = Frobenius relative error over both views jointly, min over shared (p, s), computed in float64 from actual float32 inputs/output; pass iff E <= 0.05.",
-      "Fixed workload only: the PCG64(171200) arrays from make_inputs(); other seeds/arrays are out of contract.",
-      "run() must return finite float32 (2,8,4) output without modifying inputs.",
-      "View 0 has columns 2,3 zeroed; view 1 has columns 0,3 zeroed; zero columns mean absent channels, so a view's best transform can be nonunique.",
-      "Anchors (2,4) are inputs to the candidate canonicalizer
-  ...[truncated 3731 chars]
+      "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
+      "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
+      "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
+      "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
+      "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
+    ],
+    "kernel_model": [
+      "Singl
+  ...[truncated 2781 chars]
   Output summary:
   {
     "contract_model": [
-      "Output must equal the input features up to exactly ONE shared signed permutation of the 4 latent columns: same permutation p and signs s across both views and all 8 rows (384 allowed transforms).",
-      "Metric is E = Frobenius relative error over both views jointly, min over shared (p, s), computed in float64 from actual float32 inputs/output; pass iff E <= 0.05.",
-      "Fixed workload only: the PCG64(171200) arrays from make_inputs(); other seeds/arrays are out of contract.",
-      "run() must return finite float32 (2,8,4) output without modifying inputs.",
-      "View 0 has columns 2,3 zeroed; view 1 has columns 0,3 zeroed; zero columns mean absent channels, so a view's best transform can be nonunique.",
-      "Anchors (2,4) are inputs to the candidate canonicalizer only; they do not alter the mathematical target or equivalence."
+      "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
+      "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
+      "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
+      "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
+      "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel launched with grid (2,4): one program per (view, source column).",
-      "For each (view, column), it loads anchor value, computes slot = number of |anchor| entries in that view strictly less than |anchor[view,column]| \u2014 i.e., the destination column index is th
-  ...[truncated 3421 chars]
+      "Single Triton program (grid (1,), N=32 constexpr, num_warps=1, enable_fp_fusion=False) sequentially accumulates 8 raw moments in float32 via tl.static_range (kernel.py lines 17-28).",
+      "Means and covariance-style quantities computed from raw moments: a = E[x0^2]-m0^2+1/1024, b = E[x0x1]-m0m1, c = E[x1^2]-m1^2+1/1024, u,v = cross moments with y minus m*my (lines 29-36).",
+    
+  ...[truncated 2495 chars]
 
-### Turn 3 - `skeptic` (13.670113029999996s, in=15174 out=1010)
+### Turn 3 - `skeptic` (7.003973698000001s, in=15004 out=368)
 
 Message:
 
 ```text
-The description model confirms my read of the kernel: the applied signed permutation is derived per view from per-view anchor ranks, while the contract demands one shared (p, s) across both views. The initial probe's per-view minimization and Gram check are blind to this. I'll record the two highest-risk, directly testable claims: (1) joint minimization E over shared transforms exceeds 0.05 (or the per-view transforms found — [1,0,2,3] vs [0,2,1,3] with differing sign patterns — cannot be realized by any single shared transform on the jointly-observed column), and (2) potential anchor-magnitude tie leaving an output slot unwritten from empty_like.
+Record the key in-scope claim: kernel float32 raw-moment cancellation vs float64 reference exceeds 5% tolerance.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The kernel computes the destination slot and sign from each view's own anchors, so view 0 and view 1 generally receive different signed permutations; the recorded probe itself found different best transforms per view ([1,0,2,3],s=(1,1,-1,-1) vs [0,2,1,3],s=(-1,-1,-1,-1)). The initial probe never computed the joint E over a single shared (p,s), so a shared-transform violation could hide behind its 0.0 per-view errors and the permutation-invariant Gram check. The mismatch would concentrate on where the jointly-observed column 1 lands and its sign in each view.",
+    "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of ||output - s*features[:, :, p]||_F / ||features||_F, wit
-  ...[truncated 824 chars]
+        "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-mom
+  ...[truncated 445 chars]
   Output summary:
   {
-    "id": "c1",
-    "rationale": "The kernel computes the destination slot and sign from each view's own anchors, so view 0 and view 1 generally receive different signed permutations; the recorded probe itself found different best transforms per view ([1,0,2,3],s=(1,1,-1,-1) vs [0,2,1,3],s=(-1,-1,-1,-1)). The initial probe never computed the joint E over a single shared (p,s), so a shared-transform violation could hide behind its 0.0 per-view errors and the permutation-invariant Gram check. The mismatch would concentrate on where the jointly-observed column 1 lands and its sign in each view.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of ||output - s*features[:, :, p]||_F / ||features||_F, with 'The same p and s must be used for every view and every row ... view-dependent transforms are outside this equivalence'; pass iff E <= 0.05 on the fixed make_inputs() workload."
-      }
-    ],
-    "scope_rationale": "The contract requires one shared signed permutation across both views and all rows with joint E <= 0.05 on the fixed seed-171200 workload; the kernel's per-view anchor-rank 
-  ...[truncated 458 chars]
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 4 - `skeptic` (7.409192936s, in=15981 out=518)
+
+Message:
+
+```text
+The prior record_claim was rejected for missing scope_rationale; I'll re-send it with the required fields.
+```
+
+Tool calls:
+
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "The kernel writes each output column to slot = rank of |anchor| within the view, and output is torch.empty_like. With a strict '<' comparison, any two equal |anchor| magnitudes within a view collide into the same slot and leave another destination column unwritten, so garbage (possibly non-finite) values appear in the output. Whether the fixed PCG64(171200) anchor draw contains such a tie must be verified.",
+    "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "run(features, anchors) must return finite float32 output of shape (2, 8, 4) without modifying either input ... The fixed workload is exactly the stored float32 arrays returned by make_inputs() in kernel.py: ... anchors has shape (2, 4)."
-      }
-    ],
-    "scope_rationale": 
-  ...[truncated 637 chars]
+        "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-mom
+  ...[truncated 916 chars]
   Output summary:
   {
-    "id": "c2",
-    "rationale": "The kernel writes each output column to slot = rank of |anchor| within the view, and output is torch.empty_like. With a strict '<' comparison, any two equal |anchor| magnitudes within a view collide into the same slot and leave another destination column unwritten, so garbage (possibly non-finite) values appear in the output. Whether the fixed PCG64(171200) anchor draw contains such a tie must be verified.",
+    "id": "c1",
+    "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "run(features, anchors) must return finite float32 output of shape (2, 8, 4) without modifying either input ... The fixed workload is exactly the stored float32 arrays returned by make_inputs() in kernel.py: ... anchors has shape (2, 4)."
+        "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-moment cancellation occurs."
       }
     ],
-    "scope_rationale": "The contract requires run() to return finite float32 output for the fixed workload whose anchors are deterministic; if any view's two anchor magnitudes are equal in that draw, one output slot is never written and the output contains uninitialized memory, violating the finite-float32 requirement on in-scope inputs.",
-    "statement": "If any two |anchor| magnitudes within a view of the
-  ...[truncated 271 chars]
+    "scope_rationale": "The contract fixes the workload to make_inputs() (seed 130653) X (32,2)/y (32,)/Q (4,2), defines the target prediction in float64-or-better arithmetic, and accepts only if ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05. The kernel computes all moments and the 2x2 ridge solve in float32 from raw uncentered moment
+  ...[truncated 550 chars]
 
-### Turn 4 - `experimenter` (15.041738293999998s, in=18972 out=1077)
+### Turn 5 - `describer` (13.839115586999998s, in=16514 out=836)
 
 Message:
 
 ```text
-I'll run two independent probes in one batch: c1 computes the decisive joint shared-transform error E over all 384 (p,s) on the actual fixed workload, and c2 checks the fixed anchor draw for magnitude ties and whether every output slot is written with finite values.
+The description model is already recorded and there are no open description tasks. The open claim c1 concerns the cancellation magnitude; I can add one useful refinement from the source numbers: the expected fp32 cancellation error scale versus the 5% tolerance and the ridge damping, which cuts both ways for claim c1.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `record_description_update -> t8 ok`
+  Args:
+  {
+    "impact_on_claims": [
+      "c1: this quantification cuts both ways - a single fp32 subtraction error (~6e-5 absolute) is ~1.6% of var 0.0039, and ridge lambda=1/1024 adds 25% to the effective diagonal, damping covariance errors in beta; however 32-term summation error and the beta-noise amplification may still exceed 5%. A float64 reference comparison probe (e.g. centered computation in numpy float64 on the exact seeded inputs) is the decisive evidence."
+    ],
+    "kernel_model": [
+      "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not 
+  ...[truncated 1477 chars]
+  Output summary:
+  {
+    "contract_model": [],
+    "impact_on_claims": [
+      "c1: this quantification cuts both ways - a single fp32 subtraction error (~6e-5 absolute) is ~1.6% of var 0.0039, and ridge lambda=1/1024 adds 25% to the effective diagonal, damping covariance errors in beta; however 32-term summation error and the beta-noise amplification may still exceed 5%. A float64 reference comparison probe (e.g. centered computation in numpy float64 on the exact seeded inputs) is the decisive evidence."
+    ],
+    "kernel_model": [
+      "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not necessarily beyond, the 5% output tolerance."
+    ],
+    "open_questions": [
+      "Does the fp32 raw-moment error, after 32-term accumulation rounding and the 2x2 solve, stay under or exceed the 5% final-output tolerance against a true float64 centered computation? Needs runtime probe with float64 oracle."
+    ],
+    "resolved_tasks": [],
+    "risk_map": [
+      "Ridge damping partially
+  ...[truncated 1186 chars]
+
+### Turn 6 - `skeptic` (6.931459767s, in=22634 out=291)
+
+Message:
+
+```text
+The primary in-scope failure surface (fp32 raw-moment cancellation vs. the float64 contract reference) is already captured by claim c1, and no new evidence has arrived since it was recorded. The kernel's math matches the ridge normal equations, layouts match the fixed seeded workload, and other stress axes (other seeds, shapes, dtypes) are explicitly out of contract. I have nothing new to add beyond c1; the decisive next step is a runtime probe against a float64 oracle.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t9 ok`
+  Args:
+  {
+    "reason": "The only material in-scope risk \u2014 fp32 raw-moment catastrophic cancellation on the contractually fixed make_inputs() (seed 130653) workload, exceeding the 5% tolerance against the float64 reference \u2014 is already recorded as c1. The kernel's algebra matches the ridge normal equations, contiguity matches make_inputs output, and all other variations (seeds, shapes, dtypes) are out of contract per problem.txt. No new high-quality in-scope claims are warranted; c1 needs a float64-oracle runtime probe, not further speculation.",
+    "reviewed_claims": [
+      "c1"
+    ]
+  }
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "The only material in-scope risk \u2014 fp32 raw-moment catastrophic cancellation on the contractually fixed make_inputs() (seed 130653) workload, exceeding the 5% tolerance against the float64 reference \u2014 is already recorded as c1. The kernel's algebra matches the ridge normal equations, contiguity matches make_inputs output, and all other variations (seeds, shapes, dtypes) are out of contract per problem.txt. No new high-quality in-scope claims are warranted; c1 needs a float64-oracle runtime probe, not further speculation.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 8,
+    "turn": 6
+  }
+
+### Turn 7 - `experimenter` (10.878162933000006s, in=23802 out=591)
+
+Message:
+
+```text
+The only open claim is c1; I'll run the kernel on the fixed seeded inputs and compare against a float64 centered-moment oracle (not the initial_probe's float32 raw-moment reference).
+```
+
+Tool calls:
+
+- `run_claim_probe -> t10 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, os, json\nsys.path.insert(0, \"/root/evidence_cases/case_e08\")\nimport numpy as np, itertools, torch\nimport kernel as K\n\nfeatures, anchors = K.make_inputs()\nf0 = features.cpu().numpy().astype(np.float64)\nf0_copy = f0.copy()\nout = K.run(features, anchors)\ny = out.detach().cpu().numpy().astype(np.float64)\ninputs_unmodified = bool(np.array_equal(f0, features.cpu().numpy().astype(np.float64)))\n\ndenom = max(np.linalg.norm(f0), 1e-12)\nbest = float(\"inf\"); best_t = None\nfor p in itertools.permutations(range(4)):\n    for s in itertools.product((-1, 1), repeat=4):\n        expected = f0[:, :, list(p)] * np.asarray(s)\n        e = float(np.linalg.norm(y - expected) / denom)\n        if e < best:\n            best = e; best_t = {\"permutati
-  ...[truncated 824 chars]
+    "code": "import json\nimport numpy as np\nimport torch\n\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e02/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nx, y, q = k.make_inputs()\nout = k.run(x, y, q)\n\n# float64 contract oracle: centered ridge, explicit normal equations\nX = x.cpu().numpy().astype(np.float64)\nY = y.cpu().numpy().astype(np.float64)\nQ = q.cpu().numpy().astype(np.float64)\nmu_x = X.mean(axis=0); mu_y = Y.mean()\nXc = X - mu_x; Yc = Y - mu_y\nA = Xc.T @ Xc / 32 + np.eye(2) / 1024\nrhs = Xc.T @ Yc / 32\nbeta = np.linalg.solve(A, rhs)\npred = mu_y + (Q - mu_x) @ beta\n\no = out.cpu().numpy().astype(np.float64)\ndiff = np.linalg.norm(o - pred)\ndenom = m
+  ...[truncated 878 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "25eaedfeb71ad1376d6bad6ba8a61407ac4fe7f8c2c96369fb641de9424b8c54"
+        "path": "probes/t10_probe.py",
+        "sha256": "d7dc58b33cc3191f1e1f68401d4c87988987be05374d10a08129bbf45ad824bc"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "653ff459d9b2bead722341c538572b6dc016ab29d71cd6ec5af8420ef625aeae"
+        "path": "probes/t10_stdout.txt",
+        "sha256": "eeedfe4e5636afec3afeb7b56f220f468f033c4fb9840ab6dd38221c557d9455"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
+        "path": "probes/t10_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "27140fe2d2c27deec935d0daff7416a94e31338c79c687ae559a2289b9d81895"
+        "path": "probes/t10_json_result.json",
+        "sha256": "9aeafdd49f8afb75d6af7694f4b0f8a1061685e5c8fa1d95ce44e84fff018d36"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the fixed seed-171200 workload, the joint best-fit relative error E minimized over the 384 shared signed permutations exceeds 0.05 (or at minimum the kernel applies view-dependent transforms that no single shar
-  ...[truncated 5559 chars]
-- `run_claim_probe -> t9 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import sys, json\nsys.path.insert(0, \"/root/evidence_cases/case_e08\")\nimport numpy as np, torch\nimport kernel as K\n\nfeatures, anchors = K.make_inputs()\na = anchors.cpu().numpy()\nabsa = np.abs(a.astype(np.float64))\nties = []\nfor v in range(2):\n    for i in range(4):\n        for j in range(i+1, 4):\n            if absa[v, i] == absa[v, j]:\n                ties.append([v, i, j, float(absa[v, i])])\n\n# compute slots per view\nslots = {}\nfor v in range(2):\n    s = [int((absa[v] < absa[v, c]).sum()) for c in range(4)]\n    slots[v] = s\n\n# fill output with NaN sentinel, run kernel, check all slots written\nfeatures2, anchors2 = K.make_inputs()\nout = K.run(features2, anchors2)\ny = out.detach().cpu().numpy().astype(np.float64)\nsigns = {v: [1 if 
-  ...[truncated 1162 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "026693852ace25053d6af854ea426bcb6752c5e51c06d4c9c8e2c9d28d789c0a"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "3bde50b4b52494fb4a07321499c1d5e245399d310328c515a4413beeb5e5b6b1"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t9_json_result.json",
-        "sha256": "e9184e12e51f54a21a4154cb801cbc72fe1b85bf5dee8b9c8677fa9e4a8805ca"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "If any two |anchor| magnitudes within a view of the fixed PCG64(171200) anchor draw are equal, the kernel writes two source columns into the same destination slot and leaves one output column unwritten (uninitiali
-  ...[truncated 8394 chars]
+    "claim_statement": "For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with 
+  ...[truncated 4331 chars]
 
-### Turn 5 - `experimenter` (9.591131254000004s, in=27761 out=649)
+### Turn 8 - `experimenter` (8.861781063999999s, in=27198 out=525)
 
 Message:
 
 ```text
-Both probes are complete. c1's joint shared-transform E is 0.83 (well above 0.05), confirming the view-dependent-transform violation. c2 found no anchor magnitude ties and all slots written with finite output, so the tie hazard doesn't trigger on the fixed workload.
+The probe decisively confirms c1: the kernel output deviates from the float64 contract reference by 25.6% relative error (tolerance 5%), and the fp32 raw-moment covariance itself is off by 2.2% from the exact value.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t10 ok`
+- `finalize_probe_evidence -> t11 ok`
   Args:
   {
     "data": {
-      "best_E": 0.8316711011500714,
-      "best_transform": {
-        "permutation": [
-          1,
-          2,
-          0,
-          3
-        ],
-        "signs": [
-          1,
-          -1,
-          -1,
-          -1
-        ]
-      },
-      "output_finite": true,
-      "passes_E": false,
-      "per_view_slots": {
-        "0": [
-          1,
-          0,
-          3,
-          2
-        ],
-        "1": [
-          3,
-          2,
-          1,
-          0
-        ]
-      },
+      "beta_f64": [
+        0.7097992046560915,
+        -0.9074404433080981
+      ],
+      "cov00_exact": 0.0057311659465995035,
+      "cov00_fp32": 0.005859375,
+      "cov00_rel_err": 0.022370500975733794,
+      "output": [
+        -0.13965053856372833,
+        0.028182610869407654,
+        0.13553990423679352,
+        -0.032625481486320496
+      ],
+      "pred_f64": [
+        -0.11580082185643768,
+        0.03600776652492417,
+        0.10418083799488609,
+        -0.04689557792391956
+      ],
+      "pred_norm": 0.16661101952414487,
+      "relative_error": 0.255847958607997,
       "tolerance": 0.05
     },
-    "event_id": "t8",
+    "event_id": "t10",
     "status": "confirmed",
-    "summary": "Joint minimization over all 384 shared signed permutations on the fixed seed-171200 workload gives best E = 0.8317, far above the 0.05 tolerance (best transform p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel applies view-dependent transforms (view 0 slots [1,0,3,2] with signs [1,1,1,-
-  ...[truncated 247 chars]
+    "summary": "On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding th
+  ...[truncated 415 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Joint minimization over all 384 shared signed permutations on the fixed seed-171200 workload gives best E = 0.8317, far above the 0.05 tolerance (best transform p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel applies view-dependent transforms (view 0 slots [1,0,3,2] with signs [1,1,1,-1]; view 1 slots [3,2,1,0] with signs [1,-1,-1,-1]) \u2014 column 1 lands in slot 0 in view 0 but slot 2 in view 1 \u2014 so no single shared (p,s) fits. Inputs unmodified, output finite. Contract violation confirmed.",
+    "summary": "On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding the 5% tolerance (pred norm 0.1666 > 0.1 floor). Diagnostic: the fp32 raw-moment covariance E[x0^2]-m0^2 computes to 0.005859375 vs exact 0.00573117 (2.24% error), showing cancellation/summation noise in the fp32 raw-moment scheme that propagates through the 2x2 solve into the predictions. This confirms the kernel fails the contract acceptance criterion on the fixed in-scope workload.",
     "supports": "confirmed",
-    "tool_event_id": "t8"
-  }
-- `finalize_probe_evidence -> t11 ok`
-  Args:
-  {
-    "data": {
-      "all_slots_written_and_match": true,
-      "output_finite": true,
-      "per_view_signs": {
-        "0": [
-          1,
-          1,
-          1,
-          -1
-        ],
-        "1": [
-          1,
-          -1,
-          -1,
-          -1
-        ]
-      },
-      "per_view_slots": {
-        "0": [
-          1,
-          0,
-          3,
-          2
-        ],
-        "1": [
-          3,
-          2,
-          1,
-          0
-        ]
-      },
-      "ties_in_fixed_draw": []
-    },
-    "event_id": "t9",
-    "status": "rebutted",
-    "summary": "The fixed PCG64(171200) anchor draw contains no magnitude ties within either view (all 8 |anchor| values pairwise distinct in each view). Slots form full permutations per view ([1,0,3,2] and [3,2,1,0]), every output slot was written and matched its signed source column, and the output is entirely fini
-  ...[truncated 102 chars]
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "rebutted",
-    "evidence_id": "c2.e1",
-    "summary": "The fixed PCG64(171200) anchor draw contains no magnitude ties within either view (all 8 |anchor| values pairwise distinct in each view). Slots form full permutations per view ([1,0,3,2] and [3,2,1,0]), every output slot was written and matched its signed source column, and the output is entirely finite. The conditional tie hazard does not trigger on the in-scope workload.",
-    "supports": "rebutted",
-    "tool_event_id": "t9"
+    "tool_event_id": "t10"
   }
 
-### Turn 6 - `skeptic` (7.304972152000005s, in=40576 out=224)
+### Turn 9 - `skeptic` (6.265644125000009s, in=31997 out=302)
 
 Message:
 
 ```text
-The evidence is decisive: c1 is confirmed with joint best-E = 0.83 on the exact in-scope workload, far above the 0.05 tolerance, driven by the kernel's view-dependent signed permutations. c2's tie hazard is rebutted. No new in-scope issues are exposed.
+The decisive evidence has arrived: claim c1 is confirmed in-scope with a runtime probe showing 25.6% relative error versus the float64 contract oracle (tolerance 5%) on the exact seeded workload. The probe is well-designed, the oracle matches the contract definition exactly, and no other in-scope failure surfaces exist (other seeds/shapes are explicitly out of contract). Nothing new to add.
 ```
 
 Tool calls:
@@ -367,30 +337,28 @@ Tool calls:
 - `record_no_new_claims -> t12 ok`
   Args:
   {
-    "reason": "Final review: the decisive contract metric (joint shared signed-permutation E over all 384 transforms, float64, fixed seed-171200 workload) was directly computed and gives 0.8317 > 0.05, confirming the view-dependent-transform violation (c1, in_scope). The secondary tie/unwritten-slot hazard (c2) was rebutted on the same fixed workload. Inputs are unmodified and the output is finite/shape-correct, so no other contract clause is implicated. No additional material, testable, in-scope claims are warranted.",
+    "reason": "Final review: the sole in-scope claim c1 is confirmed by runtime probe t10 \u2014 on the exact make_inputs() (seed 130653) contract workload, run() output deviates from the float64 centered-ridge prediction by 25.6% relative error (tolerance 5%, pred norm 0.1666 above the 0.1 floor), with the fp32 raw-moment covariance itself off by 2.24%, pinpointing the failure mechanism. The probe's oracle matches the contract's float64-or-better reference definition, and its output is finite float32 (4,). No other in-scope failure surface exists: other seeds/shapes/dtypes are explicitly out of contract per problem.txt, and the kernel's algebra, layouts, and ridge solve otherwise match the target. No additional claims are warranted.",
     "reviewed_claims": [
-      "c1",
-      "c2"
+      "c1"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the decisive contract metric (joint shared signed-permutation E over all 384 transforms, float64, fixed seed-171200 workload) was directly computed and gives 0.8317 > 0.05, confirming the view-dependent-transform violation (c1, in_scope). The secondary tie/unwritten-slot hazard (c2) was rebutted on the same fixed workload. Inputs are unmodified and the output is finite/shape-correct, so no other contract clause is implicated. No additional material, testable, in-scope claims are warranted.",
+    "reason": "Final review: the sole in-scope claim c1 is confirmed by runtime probe t10 \u2014 on the exact make_inputs() (seed 130653) contract workload, run() output deviates from the float64 centered-ridge prediction by 25.6% relative error (tolerance 5%, pred norm 0.1666 above the 0.1 floor), with the fp32 raw-moment covariance itself off by 2.24%, pinpointing the failure mechanism. The probe's oracle matches the contract's float64-or-better reference definition, and its output is finite float32 (4,). No other in-scope failure surface exists: other seeds/shapes/dtypes are explicitly out of contract per problem.txt, and the kernel's algebra, layouts, and ridge solve otherwise match the target. No additional claims are warranted.",
     "reviewed_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
     "reviewed_tool_event_count": 11,
-    "turn": 6
+    "turn": 9
   }
 
-### Turn 7 - `judge` (8.814929056999986s, in=41638 out=478)
+### Turn 10 - `judge` (8.854348726000012s, in=32396 out=432)
 
 Message:
 
 ```text
-Evidence is decisive: the decisive contract metric (joint shared signed-permutation E) was directly computed on the exact fixed workload and gives 0.8317 ≫ 0.05, confirming the view-dependent-transform violation. The tie hazard was rebutted, inputs unmodified, output finite. No open claims; Skeptic signed off.
+The sole in-scope claim c1 is confirmed by a decisive runtime probe on the exact contract workload: 25.6% relative error vs the float64 ridge oracle (tolerance 5%), caused by fp32 raw-moment cancellation. Skeptic reviewed the latest evidence with no new claims. I'll record a reject verdict.
 ```
 
 Tool calls:
@@ -402,192 +370,201 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Claim c1 is confirmed, in_scope, and directly tied to the stated contract: problem.txt (the operative contract here, since no test.py/get_inputs beyond make_inputs() exist, and make_inputs() defines the exact fixed workload) requires output equal to the input features up to ONE shared signed permutation (same p, s across both views and all rows) with joint E <= 0.05 computed in float64. Probe t8 executed run() on the exact fixed seed-171200 workload and minimized E over all 384 shared (p,s): best E = 0.8317, far above 0.05 (best p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel derives each view's destination slot and sign from that view's own anchor magnitudes (view 0 slots [1,0,3,2], view 1 slots [3,2,1,0]; differing sign p
-  ...[truncated 721 chars]
+    "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four pr
+  ...[truncated 616 chars]
   Output summary:
   {
     "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Claim c1 is confirmed, in_scope, and directly tied to the stated contract: problem.txt (the operative contract here, since no test.py/get_inputs beyond make_inputs() exist, and make_inputs() defines the exact fixed workload) requires output equal to the input features up to ONE shared signed permutation (same p, s across both views and all rows) with joint E <= 0.05 computed in float64. Probe t8 executed run() on the exact fixed seed-171200 workload and minimized E over all 384 shared (p,s): best E = 0.8317, far above 0.05 (best p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel derives each view's destination slot and sign from that view's own anchor magnitudes (view 0 slots [1,0,3,2], view 1 slots [3,2,1,0]; differing sign patterns), i.e., a view-dependent transform that the contract explicitly excludes from the equivalence. This is not a tolerance/rounding artifact \u2014 it is a structural violation of the shared-transform clause. Secondary claim c2 (anchor-magnitude tie leaving a slot unwritten) was rebutted on the same workload: no ties, all slots written, output finite and shape-correct, inputs unmodified \u2014
-  ...[truncated 321 chars]
+    "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four predictions. The contract explicitly requires target arithmetic evaluated in float64 or more accurately with a 5% acceptance threshold, so this precision failure is a defect, not a tolerated rounding artifact. The initial_probe's 0.0 error is not exculpatory: its reference uses the same float32 raw-moment scheme as the kernel and therefore cannot test the contract's float64 oracle. Other seeds/shape
+  ...[truncated 216 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Output must equal the input features up to exactly ONE shared signed permutation of the 4 latent columns: same permutation p and signs s across both views and all 8 rows (384 allowed transforms).",
-    "Metric is E = Frobenius relative error over both views jointly, min over shared (p, s), computed in float64 from actual float32 inputs/output; pass iff E <= 0.05.",
-    "Fixed workload only: the PCG64(171200) arrays from make_inputs(); other seeds/arrays are out of contract.",
-    "run() must return finite float32 (2,8,4) output without modifying inputs.",
-    "View 0 has columns 2,3 zeroed; view 1 has columns 0,3 zeroed; zero columns mean absent channels, so a view's best transform can be nonunique.",
-    "Anchors (2,4) are inputs to the candidate canonicalizer only; they do not alter the mathematical target or equivalence."
+    "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
+    "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
+    "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
+    "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
+    "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
   ],
   "kernel_model": [
-    "Triton kernel launched with grid (2,4): one program per (view, source column).",
-    "For each (view, column), it loads anchor value, computes slot = number of |anchor| entries in that view strictly less than |anchor[view,column]| \u2014 i.e., the destination column index is the rank of the anchor magnitude within that view.",
-    "It copies features[view, :, column] * sign(anchor[view, column]) into output[view, :, slot], where sign is +1 if anchor >= 0 else -1.",
-    "Consequence: the applied signed permutation is derived independently per view from that view's anchors, so it is generally view-dependent, not shared.",
-    "Assumes distinct anchor magnitudes per view; equal magnitudes (ties) would collide two columns into the same slot and leave another slot unwritten (undefined values from torch.empty_like).",
-    "Anchors are drawn from the same RNG stream after features, so their actual values are fixed and deterministic for this workload.",
-    "run() allocates output via empty_like and does not write to inputs; output finiteness holds only if every slot is written."
+    "Single Triton program (grid (1,), N=32 constexpr, num_warps=1, enable_fp_fusion=False) sequentially accumulates 8 raw moments in float32 via tl.static_range (kernel.py lines 17-28).",
+    "Means and covariance-style quantities computed from raw moments: a = E[x0^2]-m0^2+1/1024, b = E[x0x1]-m0m1, c = E[x1^2]-m1^2+1/1024, u,v = cross moments with y minus m*my (lines 29-36).",
+    "2x2 solve via explicit Cramer's rule with tl.div_rn (lines 37-39); prediction for 4 queries via vectorized tl.arange(0,4) loads and stores (lines 40-44).",
+    "run() allocates float32 (4,) output and launches the kernel; mathematically the estimator matches the ridge normal equations (Xc^T Xc/32 + lambda I) beta = Xc^T yc/32.",
+    "All arithmetic (loads, sums, products, divisions) is float32; only div_rn forces round-to-nearest division.",
+    "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not necessarily beyond, the 5% output tolerance."
   ],
-  "open_qu
-...[truncated 2209 chars]
+  "open_quest
+...[truncated 2635 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_e08: contract requires one shared signed column permutation across both views; kernel derives a per-view permutation from per-view anchor magnitude ranks, and the initial probe's per-view/gram checks are blind to the shared-transform requirement. Zero columns mask most cross-view mismatch.
+- `du1` tasks=`initial`: case_e02: centered two-feature ridge regression (lambda=1/1024) fit on fixed seeded workload (X 32x2, y 32, Q 4x2), predicting 4 queries; mathematically the kernel implements the correct normal-equation ridge solve in a single Triton program, but all statistics are accumulated in float32 from raw (uncentered) moments despite large feature offsets (~32, -24).
+- `du2` tasks=`initial`: Refinement for claim c1: quantify fp32 raw-moment cancellation against the 5% tolerance - single-subtraction error ~1.5% of the covariance, ridge lambda=1/1024 adds ~25% diagonal damping, so the failure is plausible but not certain; the 32-term fp32 summation error may dominate and the initial probe cannot decide it.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: On the fixed seed-171200 workload, the joint best-fit relative error E minimized over the 384 shared signed permutations exceeds 0.05 (or at minimum the kernel applies view-dependent transforms that no single shared (p,s) can reproduce on the jointly-observed nonzero column), violating the contract's shared-transform requirement.
+Statement: For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with |m|~32, ~-24 versus variance ~0.0039), so the run() output deviates from the float64 ridge-regression prediction by more than the allowed 5% relative error (denominator floor 0.1).
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires one shared signed permutation across both views and all rows with joint E <= 0.05 on the fixed seed-171200 workload; the kernel's per-view anchor-rank slot assignment is exactly the kind of view-dependent transform the contract forbids.
+Scope rationale: The contract fixes the workload to make_inputs() (seed 130653) X (32,2)/y (32,)/Q (4,2), defines the target prediction in float64-or-better arithmetic, and accepts only if ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05. The kernel computes all moments and the 2x2 ridge solve in float32 from raw uncentered moments with means ~32/-24 and variance ~0.0039, so this precision failure occurs exactly on the contract's own fixed inputs.
 
 Scope evidence:
-- `problem.txt`: E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of ||output - s*features[:, :, p]||_F / ||features||_F, with 'The same p and s must be used for every view and every row ... view-dependent transforms are outside this equivalence'; pass iff E <= 0.05 on the fixed make_inputs() workload.
+- `problem.txt`: 'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload — the same inputs where the kernel's fp32 raw-moment cancellation occurs.
 
-Rationale: The kernel computes the destination slot and sign from each view's own anchors, so view 0 and view 1 generally receive different signed permutations; the recorded probe itself found different best transforms per view ([1,0,2,3],s=(1,1,-1,-1) vs [0,2,1,3],s=(-1,-1,-1,-1)). The initial probe never computed the joint E over a single shared (p,s), so a shared-transform violation could hide behind its 0.0 per-view errors and the permutation-invariant Gram check. The mismatch would concentrate on where the jointly-observed column 1 lands and its sign in each view.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Joint minimization over all 384 shared signed permutations on the fixed seed-171200 workload gives best E = 0.8317, far above the 0.05 tolerance (best transform p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel applies view-dependent transforms (view 0 slots [1,0,3,2] with signs [1,1,1,-1]; view 1 slots [3,2,1,0] with signs [1,-1,-1,-1]) — column 1 lands in slot 0 in view 0 but slot 2 in view 1 — so no single shared (p,s) fits. Inputs unmodified, output finite. Contract violation confirmed.
-
-### c2 - `rebutted`
-
-Statement: If any two |anchor| magnitudes within a view of the fixed PCG64(171200) anchor draw are equal, the kernel writes two source columns into the same destination slot and leaves one output column unwritten (uninitialized empty_like memory), producing garbage or non-finite values in the returned tensor.
-
-Scope: `in_scope`
-
-Scope rationale: The contract requires run() to return finite float32 output for the fixed workload whose anchors are deterministic; if any view's two anchor magnitudes are equal in that draw, one output slot is never written and the output contains uninitialized memory, violating the finite-float32 requirement on in-scope inputs.
-
-Scope evidence:
-- `problem.txt`: run(features, anchors) must return finite float32 output of shape (2, 8, 4) without modifying either input ... The fixed workload is exactly the stored float32 arrays returned by make_inputs() in kernel.py: ... anchors has shape (2, 4).
-
-Rationale: The kernel writes each output column to slot = rank of |anchor| within the view, and output is torch.empty_like. With a strict '<' comparison, any two equal |anchor| magnitudes within a view collide into the same slot and leave another destination column unwritten, so garbage (possibly non-finite) values appear in the output. Whether the fixed PCG64(171200) anchor draw contains such a tie must be verified.
+Rationale: Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t9: The fixed PCG64(171200) anchor draw contains no magnitude ties within either view (all 8 |anchor| values pairwise distinct in each view). Slots form full permutations per view ([1,0,3,2] and [3,2,1,0]), every output slot was written and matched its signed source column, and the output is entirely finite. The conditional tie hazard does not trigger on the in-scope workload.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t10: On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding the 5% tolerance (pred norm 0.1666 > 0.1 floor). Diagnostic: the fp32 raw-moment covariance E[x0^2]-m0^2 computes to 0.005859375 vs exact 0.00573117 (2.24% error), showing cancellation/summation noise in the fp32 raw-moment scheme that propagates through the 2x2 solve into the predictions. This confirms the kernel fails the contract acceptance criterion on the fixed in-scope workload.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Output must equal the input features up to exactly ONE shared signed permutation of the 4 latent columns: same permutation p and signs s across both views and all 8 rows (384 allowed transforms).",
-    "Metric is E = Frobenius relative error over both views jointly, min over shared (p, s), computed in float64 from actual float32 inputs/output; pass iff E <= 0.05.",
-    "Fixed workload only: the PCG64(171200) arrays from make_inputs(); other seeds/arrays are out of contract.",
-    "run() must return finite float32 (2,8,4) output without modifying inputs.",
-    "View 0 has columns 2,3 zeroed; view 1 has columns 0,3 zeroed; zero columns mean absent channels, so a view's best transform can be nonunique.",
-    "Anchors (2,4) are inputs to the candidate canonicalizer only; they do not alter the mathematical target or equivalence."
+    "Fixed workload: only the float32 arrays from make_inputs() (seed 130653) are in contract: X (32,2), y (32,), Q (4,2).",
+    "Target: centered ridge regression, beta = argmin ||Xc b - yc||^2/32 + (1/1024)||b||^2; prediction = mu_y + (Q-mu_x)@beta, evaluated in float64 or more accurately over the stored float32 inputs.",
+    "Acceptance: run(X,y,Q) returns finite float32 (4,) vector with ||out-pred||_2 / max(||pred||_2, 0.1) <= 0.05.",
+    "No thresholds on intermediates (means, covariance, betas); inputs from other seeds are out of scope.",
+    "initial_probe() and its recorded T4 result (relative_error 0.0, passed) are evidence, not the spec; its reference is computed in float32, not the float64-or-better contract reference."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel launched with grid (2,4): one program per (view, source column).",
-    "For each (view, column), it loads anchor value, computes slot = number of |anchor| entries in that view strictly less than |anchor[view,column]| \u2014 i.e., the destination column index is the rank of the anchor magnitude within that view.",
-    "It copies features[view, :, column] * sign(anchor[view, column]) into output[view, :, slot], where sign is +1 if anchor >= 0 else -1.",
-    "Consequence: the applied signed permutation is derived independently per view from that view's anchors, so it is generally view-dependent, not shared.",
-    "Assumes distinct anchor magnitudes per view; equal magnitudes (ties) would collide two columns into the same slot and leave another slot unwritten (undefined values from torch.empty_like).",
-    "Anchors are drawn from the same RNG stream after features, so their actual values are fixed and deterministic for this workload.",
-    "run() allocates output via empty_like and does not write to inputs; output finiteness holds only if every slot is
-...[truncated 2621 chars]
+    "Single Triton program (grid (1,), N=32 constexpr, num_warps=1, enable_fp_fusion=False) sequentially accumulates 8 raw moments in float32 via tl.static_range (kernel.py lines 17-28).",
+    "Means and covariance-style quantities computed from raw moments: a = E[x0^2]-m0^2+1/1024, b = E[x0x1]-m0m1, c = E[x1^2]-m1^2+1/1024, u,v = cross moments with y minus m*my (lines 29-36).",
+    "2x2 solve via explicit Cramer's rule with tl.div_rn (lines 37-39); prediction for 4 queries via vectorized tl.arange(0,4) loads and stores (lines 40-44).",
+    "run() allocates float32 (4,) output and launches the kernel; mathematically the estimator matches the ridge normal equations (Xc^T Xc/32 + lambda I) beta = Xc^T yc/32.",
+    "All arithmetic (loads, sums, products, divisions) is float32; only div_rn forces round-to-nearest division."
+  ],
+  "open_questions": [],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Catastrophic cancellation in raw-moment covariance: features have large means (~32, -24) with tiny deviations (sigma 0.0625), so E[x^2]-m^2 loses ~7-9 significant digits in float32; the computed covariance is dominated by rounding noise relative to the true variance (~0.0039). 
+...[truncated 1695 chars]
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "The kernel computes the destination slot and sign from each view's own anchors, so view 0 and view 1 generally receive different signed permutations; the recorded probe itself found different best transforms per view ([1,0,2,3],s=(1,1,-1,-1) vs [0,2,1,3],s=(-1,-1,-1,-1)). The initial probe never computed the joint E over a single shared (p,s), so a shared-transform violation could hide behind its 0.0 per-view errors and the permutation-invariant Gram check. The mismatch would concentrate on where the jointly-observed column 1 lands and its sign in each view.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "E = min over p in permutations(0,1,2,3), s in {-1,+1}^4 of ||output - s*features[:, :, p]||_F / ||features||_F, with 'The same p and s must be used for every view and every row ... view-dependent transforms are outside this equivalence'; pass iff E <= 0.05 on the fixed make_inputs() workload."
-    }
-  ],
-  "scope_rationale": "The contract requires one shared signed permutation across both views and all rows with joint E <= 0.05 on the fixed seed-171200 workload; the kernel's per-view anchor-rank slot assignment is exactly the kind of view-dependent transform the contract forbids.",
-  "statement": "On the fixed seed-171200 workload, the joint best-fit relative error E minimized over the 384 shared signed permutations exceeds 0.05 (or at minimum the kernel applies view-dependent transforms that no single shared (p,s) can reproduce on the jointly-observed nonzero column), violating the contract's shared-transform requirement.",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
 ### t7 - record_claim - ok
 
 {
-  "id": "c2",
-  "rationale": "The kernel writes each output column to slot = rank of |anchor| within the view, and output is torch.empty_like. With a strict '<' comparison, any two equal |anchor| magnitudes within a view collide into the same slot and leave another destination column unwritten, so garbage (possibly non-finite) values appear in the output. Whether the fixed PCG64(171200) anchor draw contains such a tie must be verified.",
+  "id": "c1",
+  "rationale": "Features have means ~32/-24 with std 0.0625, so E[x^2] (~1024/576) minus m^2 (~variance 0.0039) cancels ~6-7 significant digits in fp32; the computed covariance entries are dominated by fp32 rounding noise, which propagates into beta and the 4 predictions and can exceed the 5% relative tolerance. The initial_probe's 0.0 error is against a float32 reference using the identical raw-moment scheme, so it cannot rule this out.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "run(features, anchors) must return finite float32 output of shape (2, 8, 4) without modifying either input ... The fixed workload is exactly the stored float32 arrays returned by make_inputs() in kernel.py: ... anchors has shape (2, 4)."
+      "summary": "'All target arithmetic ... is evaluated in float64 or more accurately' and acceptance is ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05 on the exact make_inputs() (seed 130653) workload \u2014 the same inputs where the kernel's fp32 raw-moment cancellation occurs."
     }
   ],
-  "scope_rationale": "The contract requires run() to return finite float32 output for the fixed workload whose anchors are deterministic; if any view's two anchor magnitudes are equal in that draw, one output slot is never written and the output contains uninitialized memory, violating the finite-float32 requirement on in-scope inputs.",
-  "statement": "If any two |anchor| magnitudes within a view of the fixed PCG64(171200) anchor draw are equal, the kernel writes two source columns into the same destination slot and leaves one output column unwritten (uninitialized empty_like memory), producing garbage or non-finite values in the returned tensor.",
+  "scope_rationale": "The contract fixes the workload to make_inputs() (seed 130653) X (32,2)/y (32,)/Q (4,2), defines the target prediction in float64-or-better arithmetic, and accepts only if ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05. The kernel computes all moments and the 2x2 ridge solve in float32 from raw uncentered moments with means ~32/-24 and variance ~0.0039, so this precision failure occurs exactly on the contract's own fixed inputs.",
+  "statement": "For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with |m|~32, ~-24 versus variance ~0.0039), so the run() output deviates from the float64 ridge-regression prediction by more than the allowed 5% relative error (denominator floor 0.1).",
   "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t8 - record_description_update - ok
+
+{
+  "contract_model": [],
+  "impact_on_claims": [
+    "c1: this quantification cuts both ways - a single fp32 subtraction error (~6e-5 absolute) is ~1.6% of var 0.0039, and ridge lambda=1/1024 adds 25% to the effective diagonal, damping covariance errors in beta; however 32-term summation error and the beta-noise amplification may still exceed 5%. A float64 reference comparison probe (e.g. centered computation in numpy float64 on the exact seeded inputs) is the decisive evidence."
+  ],
+  "kernel_model": [
+    "Quantitative precision scale (from make_inputs, lines 54-62): feature raw second moments are ~1024 (col 0, mean 32) and ~576 (col 1, mean -24); true centered variance ~0.0625^2=0.0039. fp32 subtraction E[x^2]-m^2 carries absolute error ~eps*1024 ~ 6e-5, i.e. relative error ~1.5% of the variance - near, not necessarily beyond, the 5% output tolerance."
+  ],
+  "open_questions": [
+    "Does the fp32 raw-moment error, after 32-term accumulation rounding and the 2x2 solve, stay under or exceed the 5% final-output tolerance against a true float64 centered computation? Needs runtime probe with float64 oracle."
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Ridge damping partially protects beta: lambda=1/1024 ~ 0.00098 is ~25% of the true variance 0.0039 added to each diagonal, so even a covariance relative error of a few percent propagates into beta only mildly; claim c1's failure is plausible but not guaranteed - the decisive evidence is a float64 (centered) oracle comparison, which initial_probe does not provide.",
+    "Accumulated summation error: s00 is a 32-term fp32 sum of values ~1024, so its rounding error (~sqrt(32)*eps*1024 or worse, up to ~32*eps*1024 ~ 2e-3) can be comparable to the variance itself 0.0039, larger than the single-subtraction error estimate.",
+    "Prediction output magnitude: recorded probe outputs ~|0.14| each with 4 entries -> norm ~0.2, above the 0.1 floor, so the tolerance is effectively ~5% relative, not the floor."
+  ],
+  "scope_n
+...[truncated 386 chars]
+
+### t9 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "The only material in-scope risk \u2014 fp32 raw-moment catastrophic cancellation on the contractually fixed make_inputs() (seed 130653) workload, exceeding the 5% tolerance against the float64 reference \u2014 is already recorded as c1. The kernel's algebra matches the ridge normal equations, contiguity matches make_inputs output, and all other variations (seeds, shapes, dtypes) are out of contract per problem.txt. No new high-quality in-scope claims are warranted; c1 needs a float64-oracle runtime probe, not further speculation.",
+  "reviewed_claims": [
+    "c1"
+  ],
+  "reviewed_tool_event_count": 8,
+  "turn": 6
+}
+
+### t10 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "25eaedfeb71ad1376d6bad6ba8a61407ac4fe7f8c2c96369fb641de9424b8c54"
+      "path": "probes/t10_probe.py",
+      "sha256": "d7dc58b33cc3191f1e1f68401d4c87988987be05374d10a08129bbf45ad824bc"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "653ff459d9b2bead722341c538572b6dc016ab29d71cd6ec5af8420ef625aeae"
+      "path": "probes/t10_stdout.txt",
+      "sha256": "eeedfe4e5636afec3afeb7b56f220f468f033c4fb9840ab6dd38221c557d9455"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
+      "path": "probes/t10_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "27140fe2d2c27deec935d0daff7416a94e31338c79c687ae559a2289b9d81895"
+      "path": "probes/t10_json_result.json",
+      "sha256": "9aeafdd49f8afb75d6af7694f4b0f8a1061685e5c8fa1d95ce44e84fff018d36"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the fixed seed-171200 workload, the joint best-fit relative error E minimized over the 384 shared signed permutations exceeds 0.05 (or at minimum the kernel applies view-dependent transforms that no single shared (p,s) can reproduce on the jointly-observed nonzero column), violating the contract's shared-transform requirement.",
-  "duration_s": 5.274245,
-  "event_id": "t8",
+  "claim_statement": "For the contractually fixed make_inputs() workload (seed 130653), the kernel's float32 raw-moment computation of covariances (a, b, c) and cross-terms (u, v) suffers catastrophic cancellation (E[x^2]-m^2 with |m|~32, ~-24 versus variance ~0.0039), so the run() output deviates from the float64 ridge-regression prediction by more than the allowed 5% relative error (denominator floor 0.1).",
+  "duration_s": 6.757413,
+  "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -595,106 +572,38 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "25eaedfeb71ad1376d6bad6ba8a61407ac4fe7f8c2c96369fb641de9424b8c54"
+          "path": "probes/t10_probe.py",
+          "sha256": "d7dc58b33cc3191f1e1f68401d4c87988987be05374d10a08129bbf45ad824bc"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "653ff459d9b2bead722341c538572b6dc016ab29d71cd6ec5af8420ef625aeae"
-        },
-        {
-          "description": "Captured stderr fro
-...[truncated 4759 chars]
+          "path": "probes/t10_stdout.txt",
+          "sha256": "eeedfe4e5636afec3afeb7b56f220f468f033c4fb9840ab6dd38221c557d9455"
+ 
+...[truncated 3531 chars]
 
-### t9 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "026693852ace25053d6af854ea426bcb6752c5e51c06d4c9c8e2c9d28d789c0a"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "3bde50b4b52494fb4a07321499c1d5e245399d310328c515a4413beeb5e5b6b1"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t9_json_result.json",
-      "sha256": "e9184e12e51f54a21a4154cb801cbc72fe1b85bf5dee8b9c8677fa9e4a8805ca"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "If any two |anchor| magnitudes within a view of the fixed PCG64(171200) anchor draw are equal, the kernel writes two source columns into the same destination slot and leaves one output column unwritten (uninitialized empty_like memory), producing garbage or non-finite values in the returned tensor.",
-  "duration_s": 5.70147,
-  "event_id": "t9",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "026693852ace25053d6af854ea426bcb6752c5e51c06d4c9c8e2c9d28d789c0a"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "3bde50b4b52494fb4a07321499c1d5e245399d310328c515a4413beeb5e5b6b1"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          
-...[truncated 7594 chars]
-
-### t10 - finalize_probe_evidence - ok
+### t11 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Joint minimization over all 384 shared signed permutations on the fixed seed-171200 workload gives best E = 0.8317, far above the 0.05 tolerance (best transform p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel applies view-dependent transforms (view 0 slots [1,0,3,2] with signs [1,1,1,-1]; view 1 slots [3,2,1,0] with signs [1,-1,-1,-1]) \u2014 column 1 lands in slot 0 in view 0 but slot 2 in view 1 \u2014 so no single shared (p,s) fits. Inputs unmodified, output finite. Contract violation confirmed.",
+  "summary": "On the exact make_inputs() (seed 130653) contract workload, run() output vs a float64 centered ridge oracle has relative error 0.2558 (25.6%), far exceeding the 5% tolerance (pred norm 0.1666 > 0.1 floor). Diagnostic: the fp32 raw-moment covariance E[x0^2]-m0^2 computes to 0.005859375 vs exact 0.00573117 (2.24% error), showing cancellation/summation noise in the fp32 raw-moment scheme that propagates through the 2x2 solve into the predictions. This confirms the kernel fails the contract acceptance criterion on the fixed in-scope workload.",
   "supports": "confirmed",
-  "tool_event_id": "t8"
-}
-
-### t11 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "The fixed PCG64(171200) anchor draw contains no magnitude ties within either view (all 8 |anchor| values pairwise distinct in each view). Slots form full permutations per view ([1,0,3,2] and [3,2,1,0]), every output slot was written and matched its signed source column, and the output is entirely finite. The conditional tie hazard does not trigger on the in-scope workload.",
-  "supports": "rebutted",
-  "tool_event_id": "t9"
+  "tool_event_id": "t10"
 }
 
 ### t12 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the decisive contract metric (joint shared signed-permutation E over all 384 transforms, float64, fixed seed-171200 workload) was directly computed and gives 0.8317 > 0.05, confirming the view-dependent-transform violation (c1, in_scope). The secondary tie/unwritten-slot hazard (c2) was rebutted on the same fixed workload. Inputs are unmodified and the output is finite/shape-correct, so no other contract clause is implicated. No additional material, testable, in-scope claims are warranted.",
+  "reason": "Final review: the sole in-scope claim c1 is confirmed by runtime probe t10 \u2014 on the exact make_inputs() (seed 130653) contract workload, run() output deviates from the float64 centered-ridge prediction by 25.6% relative error (tolerance 5%, pred norm 0.1666 above the 0.1 floor), with the fp32 raw-moment covariance itself off by 2.24%, pinpointing the failure mechanism. The probe's oracle matches the contract's float64-or-better reference definition, and its output is finite float32 (4,). No other in-scope failure surface exists: other seeds/shapes/dtypes are explicitly out of contract per problem.txt, and the kernel's algebra, layouts, and ridge solve otherwise match the target. No additional claims are warranted.",
   "reviewed_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
   "reviewed_tool_event_count": 11,
-  "turn": 6
+  "turn": 9
 }
 
 ### t13 - record_verdict - ok
@@ -704,7 +613,7 @@ Evidence:
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Claim c1 is confirmed, in_scope, and directly tied to the stated contract: problem.txt (the operative contract here, since no test.py/get_inputs beyond make_inputs() exist, and make_inputs() defines the exact fixed workload) requires output equal to the input features up to ONE shared signed permutation (same p, s across both views and all rows) with joint E <= 0.05 computed in float64. Probe t8 executed run() on the exact fixed seed-171200 workload and minimized E over all 384 shared (p,s): best E = 0.8317, far above 0.05 (best p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel derives each view's destination slot and sign from that view's own anchor magnitudes (view 0 slots [1,0,3,2], view 1 slots [3,2,1,0]; differing sign patterns), i.e., a view-dependent transform that the contract explicitly excludes from the equivalence. This is not a tolerance/rounding artifact \u2014 it is a structural violation of the shared-transform clause. Secondary claim c2 (anchor-magnitude tie leaving a slot unwritten) was rebutted on the same workload: no ties, all slots written, output finite and shape-correct, inputs unmodified \u2014 so no other contract clause is implicated. The initial probe's 0.0 per-view errors and Gram check are blind to the joint shared-transform metric, as the description model noted. Skeptic reviewed the latest evidence (turn 6) and recorded no new claims; all claims have evidence. Verdict: reject.",
+  "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four predictions. The contract explicitly requires target arithmetic evaluated in float64 or more accurately with a 5% acceptance threshold, so this precision failure is a defect, not a tolerated rounding artifact. The initial_probe's 0.0 error is not exculpatory: its reference uses the same float32 raw-moment scheme as the kernel and therefore cannot test the contract's float64 oracle. Other seeds/shapes/dtypes are out of contract per problem.txt; no other in-scope failure surfaces exist. Skeptic signed off after reviewing the decisive evidence (no new claims). No unresolved claims remain.",
   "verdict": "reject"
 }
 
@@ -712,10 +621,10 @@ Evidence:
 
 {
   "confidence": 0.97,
-  "created_at": "2026-09-24T06:40:49Z",
+  "created_at": "2026-09-24T06:11:48Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Claim c1 is confirmed, in_scope, and directly tied to the stated contract: problem.txt (the operative contract here, since no test.py/get_inputs beyond make_inputs() exist, and make_inputs() defines the exact fixed workload) requires output equal to the input features up to ONE shared signed permutation (same p, s across both views and all rows) with joint E <= 0.05 computed in float64. Probe t8 executed run() on the exact fixed seed-171200 workload and minimized E over all 384 shared (p,s): best E = 0.8317, far above 0.05 (best p=[1,2,0,3], s=[1,-1,-1,-1]). The kernel derives each view's destination slot and sign from that view's own anchor magnitudes (view 0 slots [1,0,3,2], view 1 slots [3,2,1,0]; differing sign patterns), i.e., a view-dependent transform that the contract explicitly excludes from the equivalence. This is not a tolerance/rounding artifact \u2014 it is a structural violation of the shared-transform clause. Secondary claim c2 (anchor-magnitude tie leaving a slot unwritten) was rebutted on the same workload: no ties, all slots written, output finite and shape-correct, inputs unmodified \u2014 so no other contract clause is implicated. The initial probe's 0.0 per-view errors and Gram check are blind to the joint shared-transform metric, as the description model noted. Skeptic reviewed the latest evidence (turn 6) and recorded no new claims; all claims have evidence. Verdict: reject.",
+  "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence citing the contract's own input domain (the fixed make_inputs(), seed 130653, workload and the problem.txt acceptance criterion). Runtime probe t10 executed run() on exactly those inputs and compared against a float64 centered-ridge oracle matching the contract's definition: relative error 0.2558 vs the allowed 0.05 (prediction norm 0.1666 > 0.1 floor, so the 5% relative tolerance governs). The diagnostic pinpoints the mechanism: the kernel's float32 raw-moment covariance E[x0^2]-m0^2 = 0.005859375 vs exact 0.00573117 (2.24% error), catastrophic cancellation from means ~32/-24 against variance ~0.004, which propagates through the 2x2 solve into the four predictions. The contract explicitly requires target arithmetic evaluated in float64 or more accurately with a 5% acceptance threshold, so this precision failure is a defect, not a tolerated rounding artifact. The initial_probe's 0.0 error is not exculpatory: its reference uses the same float32 raw-moment scheme as the kernel and therefore cannot test the contract's float64 oracle. Other seeds/shapes/dtypes are out of contract per problem.txt; no other in-scope failure surfaces exist. Skeptic signed off after reviewing the decisive evidence (no new claims). No unresolved claims remain.",
   "verdict": "reject"
 }

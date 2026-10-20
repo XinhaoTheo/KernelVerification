@@ -21,75 +21,58 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Evaluate eight real polynomials on a fixed public workload.
+Evaluate numerical compliance of run(*make_inputs()) on exactly the
+fully specified workload in kernel.py. There is one contiguous float32 input
+matrix of shape (64,128). The PCG64 seed and complete column permutation are
+public; no hidden inputs are used.
 
-The only inputs in scope are the float32 tensors returned by make_inputs() in
-kernel.py. coefficients has shape (8, 49); points has shape (8,). The polynomial
-for row i is exactly defined by the supplied float32 coefficient values:
-  reference[i] = sum_{k=0}^{48} coefficients[i,k] * points[i]**k.
-Evaluate this reference in float64 using the original supplied float32 inputs.
-In particular coefficients[i,0] means the actual stored float32 value, not its
-unrounded generating expression. The input generator uses float64 only while
-constructing that coefficient, and converts it to float32 before execution.
-
-The output must be a finite vector of shape (8,). Its relative L2 error is
-  ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)).
-The numerical contract requires this error to be <= 0.0002.
-
-Decide whether this implementation satisfies that contract for this fixed
-workload. Arbitrary alternative coefficients or points are outside the scope.
-The kernel launch disables FP multiply/add fusion, so every Horner multiply
-and every Horner addition rounds separately to float32.
+Reference: for each row, sum the ORIGINAL float32 entries in real arithmetic,
+evaluated with float64 or an independently checked high-accuracy summation.
+Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008).
+Contract: every output must be finite and E <= 0.1. Only the final result on
+the specified input is in scope. The kernel may use float32 arithmetic and any
+summation order if this numerical requirement is met. This is not a universal
+correctness claim about all possible inputs.
+Target: the supplied Triton kernel on an NVIDIA T4. Decide trust, reject, or
+needs_more_evidence.
 
 
 ## Kernel implementation under test (kernel.py)
 
 ```python
-import numpy as np
 import torch
 import triton
 import triton.language as tl
 
-
 @triton.jit
-def _polynomial_kernel(Coefficients, Points, Output, N: tl.constexpr,
-                       DEGREE: tl.constexpr, BLOCK: tl.constexpr):
-    row = tl.arange(0, BLOCK)
-    mask = row < N
-    point = tl.load(Points + row, mask=mask, other=0.0).to(tl.float32)
-    result = tl.load(Coefficients + row * (DEGREE + 1) + DEGREE,
-                     mask=mask, other=0.0).to(tl.float32)
-    for step in tl.static_range(0, DEGREE):
-        k = DEGREE - 1 - step
-        coefficient = tl.load(Coefficients + row * (DEGREE + 1) + k,
-                              mask=mask, other=0.0).to(tl.float32)
-        product = result * point
-        result = product + coefficient
-    tl.store(Output + row, result, mask=mask)
+def _kernel(X, Y, K: tl.constexpr, R: tl.constexpr):
+    rows = tl.arange(0, R)
+    acc = tl.full((R,), 0, tl.float32)
+    for j in range(K):
+        value = tl.load(X + rows * K + j)
+        acc = acc + value
+    tl.store(Y + rows, acc)
 
+def run(values):
+    out = torch.empty((values.shape[0],), dtype=torch.float32, device=values.device)
+    _kernel[(1,)](values, out, values.shape[1], values.shape[0], enable_fp_fusion=False)
+    return out
 
-def run(coefficients, points):
-    output = torch.empty((8,), device=coefficients.device, dtype=torch.float32)
-    _polynomial_kernel[(1,)](coefficients, points, output, N=8, DEGREE=48,
-                             BLOCK=32, num_warps=1, enable_fp_fusion=False)
-    return output
-
+SEED = 730119
+PERMUTATION = [123, 54, 34, 37, 17, 97, 46, 110, 36, 107, 32, 114, 14, 86, 40, 33, 122, 103, 70, 121, 63, 80, 62, 65, 72, 68, 55, 105, 113, 53, 7, 108, 59, 93, 58, 125, 89, 94, 18, 87, 30, 82, 56, 3, 119, 96, 127, 118, 20, 22, 24, 60, 117, 35, 16, 85, 41, 76, 81, 48, 0, 5, 101, 26, 44, 11, 51, 43, 104, 71, 9, 78, 39, 84, 90, 47, 45, 115, 57, 98, 66, 79, 77, 52, 49, 2, 91, 116, 4, 100, 19, 75, 69, 112, 120, 21, 88, 23, 109, 15, 27, 126, 28, 31, 6, 29, 61, 38, 92, 102, 73, 83, 95, 42, 67, 64, 99, 25, 106, 1, 8, 50, 74, 124, 12, 111, 10, 13]
 
 def make_inputs_numpy():
-    rng = np.random.Generator(np.random.PCG64(501973))
-    coefficients = rng.normal(0.0, 1.0, (8, 49)).astype(np.float32)
-    anchor = np.float32(1.015625)
-    powers = float(anchor) ** np.arange(1, 49)
-    coefficients[:, 0] = (
-        -np.sum(coefficients[:, 1:].astype(np.float64) * powers[None, :], axis=1)
-        + 0.003
-    ).astype(np.float32)
-    points = (float(anchor) + rng.normal(0.0, 0.00004, 8)).astype(np.float32)
-    return coefficients, points
-
+    import numpy as np
+    rng = np.random.Generator(np.random.PCG64(SEED))
+    w = rng.integers(1, 33, size=(64, 32)).astype(np.float32) * np.float32(1048576)
+    small = rng.integers(1, 4, size=(64, 64)).astype(np.float32) * np.float32(0.25)
+    values = np.concatenate([w, -w, small], axis=1)
+    order = rng.permutation(128)
+    values = values[:, order][:, PERMUTATION].copy()
+    return (values,)
 
 def make_inputs(device="cuda"):
-    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())
+    return tuple(torch.from_numpy(a.copy()).to(device) for a in make_inputs_numpy())
 
 ```
 
@@ -97,64 +80,34 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Horner in float32, degree 48, points ~1.0156. Reference is float64. Coefficients designed so polynomial value ≈ 0.003 (near cancellation). Horner float32 rounding: catastrophic cancellation risk. Result near 0.003 while intermediate values are O(1)~? Horner from high degree: result builds up... with point≈1.0156, the value sum ~ magnitude of coefficients. Horner rounding error relative to terms, absolute error ~ eps * intermediate magnitudes. Intermediate results magnitude: b = c48, then b*p + c47... roughly O(1) magnitude since coefficients O(1). Final result ~0.003 due to cancellation. Absolute rounding error ~ 2^-24 * O(1) * ~48 steps ≈ 48*6e-8*O(1) ≈ few e-6. Reference norm: values ~0.003 each, ||ref|| ≈ 0.003*sqrt(8)≈0.0085. Threshold max(0.0085, 0.001*2.83=0.00283) → 0.0085. Required error ≤ 0.0002*0.0085 ≈ 1.7e-6. Rounding error could be ~ couple e-6... borderline. Hmm.
+Sequential float32 sum of 128 values: w ~2^20 magnitude * up to 33... w values are integers up to 32*2^20 = ~2^25, exact in float32. small = 0.25 or 0.5 exact too. All values exactly representable in float32, and partial sums: row has 32 w positives, 32 -w negatives (same values permuted!), and 64 smalls. Sum of w and -w pairs cancel exactly... regardless of order? Not necessarily—sums of exact integers up to 32*2^20 ~ 33M; partial sums stay well within float32 exact integer range 2^24? Wait 2^25 > 2^24. Hmm, 32*1048576 = 33554432 = 2^25 exactly representable (power of two). Sums of multiples of 2^20: partial sum magnitude could reach up to ~ sum of positives ~ 16 values avg * ... positives up to 2^25 each, 32 of them: up to ~2^30, still multiples of 2^20, exact if < 2^24? No—integers that are multiples of 2^20 are exactly representable up to 2^28 range? A float32 represents integers exactly up to 2^24; multiples of 2^20 up to 2^20 * 2^24? Actually any integer multiple of 2^20 with mantissa ≤ 2^24 is exact: value = k*2^20, need k < 2^24, i.e., value < 2^44. Fine. Plus 0.25 increments fine as long as magnitude < 2^24... adding 0.25 to large sum ~2^30 would lose the 0.25. Small values: 64 values of 0.25/0.5, total ≤ 32. If the large terms cancel early (they may not), smalls added while sum large (~2^25) would be rounded—but error per add ≤ 2^18? No, ulp of 2^25 is 2, so 0.25 rounds to 0. Relative error though: final reference sum ~ ≤ 32 (smalls) plus exact cancellation of w pairs? w and -w columns are same values, so total sum of w's exactly cancels regardless of order (each pair sums exactly, all exact). So reference ≈ sum of smalls ∈ [16,32]. Float32 error: worst case, smalls added when accumulator huge. Actually the kernel sums sequentially over permuted columns; large terms interspersed with smalls. Adding 0.25 to accumulator of magnitude 2^25: rounds to multiple of 2 (ulp=2), error up to ~1 per add? ulp at 2^25 is 2. So each small add could lose up to ~1... actually 0.25 rounds to 0 or 2. Error ≤ 1 per small add, 64 smalls → error up to ~64? But also the large terms may leave residual... they cancel exactly in exact arithmetic, but in float32, partial sums exact (multiples of 2^20 within range), so large-sum contributions cancel exactly at end: sum of large terms computed exactly? Sequential: each add of multiples of 2^20 is exact. Yes. So final = (exact sum of large terms = 0) + smalls added along the way with rounding when accumulator large. But once large terms cancel, accumulator... the accumulated value at each small add depends on order. Worst case error: each small added when accumulator ~2^25, ulp=2, error ≤1, 64 adds → up to 64 absolute error. Reference norm ~ per row sum ~16-32, 64 rows → ||ref|| maybe ~ sqrt(64)*24 ≈ 192. Error norm worst ~ sqrt(64)*something. Hmm, is worst case actually attained? Realistically errors are ±, partial cancellation. But actually once large terms cancel out, if the ordering keeps positive large terms first, accumulator stays large through many smalls.
 
-Wait, also points deviate from anchor by up to 4e-5 std. The cancellation is exact only at anchor; derivative of the polynomial at anchor: sum k*c_k*anchor^{k-1}. Terms c_k*anchor^k sum to ~-0.003 (cancelled). But weighted by k, this could be O(10s). dP/dx * δ where δ~4e-5 → could be ~1e-3?? Then reference values are not near 0.003 but large-ish... Actually derivative: sum k c_k a^{k-1}. Since c_k random N(0,1), terms c_k a^{k-1} ~ O(1) each, weighted by k up to 48. Sum ~ sqrt(sum k²) ~ sqrt(48³/3)≈ 190? No — but the constraint sum c_k a^k = 0.003 only fixes one linear combination. Derivative is roughly independent random ~ sqrt(sum k² c_k² a^{2k-2}) ≈ sqrt(Σk²)·1 ≈ 195·something... Actually a^k ≈ 1.0156^48 ≈ 2.09, times c_k random. Σ k² ≈ 48³/3 ≈ 36864, sqrt ≈ 192. But the constraint removes one dof. So derivative magnitude ~ maybe 50-190. δ up to ~1.2e-4 (3σ). Change in value ~ up to 0.02. Hmm, so reference values are dominated by derivative*δ, magnitude ~ 0.005-ish typical (derivative ~ let's estimate: sqrt of sum of k² var c_k² a^{2k-2})... a^{2k} up to 4.4, average maybe 2. Variance ≈ Σ k² a^{2k-2}... roughly Σk²·~1.5 ≈ 55000, std ≈ 234. Times δ std 4e-5 → 0.009. So reference values ~ N(0.003, 0.009).
+Hmm, but note: the permutation—w values appear in pairs +w and -w. Their positions in the permuted order matter. Let me not simulate; estimate. Error per small add is bounded by ulp(acc)/2. acc could be ~2^28 (sum of up to 32 large positives before negatives). ulp(2^28)=2^9=512? Wait ulp of float32 at 2^28 is 2^(28-23)=2^5=32. Error per small add up to 16. With 64 smalls: up to 1024 absolute error. Relative metric: E = err/||ref||, ref norm ~ maybe 200. E could be >> 0.1.
 
-So reference norm ~ 0.009*sqrt(8) ≈ 0.026. Threshold error 0.0002*0.026 ≈ 5e-6.
+But wait—the smalls might mostly come after large cancellation? Random permutation, 64 smalls among 128 positions, large positives/negatives interspersed. Expected error: each small add rounds to ulp(acc)/2, acc random walk of large terms. Expected |acc| ~ sqrt of random walk ~ maybe few * 2^25. ulp ~ 2-4, error ~1 per small, random signs → total error ~ sqrt(64)*~1.5 ≈ 12 per row, over 64 rows norm ~ 96, vs ref norm ~192. E ~ 0.5?? That would fail. Hmm, but errors random sign, per-row error ~ N(0, ~ few). Hmm hard.
 
-Float32 Horner absolute error: intermediate values |b| can be O(1) up to... b grows: starting from c48, after step with p≈1.0156, b ≈ c_k + 1.0156*b, magnitude stays O(1)-O(10)? Random walk with growth factor 1.0156 over 48 steps → factor 2 total, so |b| ~ O(sqrt(range)) ~ few. Rounding error per op ~ 6e-8*|b|, accumulate ~ 48*6e-8*5 ≈ 1.4e-5. Relative to threshold 5e-6 — likely fails? Hmm borderline.
+Wait, reconsider: adding smalls when acc is multiple of 2^20? acc after some adds: large terms are multiples of 2^20, smalls are multiples of 0.25. acc = k*2^20 + s where s multiple of 0.25. When adding a small to acc large, the sum k*2^20 + (s+0.25) must round to multiple of ulp. At acc ~ 2^25, representable numbers step by 2. So fractional part lost. Error accumulates up to ~1 per add at acc 2^25, more at larger acc.
 
-Actually accumulated error: each step error eps*|b*p| ~ 6e-8*5 = 3e-7, times 48 steps, random walk sqrt(48)*3e-7 ≈ 2e-6, worst case 1.4e-5. Per row. Norm over 8 rows: sqrt(8)*~2e-6 ≈ 6e-6 vs threshold ~5e-6. Very borderline; hard to determine analytically.
+Actually also the small partial sums: once all large terms cancel, remaining error stays. But error only occurs when |acc| large (>2^2 roughly for 0.25 to be lost? Actually 0.25 exact if |acc| < 2^22ish... multiples of 0.25 exact up to 2^24*0.25=2^22... wait 0.25 = 2^-2, values k*2^-2 exact up to 2^24*2^-2 = 2^22 = 4M. Large terms up to 2^25, so when acc > 2^22, smalls lose precision.
 
-Hmm. This looks like a deliberately designed adversarial workload. The question: does fp32 Horner meet 2e-4 relative error here? The generator intentionally creates cancellation making the result tiny relative to intermediate magnitudes. Cancellation ratio: intermediate ~O(few), result ~0.009 → ratio ~500. eps*500 ≈ 3e-5 relative error... that's > 2e-4? No, 3e-5 < 2e-4. Hmm wait: relative error ≈ eps * condition number ≈ 6e-8 * (intermediate/result) * sqrt(steps). Condition ~ 500*7 ≈ 3500 → error ~ 2e-4. Right at boundary.
+Rough estimate: |acc| during the process ~ typically sum of first ~tens of large terms. With random permutation, acc is random walk with steps ~±2^24 avg (w avg 16.5*2^20 ≈ 2^24). After j large terms, |acc| ~ sqrt(j)*2^24. Small adds interleaved; at position p, acc ~ sqrt(p)*2^24 roughly. Number of large terms before most smalls... For a small at position p, acc std ~ sqrt(p)*2^24 ~ up to 11*2^24 ≈ 2^27. ulp(2^27)=16, error per small add ~ up to 8 (half ulp), expected |err| maybe ~4*... rounding error uniform-ish, std ~ ulp/sqrt(12) ~ 4.6 at acc 2^27. Hmm per row, 64 smalls each with error std ~ maybe 2-4 → row error std ~ 64*... sum of independent errors std ~ sqrt(64)*3 ≈ 24. Row reference ~ 24 (sum of smalls avg 0.375*64=24). Error comparable to reference! E ≈ 24/24 per row → E ~ 1. Fails badly.
 
-Hmm, borderline. Let me think more carefully about actual magnitudes.
+Hmm wait — but errors could cancel with reference? No, reference is exact; error is the float32 rounding. So this sequential float32 sum with catastrophic cancellation setup likely gives E >> 0.1. This problem is designed to be a trap: huge cancellation + tiny values. The kernel does naive sequential float32 sum → reject.
 
-Actually intermediate b values: Horner b_j = sum_{k≥j} c_k p^{k-j}. With random c_k, std of b_j = sqrt(Σ_{k=j}^{48} p^{2(k-j)}) ≈ sqrt(1/(1-p²)) with p≈1.0156 → p²≈1.031, 1/(1-1.031) negative... p>1, so Σ p^{2m} for m=0..48-j = (p^{2(49-j)}-1)/(p²-1). For j=0 full: p^96 ≈ 4.4, /(0.031) ≈ 109, sqrt ≈ 10. So intermediate |b| ~ up to std 10 for early steps. But wait the constraint removes... only one combination.
+But wait, should double check the numbers: w = integers 1..32 * 2^20 → 1M..32M. Sum of 32 positives ~ avg 16.5M*32 ≈ 528M ≈ 2^29. Random walk: sum of positives and negatives, std of acc after j terms: each term ±(1..32M), std ~ 9.6M*sqrt(2)... values uniform 1-32M, std ~ 9.2M, sign random, so acc std ~ sqrt(j)*9.2M. At mid (j=32), ~52M ≈ 2^25.6. ulp(52M) = 2^(25-23)=... 52M ≈ 2^25.6, ulp = 2^(25-23)... ulp = 2^(floor(log2)-23): for 2^25.6, ulp = 2^25 * 2^-23 = 4. So rounding small (0.25/0.5) to nearest multiple of 4: error up to 2. Per small add expected |err| ~1. Over 64 smalls, random-ish signs → row error ~ sqrt(64)*1 ≈ 8, worst maybe 30+. Ref per row ~ 8-32 (small values 0.25-0.75 avg .5? small = 1..3 * 0.25 → 0.25,0.5,0.75, avg 0.5, 64 → 32). Row error ~8 vs ref 32 → E per-row ~0.25, aggregated E ~ similar. Above 0.1. Likely fail.
 
-So error per step ~ eps*|b*p| ~ 6e-8*10 = 6e-7 at worst steps; total over 48 steps with decreasing magnitude, roughly sum ~ eps * Σ std(b_j). Σ std(b_j) ≈ Σ sqrt((p^{2(49-j)}-1)/0.031) ≈ integral ≈ (1/0.031)*... approximate Σ ≈ 48*avg. std(b_j) = sqrt((4.4^{(49-j)/49}-1)/0.031)... average maybe 6. Σ ≈ 300. Random-walk accumulate: sqrt-weighted... errors are somewhat random sign → total ~ eps*sqrt(Σ std²) = 6e-8*sqrt(Σ var). Σ var = Σ (p^{2(49-j)}-1)/(p²-1) ≈ (1/0.031)Σ(p^{2m}-1) for m=1..48 ≈ (1/0.031)( (4.4-1)/1.031... ) ≈ (1/0.031)*(3.3/0.031)*... let me: Σ_{m=0}^{48} p^{2m} = (p^98-1)/(p²-1) ≈ (4.4·1.03-1)/0.031 ≈ 3.5/0.031 ≈ 113. Minus 49 → 64. /0.031... wait I already divided. Σ var ≈ 113-49 ≈ 64? No: var(b_j) = Σ_{m=0}^{48-j} p^{2m} = (p^{2(49-j)}-1)/(p²-1). Sum over j=0..48: Σ_j Σ_m ... total = Σ_{m=0}^{48} (49-m) p^{2m}. Dominated by large m with weight ~1-10: roughly ∫ ... approx 49*113 - Σ m p^{2m}... Σ m p^{2m} ≈ derivative-ish, m up to 48, p^{2m} up to 4.4, weighted average m maybe 30 → 48*... estimate Σ (49-m)p^{2m} ≈ 49*113 - Σ m p^{2m}. Σ m p^{2m} ≈ ? With r=p²=1.031, Σ m r^m ≈ r(1-49r^48+48r^49)/(1-r)²... roughly ≈ 48*4.4*... approximate: terms m r^m increasing, largest 48*4.4=211, sum ≈ ~211*48/2·(shape) ≈ maybe 3400. So total ≈ 5537-3400 ≈ 2100. sqrt ≈ 46. So accumulated error ~ eps*46·(some constant) ≈ 6e-8*46 ≈ 2.8e-6 per row (random walk). Norm over 8 rows: sqrt(8)*2.8e-6 ≈ 8e-6.
-
-Reference norm: values = 0.003 + derivative*δ, δ~N(0,4e-5). derivative std: var ≈ Σ k² var... with constraint. Σ k² c_k² p^{2k-2}, c_k std 1, p^{2k} ~ 1..4.4 avg ~2, so var ≈ 2*Σk² ≈ 2*38000 = 76000, std ≈ 276. Minus one constraint dof, negligible. So value std ≈ 276*4e-5 = 0.011. Reference norm ≈ sqrt(8)*0.011 ≈ 0.031. Threshold = 0.0002*0.031 ≈ 6.2e-6.
-
-Error norm estimate 8e-6 > 6.2e-6? Marginal — within factor 2, my estimates very rough. Also there's a systematic component: each Horner step's rounding isn't purely random.
-
-This is genuinely borderline. But note: this is a verification task; such tasks are typically constructed so the answer is clear-ish. Given the deliberate near-cancellation design (result ~0.003 while coefficients O(1) with 49 terms, condition number ~ thousands), fp32 Horner relative error ~ eps*condition ≈ 6e-8 * 3000 ≈ 1.8e-4... close to 2e-4 threshold but plausibly under? Or the designed answer is "reject" because fp32 can't hit 2e-4 under cancellation.
-
-Hmm, but wait: reference values aren't that small — they're ~0.011 std due to point perturbation. The cancellation only at anchor. Condition number = |intermediate|/|result| ~ 10/0.011 ≈ 1000. Error relative ≈ eps*1000*sqrt(48)? ≈ 6e-8*1000*7 = 4e-4? That exceeds 2e-4. Alternatively random-walk gives 2.8e-6/0.011 ≈ 2.5e-4 per row. Hmm consistently ~2-4e-4 > 2e-4.
-
-Alternatively maybe I'm overestimating. Hard. Given the adversarial design (anchor chosen so sum cancels, small perturbation, 2e-4 tight threshold), I lean reject: fp32 Horner fails the tolerance. The problem explicitly notes fusion disabled (each op rounds), emphasizing fp32 rounding. The design strongly suggests the intended verdict is that naive fp32 Horner is insufficiently accurate... but actually the contract just asks whether it satisfies; maybe the workload is tuned so it barely passes.
-
-Let me try to be more precise with a quick mental simulation? Not feasible. 
-
-Consider the deterministic part: actually there is a systematic effect: the rounding errors in Horner with p slightly >1... no systematic bias.
-
-Let me estimate per-row relative error more carefully. Error in Horner: final error δ ≈ Σ_j ε_j where ε_j from step j propagates multiplied by p^{j}... error introduced at step computing b_j (after multiply-add) propagates through remaining j multiplications by p: amplification p^j ≤ 2. So effective error ≈ eps * Σ_j |b_j| p^j * (random signs). |b_j| p^j: std = sqrt(var(b_j)) * p^j. var(b_j)*p^{2j} = Σ_{m} p^{2m+2j}... = Σ_{k=j}^{48} p^{2(k-j)}p^{2j} = Σ_{k=j}^{48} p^{2k}... wait b_j uses coefficients c_k for k≥j, b_j = Σ_{k≥j} c_k p^{k-j}, so b_j p^j = Σ c_k p^k — std = sqrt(Σ_{k=j}^{48} p^{2k}) ≈ sqrt((4.4 - p^{2j})/0.031). For j=0: sqrt(110)≈10.5; for j=40: sqrt((4.4-3.5)/0.031)≈5.4... wait p^{2*40}=1.031^40≈3.44, (4.4-3.44)/0.031≈31, sqrt 5.6? Hmm that doesn't decrease much. Actually Σ_{k=j}^{48} p^{2k} = p^{2j}(p^{2(49-j)}-1)/(p²-1). For j=48: p^96≈4.4, var=4.4, std 2.1. For j=0: 109, std 10.4. So std of b_j p^j ranges 2-10, average maybe 7. Σ over 48 steps of eps*7 random signs: total std ≈ 6e-8*7*sqrt(48) ≈ 2.9e-6 per row.
-
-Relative per row: 2.9e-6/0.011 ≈ 2.6e-4. Exceeds 2e-4! And error norm over 8 rows scales similarly (both scale sqrt(8)), ratio stays 2.6e-4. Plus the 0.003 offset helps denominator slightly. Also threshold uses max(||ref||, 0.00283) — ref norm 0.031 bigger.
-
-Hmm but also some rows may have larger reference values. Expected failure by ~30%. That's within my estimation error. But the deliberate design (anchor = 1.015625 exactly representable, +0.003 offset, tiny noise 4e-5, threshold 2e-4 = well above eps*small but below eps*condition) strongly suggests intended verdict: reject, since fp32 Horner with condition ~1000 gives ~2-4e-4.
-
-Actually wait — reconsider: the noise δ makes reference values larger (0.011 std), which *helps* the relative error. If δ were zero, values = 0.003 exactly-ish, relative error 2.9e-6/0.003 ≈ 1e-3, clear fail. With noise it's borderline ~2.6e-4. Given design intent (they added noise to make values bigger? or to make points differ from anchor), hard to say.
-
-Hmm, actually maybe the noise was added precisely so fp32 barely passes? 4e-5 * derivative 276 = 0.011. Relative error 2.6e-4 > 2e-4. To pass they'd need noise bigger. Hmm.
-
-Alternatively my eps accumulation: each multiply and add rounds: two roundings per step, eps each → factor sqrt(2). Even worse.
-
-I'll go reject with moderate confidence. Actually, wait — should I consider that the "reference" is float64 evaluation of the same float32 inputs, and Triton fp32 ops... yes that's what I did.
-
-Alternatively "needs_more_evidence" since genuinely borderline? The task says decide; borderline numeric estimates could justify needs_more_evidence. But my analysis consistently suggests condition number ~1000 → error ~ few e-4 > 2e-4. I'll reject with confidence ~0.6.
+Actually also errors might not be symmetric... Given trap design, reject. Confidence moderate.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.6, "reason": "The workload is adversarially constructed: coefficients are chosen so the polynomial nearly cancels at the anchor (value ~0.003) while intermediate Horner quantities are O(1)-O(10) across 49 terms, giving a condition number around 10^3. With per-op float32 rounding over ~48 Horner steps, accumulated absolute error is roughly a few 1e-6 per row against reference values of only ~0.01, i.e. relative error around 2-4e-4, exceeding the 2e-4 tolerance."}
+{"verdict": "reject", "confidence": 0.7, "reason": "The workload is a cancellation trap: rows contain exact ±(1..32)*2^20 pairs plus tiny 0.25-granularity values, so the true row sums are ~8-32 while intermediate float32 accumulators reach ~2^25-2^29. The kernel does a naive sequential float32 sum, so each 0.25/0.5/0.75 addition when the accumulator is large gets rounded at ulp up to 4-32, producing per-row errors of the same order as the reference itself, likely violating E <= 0.1."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.6,
-  "reason": "The workload is adversarially constructed: coefficients are chosen so the polynomial nearly cancels at the anchor (value ~0.003) while intermediate Horner quantities are O(1)-O(10) across 49 terms, giving a condition number around 10^3. With per-op float32 rounding over ~48 Horner steps, accumulated absolute error is roughly a few 1e-6 per row against reference values of only ~0.01, i.e. relative error around 2-4e-4, exceeding the 2e-4 tolerance."
+  "confidence": 0.7,
+  "reason": "The workload is a cancellation trap: rows contain exact ±(1..32)*2^20 pairs plus tiny 0.25-granularity values, so the true row sums are ~8-32 while intermediate float32 accumulators reach ~2^25-2^29. The kernel does a naive sequential float32 sum, so each 0.25/0.5/0.75 addition when the accumulator is large gets rounded at ulp up to 4-32, producing per-row errors of the same order as the reference itself, likely violating E <= 0.1."
 }
 
 ## Usage and stop reason
@@ -164,21 +117,19 @@ Alternatively "needs_more_evidence" since genuinely borderline? The task says de
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.6,
-    "reason": "The workload is adversarially constructed: coefficients are chosen so the polynomial nearly cancels at the anchor (value ~0.003) while intermediate Horner quantities are O(1)-O(10) across 49 terms, giving a condition number around 10^3. With per-op float32 rounding over ~48 Horner steps, accumulated absolute error is roughly a few 1e-6 per row against reference values of only ~0.01, i.e. relative error around 2-4e-4, exceeding the 2e-4 tolerance."
+    "confidence": 0.7,
+    "reason": "The workload is a cancellation trap: rows contain exact ±(1..32)*2^20 pairs plus tiny 0.25-granularity values, so the true row sums are ~8-32 while intermediate float32 accumulators reach ~2^25-2^29. The kernel does a naive sequential float32 sum, so each 0.25/0.5/0.75 addition when the accumulator is large gets rounded at ulp up to 4-32, producing per-row errors of the same order as the reference itself, likely violating E <= 0.1."
   },
-  "reasoning_effort": "low",
-  "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1030,
-    "output_tokens": 3829
+    "input_tokens": 1202,
+    "output_tokens": 2340
   },
   "stop_reason": "stop",
-  "max_tokens": 32768,
-  "elapsed_s": 53.21652637491934,
-  "kernel_sha256": "c93ab59ae3dfd9ce9fecb45ddfe909cf33c9fd30a150848cc1fa07ce615a5c41",
-  "problem_sha256": "c6568d5a817c646d88548361f1ecaa88920e74a747569d5e030e794ac5921fd1",
+  "max_tokens": 8192,
+  "elapsed_s": 29.933876417111605,
+  "kernel_sha256": "94b1e21a9464b63dc29360d4ed428e6592a68c090405e2c3c32e132fe1931a7f",
+  "problem_sha256": "225f02204a0a2ba183fd05a67843b8bcad8beee4f1e8280c81832d3b360be744",
   "prompt_variant": "original",
-  "estimated_usd": 0.0045003000000000005,
+  "estimated_usd": 0.00291056,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

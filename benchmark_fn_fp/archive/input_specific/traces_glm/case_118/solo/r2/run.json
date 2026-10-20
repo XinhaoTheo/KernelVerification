@@ -5,37 +5,36 @@
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_z",
+    "entry": "case_t",
     "has_error": null,
-    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)\n    anchor_norm = tl.full((N,), 0.0, tl.float32)\n    query_norm = tl.full((), 0.0, tl.float32)\n    dot = tl.full((N,), 0.0, tl.float32)\n    for k in tl.static_range(0, D):\n        anchor = tl.load(Anchors + row * D + k).to(tl.float32)\n        query = tl.load(Query + k).to(tl.float32)\n        anchor_square = anchor * anchor\n        query_square = query * query\n        cross = anchor * query\n        anchor_norm = anchor_norm + anchor_square\n        query_norm = query_norm + query_square\n        dot = dot + cross\n    norm_sum = anchor_norm + query_norm\n    twice_dot = 2.0 * dot\n    distance = tl.maximum(norm_sum - twice_dot, 0.0)\n    weight = tl.exp(-16.0 * distance)\n    value = tl.load(Values + row).to(tl.float32)\n    numerator = tl.sum(weight * value, 0)\n    denominator = tl.sum(weight, 0)\n    output = tl.div_rn(numerator, denominator)\n    tl.store(Output, output)\n\n\ndef run(query, anchors, values):\n    output = torch.empty((1,), device=query.device, dtype=torch.float32)\n    _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,\n                      num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(119263))\n    query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\n    anchors = (query.astype(np.float64)[None, :] +\n               rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\n    values = rng.normal(0.0, 1.0, 16).astype(np.float32)\n    return query, anchors, values\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+    "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _integrate(Amplitudes, Frequencies, Phases, Output,\n               TERMS: tl.constexpr, GRID: tl.constexpr):\n    row = tl.program_id(0)\n    cell = tl.arange(0, GRID)\n    point = (cell.to(tl.float32) + 0.5) / GRID\n    value = tl.full((GRID,), 1.0, tl.float32)\n    for k in tl.static_range(0, TERMS):\n        amplitude = tl.load(Amplitudes + row * TERMS + k)\n        frequency = tl.load(Frequencies + row * TERMS + k)\n        phase = tl.load(Phases + row * TERMS + k)\n        angle = frequency * point\n        angle = angle + phase\n        value = value + amplitude * tl.sin(angle)\n    estimate = tl.sum(value, axis=0) / GRID\n    tl.store(Output + row, estimate)\n\n\ndef run(amplitudes, frequencies, phases):\n    output = torch.empty((4,), device=amplitudes.device, dtype=torch.float32)\n    _integrate[(4,)](amplitudes, frequencies, phases, output,\n                     TERMS=8, GRID=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(711076))\n    amplitudes = rng.normal(0.0, 0.1, (4, 8)).astype(np.float32)\n    frequencies = rng.uniform(0.5, 220.0, (4, 8)).astype(np.float32)\n    phases = rng.uniform(-np.pi, np.pi, (4, 8)).astype(np.float32)\n    return amplitudes, frequencies, phases\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
     "passed": null,
-    "problem_text": "Compute one normalized radial-basis-function regression prediction.\n\nThe only workload in scope is the float32 data returned by make_inputs()\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\nhas shape (16,). Define the mathematical reference from these actual stored\nfloat32 values, with all the following arithmetic evaluated in float64:\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\n  weight[i] = exp(-16 * distance[i])\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\n\nThe output must be a finite vector of shape (1,). Its numerical error is\n  ||output-reference||_2 / max(||reference||_2, 0.05).\nThe implementation satisfies the contract iff this error is <= 0.05.\nThe contract concerns the final normalized prediction. It does not impose\nseparate error requirements on intermediate distances or individual weights.\nAlternative inputs and seeds are outside the scope of this fixed workload.\n\nThe implementation uses the expanded squared-distance identity and clamps\nnegative computed distances to zero before the exponential. Its norm and\ndot-product accumulators round to float32 each step. FP fusion is disabled.\n",
+    "problem_text": "Integrate four oscillatory real functions over the interval [0, 1].\n\nThe only inputs in scope are the float32 tensors returned by make_inputs() in\nkernel.py. amplitudes, frequencies, and phases each have shape (4, 8). The exact\nreal function for row r is defined by the supplied float32 values:\n  f_r(t) = 1 + sum_{k=0}^{7} amplitudes[r,k] * sin(frequencies[r,k]*t + phases[r,k]).\nThe mathematical reference is integral_0^1 f_r(t) dt, evaluated in float64:\n  reference[r] = 1 + sum_k amplitudes[r,k] *\n      (cos(phases[r,k])-cos(phases[r,k]+frequencies[r,k])) / frequencies[r,k].\nThis is the continuous integral; the 32-point grid in the implementation is an\napproximation method, not the definition of the reference.\n\nOutput must be a finite float32 vector of shape (4,). The numerical contract is\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035.\nDecide whether this implementation satisfies that contract for this fixed\npublic workload. Other amplitudes, frequencies, or phases are outside scope.\nThe launch disables FP multiply/add fusion.\n",
     "rounds": null,
-    "session_dir": "/root/numerical_cases/case_z",
+    "session_dir": "/root/numerical_cases/case_t",
     "status": "unverified",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-24T01:10:46Z",
+      "created_at": "2026-09-24T01:07:42Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-24T01:11:04Z",
+          "created_at": "2026-09-24T01:07:58Z",
           "data": {
-            "abs_diff": 0.014620318048527606,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "d8f2becc87473687f886433c866788a48180fc3c86b5adb0211da2dc6c6e4d17"
+                "sha256": "71efc2d4cfee555f71c3f74fab32f5efbf5102d4ff9b8d522845efa67f42113a"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "200f4201227a4f7be1439bf5fe09229049e8fb224394320b922295b4023f2f4c"
+                "sha256": "84f267c6d748e86c05d2aa3197c302dd1737001f8cf96a6a1fbbb4fba4137466"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -47,49 +46,73 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "7aaee5dd604f8615953725dbc07f36a126b1caf05e75a29c88c584a6b305e536"
+                "sha256": "05505c3194534f7a2875071778aa8a55174409eb935d9eab6cf0011bf6f7df23"
               }
             ],
-            "contract_error": 0.2924063609705521,
-            "duration_s": 6.120142,
+            "duration_s": 5.922054,
             "exit_code": 0,
             "expected_signal": null,
+            "finite": true,
             "json_parse_error": null,
             "json_result": {
-              "error": 0.2924063609705521,
               "finite": true,
-              "output": -0.018536671996116638,
-              "reference": -0.033156990044644244
+              "output": [
+                1.1304664611816406,
+                0.7976996898651123,
+                0.9610635042190552,
+                0.9959263205528259
+              ],
+              "passes": false,
+              "reference": [
+                1.01085189417418,
+                1.0002186761953267,
+                0.9988882450335536,
+                0.9978313214035637
+              ],
+              "rel_l2": 0.11888436797488026,
+              "threshold": 0.035
             },
-            "output": -0.018536671996116638,
-            "reference": -0.033156990044644244,
+            "output": [
+              1.1304664611816406,
+              0.7976996898651123,
+              0.9610635042190552,
+              0.9959263205528259
+            ],
+            "passes": false,
+            "reference": [
+              1.01085189417418,
+              1.0002186761953267,
+              0.9988882450335536,
+              0.9978313214035637
+            ],
+            "rel_l2": 0.11888436797488026,
             "stderr": "",
-            "stdout": "output -0.018536671996116638 reference -0.033156990044644244 abs_diff 0.014620318048527606\ndistances 0.005533461663617345 0.009803504550291109 weights range 0.8548270828287564 0.9152707218276462\n{\"output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"error\": 0.2924063609705521, \"finite\": true}\n",
-            "threshold": 0.05,
+            "stdout": "{\"output\": [1.1304664611816406, 0.7976996898651123, 0.9610635042190552, 0.9959263205528259], \"reference\": [1.01085189417418, 1.0002186761953267, 0.9988882450335536, 0.9978313214035637], \"rel_l2\": 0.11888436797488026, \"threshold\": 0.035, \"passes\": false, \"finite\": true}\n",
+            "threshold": 0.035,
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Kernel output -0.018537 vs float64 reference -0.033157 on the fixed make_inputs() workload; contract error = 0.2924 > 0.05, output is finite. Confirms the claim.",
+          "summary": "On the fixed make_inputs() workload the kernel output [1.1305, 0.7977, 0.9611, 0.9959] vs float64 continuous-integral reference [1.0109, 1.0002, 0.9989, 0.9978] gives relative L2 error 0.1189 > 0.035 threshold, confirming the 32-point midpoint rule violates the numerical contract.",
           "supports": "confirmed",
           "tool_event_id": "t7"
         }
       ],
       "id": "c1",
       "raised_by": "solo",
-      "rationale": "Kernel uses float32 expanded-identity accumulators (norm_sum - 2*dot), which can suffer catastrophic cancellation since query and anchors are ~16 with offsets ~0.015; the contract requires final normalized error <= 0.05.",
+      "rationale": "Midpoint sampling with only 32 points aliases frequencies up to 220; the sample mean can deviate from the continuous integral enough to exceed the 3.5% relative L2 tolerance.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "Error is ||output-reference||_2 / max(||reference||_2, 0.05) on the fixed make_inputs() workload; satisfies contract iff <= 0.05."
+          "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload, with the continuous float64 integral as reference."
         }
       ],
-      "scope_rationale": "problem.txt defines the sole in-scope workload as make_inputs() and requires the final normalized prediction error ||output-reference||_2 / max(||reference||_2, 0.05) to be <= 0.05.",
-      "statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05.",
+      "scope_rationale": "The contract requires ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload with the continuous integral as reference; a midpoint-rule error exceeding that threshold violates it.",
+      "statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload.",
       "status": "confirmed",
-      "updated_at": "2026-09-24T01:11:04Z"
+      "updated_at": "2026-09-24T01:07:58Z"
     }
   ],
   "convergence": null,
@@ -102,7 +125,7 @@
   },
   "description_tasks": [],
   "description_updates": [],
-  "entry": "case_z",
+  "entry": "case_t",
   "history": [
     {
       "duration_s": null,
@@ -112,25 +135,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_z"
+            "entry": "case_t"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_z"
+            "entry": "case_t"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_z"
+            "entry": "case_t"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_z",
+            "entry": "case_t",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -139,22 +162,22 @@
       "usage": null
     },
     {
-      "duration_s": 2.9334273389999908,
+      "duration_s": 7.047874038000003,
       "role": "solo",
       "round": 2,
-      "text": "The contract is simple: run the fixed workload and compute the declared error metric. I'll record one claim and run the probe.",
+      "text": "The kernel uses a 32-point midpoint rule for frequencies up to 220, which may alias badly compared to the continuous-integral reference. I'll test the exact fixed workload directly.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "Kernel uses float32 expanded-identity accumulators, which can suffer cancellation since query and anchors are ~16 with tiny offsets; the final normalized error must be <= 0.05.",
+            "rationale": "Midpoint sampling with only 32 points aliases frequencies up to 220 Hz; the amplitude-weighted sample mean can deviate from the continuous integral enough to exceed the 0.035 relative L2 tolerance, especially since the reference norm is small (amplitudes ~0.1).",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Error is ||output-reference||_2 / max(||reference||_2, 0.05) on the fixed make_inputs() workload; satisfies contract iff <= 0.05."
+                "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs workload, with continuous integral as reference."
               }
             ],
-            "statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05."
+            "statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload."
           },
           "tool": "record_claim"
         }
@@ -162,29 +185,29 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 2.933,
-        "input_tokens": 7678,
-        "output_tokens": 198
+        "duration_s": 7.048,
+        "input_tokens": 7498,
+        "output_tokens": 387
       }
     },
     {
-      "duration_s": 3.6126071740000043,
+      "duration_s": 3.642946569000003,
       "role": "solo",
       "round": 3,
-      "text": "The prior claim record was rejected for a missing scope_rationale. I'll re-record it correctly.",
+      "text": "I'll record the claim (the earlier attempt failed for missing scope_rationale) and then run the fixed workload.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "Kernel uses float32 expanded-identity accumulators (norm_sum - 2*dot), which can suffer catastrophic cancellation since query and anchors are ~16 with offsets ~0.015; the contract requires final normalized error <= 0.05.",
+            "rationale": "Midpoint sampling with only 32 points aliases frequencies up to 220; the sample mean can deviate from the continuous integral enough to exceed the 3.5% relative L2 tolerance.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Error is ||output-reference||_2 / max(||reference||_2, 0.05) on the fixed make_inputs() workload; satisfies contract iff <= 0.05."
+                "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload, with the continuous float64 integral as reference."
               }
             ],
-            "scope_rationale": "problem.txt defines the sole in-scope workload as make_inputs() and requires the final normalized prediction error ||output-reference||_2 / max(||reference||_2, 0.05) to be <= 0.05.",
-            "statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05."
+            "scope_rationale": "The contract requires ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload with the continuous integral as reference; a midpoint-rule error exceeding that threshold violates it.",
+            "statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload."
           },
           "tool": "record_claim"
         }
@@ -192,21 +215,21 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 3.613,
-        "input_tokens": 8282,
-        "output_tokens": 268
+        "duration_s": 3.643,
+        "input_tokens": 8161,
+        "output_tokens": 242
       }
     },
     {
-      "duration_s": 7.539680209999972,
+      "duration_s": 5.230358911000025,
       "role": "solo",
       "round": 4,
-      "text": "I'll run the contract's exact workload and error metric on the GPU.",
+      "text": "I'll run the fixed workload through the kernel and compare against the float64 continuous-integral reference.",
       "tool_calls": [
         {
           "args": {
             "claim_id": "c1",
-            "code": "\nimport numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_z\")\nimport kernel\n\nquery, anchors, values = kernel.make_inputs(\"cuda\")\nout = kernel.run(query, anchors, values)\ntorch.cuda.synchronize()\n\n# float64 reference from stored float32 values\nq = query.cpu().numpy().astype(np.float64)\na = anchors.cpu().numpy().astype(np.float64)\nv = values.cpu().numpy().astype(np.float64)\nd = ((a - q)**2).sum(axis=1)\nw = np.exp(-16.0 * d)\nref = (w * v).sum() / w.sum()\n\no = out.item()\nerr = abs(o - ref) / max(abs(ref), 0.05)\nprint(\"output\", o, \"reference\", ref, \"abs_diff\", abs(o-ref))\nprint(\"distances\", d.min(), d.max(), \"weights range\", w.min(), w.max())\nimport json\nprint(json.dumps({\"output\": o, \"reference\": ref, \"error\": err, \"finite\": bool(np.isfinite(o))}))\n"
+            "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_t\")\nimport numpy as np, torch\nimport kernel as K\n\namp, freq, ph = K.make_inputs(\"cuda\")\nout = K.run(amp, freq, ph)\ntorch.cuda.synchronize()\n\na = amp.double().cpu().numpy(); f = freq.double().cpu().numpy(); p = ph.double().cpu().numpy()\nref = 1.0 + (a * (np.cos(p) - np.cos(p + f)) / f).sum(axis=1)\no = out.double().cpu().numpy()\nrel = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\"output\": o.tolist(), \"reference\": ref.tolist(),\n                  \"rel_l2\": float(rel), \"threshold\": 0.035,\n                  \"passes\": bool(rel <= 0.035), \"finite\": bool(np.all(np.isfinite(o)))}))"
           },
           "tool": "run_claim_probe"
         }
@@ -214,29 +237,40 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 7.54,
-        "input_tokens": 9479,
-        "output_tokens": 268
+        "duration_s": 5.23,
+        "input_tokens": 9329,
+        "output_tokens": 247
       }
     },
     {
-      "duration_s": 4.148032376999993,
+      "duration_s": 5.413887073000012,
       "role": "solo",
       "round": 5,
-      "text": "The probe ran the exact contract workload: the kernel's output error is 0.2924, well above the 0.05 threshold. The absolute difference is small, but the contract's declared metric normalizes by max(||reference||, 0.05) = 0.05, and 0.2924 > 0.05. I'll finalize this evidence and record the verdict.",
+      "text": "The probe shows rel_l2 \u2248 0.119, well above the 0.035 threshold \u2014 the midpoint rule error exceeds the contract on the fixed workload. I'll finalize the evidence and record the verdict.",
       "tool_calls": [
         {
           "args": {
             "data": {
-              "abs_diff": 0.014620318048527606,
-              "contract_error": 0.2924063609705521,
-              "output": -0.018536671996116638,
-              "reference": -0.033156990044644244,
-              "threshold": 0.05
+              "finite": true,
+              "output": [
+                1.1304664611816406,
+                0.7976996898651123,
+                0.9610635042190552,
+                0.9959263205528259
+              ],
+              "passes": false,
+              "reference": [
+                1.01085189417418,
+                1.0002186761953267,
+                0.9988882450335536,
+                0.9978313214035637
+              ],
+              "rel_l2": 0.11888436797488026,
+              "threshold": 0.035
             },
             "event_id": "t7",
             "status": "confirmed",
-            "summary": "Kernel output -0.018537 vs float64 reference -0.033157 on the fixed make_inputs() workload; contract error = 0.2924 > 0.05, output is finite. Confirms the claim.",
+            "summary": "On the fixed make_inputs() workload the kernel output [1.1305, 0.7977, 0.9611, 0.9959] vs float64 continuous-integral reference [1.0109, 1.0002, 0.9989, 0.9978] gives relative L2 error 0.1189 > 0.035 threshold, confirming the 32-point midpoint rule violates the numerical contract.",
             "supports": "confirmed"
           },
           "tool": "finalize_probe_evidence"
@@ -245,24 +279,24 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 4.148,
-        "input_tokens": 11661,
-        "output_tokens": 346
+        "duration_s": 5.414,
+        "input_tokens": 11645,
+        "output_tokens": 334
       }
     },
     {
-      "duration_s": 5.6446827729999995,
+      "duration_s": 3.8486581490000162,
       "role": "solo",
       "round": 6,
-      "text": "The single in-scope claim is confirmed with decisive runtime evidence: on the exact make_inputs() workload, the kernel's output error is 0.2924, far above the contract's 0.05 threshold. The float32 expanded-identity accumulation loses the small inter-anchor weight differences (float64 distances vary 0.0055\u20130.0098 but float32 cancellation flattens them), shifting the normalized prediction. This is exactly the failure mode the contract's metric is designed to catch, and the contract explicitly declares this fixed workload as the only scope. I'll record the verdict.",
+      "text": "",
       "tool_calls": [
         {
           "args": {
-            "confidence": 0.95,
+            "confidence": 0.98,
             "decisive_claims": [
               "c1"
             ],
-            "reason": "Ran the contract's sole in-scope workload (kernel.make_inputs(\"cuda\")) on the real GPU (tool event t7). Kernel output -0.0185367 vs float64 reference -0.0331570; contract error = |output-reference| / max(|reference|,0.05) = 0.01462/0.05 = 0.2924 > 0.05 threshold, while the output is finite and correctly shaped. Root cause is consistent with the source: float32 expanded-identity accumulators (norm_sum - 2*dot with values ~16, deltas ~0.015) catastrophically cancel, flattening the true distance variation (float64 distances 0.0055-0.0098) and hence the weights, which shifts the normalized prediction. The contract requires error <= 0.05 on this fixed workload; claim c1 (in_scope, scope evidence from problem.txt) is confirmed by runtime probe t7, so the kernel fails the contract.",
+            "reason": "Probe t7 ran the fixed make_inputs() workload through the kernel on GPU and compared against the contract's float64 continuous-integral reference: rel_l2 = 0.1189, far above the 0.035 threshold (output [1.1305, 0.7977, 0.9611, 0.9959] vs reference [1.0109, 1.0002, 0.9989, 0.9978]). The 32-point midpoint rule aliases frequencies up to 220, violating the required numerical contract on the only in-scope input. Claim c1 is in_scope and confirmed.",
             "verdict": "reject"
           },
           "tool": "record_verdict"
@@ -271,9 +305,9 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.645,
-        "input_tokens": 15064,
-        "output_tokens": 443
+        "duration_s": 3.849,
+        "input_tokens": 15974,
+        "output_tokens": 179
       }
     }
   ],
@@ -291,9 +325,9 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_z"
+        "entry": "case_t"
       },
-      "created_at": "2026-09-24T01:10:39Z",
+      "created_at": "2026-09-24T01:07:31Z",
       "id": "t1",
       "output": {
         "artifact_files": [
@@ -301,13 +335,13 @@
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_z",
+        "entry": "case_t",
         "has_error": null,
-        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):\n    row = tl.arange(0, N)\n    anchor_norm = tl.full((N,), 0.0, tl.float32)\n    query_norm = tl.full((), 0.0, tl.float32)\n    dot = tl.full((N,), 0.0, tl.float32)\n    for k in tl.static_range(0, D):\n        anchor = tl.load(Anchors + row * D + k).to(tl.float32)\n        query = tl.load(Query + k).to(tl.float32)\n        anchor_square = anchor * anchor\n        query_square = query * query\n        cross = anchor * query\n        anchor_norm = anchor_norm + anchor_square\n        query_norm = query_norm + query_square\n        dot = dot + cross\n    norm_sum = anchor_norm + query_norm\n    twice_dot = 2.0 * dot\n    distance = tl.maximum(norm_sum - twice_dot, 0.0)\n    weight = tl.exp(-16.0 * distance)\n    value = tl.load(Values + row).to(tl.float32)\n    numerator = tl.sum(weight * value, 0)\n    denominator = tl.sum(weight, 0)\n    output = tl.div_rn(numerator, denominator)\n    tl.store(Output, output)\n\n\ndef run(query, anchors, values):\n    output = torch.empty((1,), device=query.device, dtype=torch.float32)\n    _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,\n                      num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(119263))\n    query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\n    anchors = (query.astype(np.float64)[None, :] +\n               rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\n    values = rng.normal(0.0, 1.0, 16).astype(np.float32)\n    return query, anchors, values\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
+        "kernel_code": "import numpy as np\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _integrate(Amplitudes, Frequencies, Phases, Output,\n               TERMS: tl.constexpr, GRID: tl.constexpr):\n    row = tl.program_id(0)\n    cell = tl.arange(0, GRID)\n    point = (cell.to(tl.float32) + 0.5) / GRID\n    value = tl.full((GRID,), 1.0, tl.float32)\n    for k in tl.static_range(0, TERMS):\n        amplitude = tl.load(Amplitudes + row * TERMS + k)\n        frequency = tl.load(Frequencies + row * TERMS + k)\n        phase = tl.load(Phases + row * TERMS + k)\n        angle = frequency * point\n        angle = angle + phase\n        value = value + amplitude * tl.sin(angle)\n    estimate = tl.sum(value, axis=0) / GRID\n    tl.store(Output + row, estimate)\n\n\ndef run(amplitudes, frequencies, phases):\n    output = torch.empty((4,), device=amplitudes.device, dtype=torch.float32)\n    _integrate[(4,)](amplitudes, frequencies, phases, output,\n                     TERMS=8, GRID=32, num_warps=1, enable_fp_fusion=False)\n    return output\n\n\ndef make_inputs_numpy():\n    rng = np.random.Generator(np.random.PCG64(711076))\n    amplitudes = rng.normal(0.0, 0.1, (4, 8)).astype(np.float32)\n    frequencies = rng.uniform(0.5, 220.0, (4, 8)).astype(np.float32)\n    phases = rng.uniform(-np.pi, np.pi, (4, 8)).astype(np.float32)\n    return amplitudes, frequencies, phases\n\n\ndef make_inputs(device=\"cuda\"):\n    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())\n",
         "passed": null,
-        "problem_text": "Compute one normalized radial-basis-function regression prediction.\n\nThe only workload in scope is the float32 data returned by make_inputs()\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\nhas shape (16,). Define the mathematical reference from these actual stored\nfloat32 values, with all the following arithmetic evaluated in float64:\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\n  weight[i] = exp(-16 * distance[i])\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\n\nThe output must be a finite vector of shape (1,). Its numerical error is\n  ||output-reference||_2 / max(||reference||_2, 0.05).\nThe implementation satisfies the contract iff this error is <= 0.05.\nThe contract concerns the final normalized prediction. It does not impose\nseparate error requirements on intermediate distances or individual weights.\nAlternative inputs and seeds are outside the scope of this fixed workload.\n\nThe implementation uses the expanded squared-distance identity and clamps\nnegative computed distances to zero before the exponential. Its norm and\ndot-product accumulators round to float32 each step. FP fusion is disabled.\n",
+        "problem_text": "Integrate four oscillatory real functions over the interval [0, 1].\n\nThe only inputs in scope are the float32 tensors returned by make_inputs() in\nkernel.py. amplitudes, frequencies, and phases each have shape (4, 8). The exact\nreal function for row r is defined by the supplied float32 values:\n  f_r(t) = 1 + sum_{k=0}^{7} amplitudes[r,k] * sin(frequencies[r,k]*t + phases[r,k]).\nThe mathematical reference is integral_0^1 f_r(t) dt, evaluated in float64:\n  reference[r] = 1 + sum_k amplitudes[r,k] *\n      (cos(phases[r,k])-cos(phases[r,k]+frequencies[r,k])) / frequencies[r,k].\nThis is the continuous integral; the 32-point grid in the implementation is an\napproximation method, not the definition of the reference.\n\nOutput must be a finite float32 vector of shape (4,). The numerical contract is\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035.\nDecide whether this implementation satisfies that contract for this fixed\npublic workload. Other amplitudes, frequencies, or phases are outside scope.\nThe launch disables FP multiply/add fusion.\n",
         "rounds": null,
-        "session_dir": "/root/numerical_cases/case_z",
+        "session_dir": "/root/numerical_cases/case_t",
         "status": "unverified",
         "test_code": ""
       },
@@ -316,13 +350,13 @@
     },
     {
       "args": {
-        "entry": "case_z"
+        "entry": "case_t"
       },
-      "created_at": "2026-09-24T01:10:39Z",
+      "created_at": "2026-09-24T01:07:31Z",
       "id": "t2",
       "output": {
-        "content": "Compute one normalized radial-basis-function regression prediction.\n\nThe only workload in scope is the float32 data returned by make_inputs()\nin kernel.py: query has shape (32,), anchors has shape (16, 32), and values\nhas shape (16,). Define the mathematical reference from these actual stored\nfloat32 values, with all the following arithmetic evaluated in float64:\n  distance[i] = sum_k (anchors[i,k] - query[k])**2\n  weight[i] = exp(-16 * distance[i])\n  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].\n\nThe output must be a finite vector of shape (1,). Its numerical error is\n  ||output-reference||_2 / max(||reference||_2, 0.05).\nThe implementation satisfies the contract iff this error is <= 0.05.\nThe contract concerns the final normalized prediction. It does not impose\nseparate error requirements on intermediate distances or individual weights.\nAlternative inputs and seeds are outside the scope of this fixed workload.\n\nThe implementation uses the expanded squared-distance identity and clamps\nnegative computed distances to zero before the exponential. Its norm and\ndot-product accumulators round to float32 each step. FP fusion is disabled.\n",
-        "entry": "case_z",
+        "content": "Integrate four oscillatory real functions over the interval [0, 1].\n\nThe only inputs in scope are the float32 tensors returned by make_inputs() in\nkernel.py. amplitudes, frequencies, and phases each have shape (4, 8). The exact\nreal function for row r is defined by the supplied float32 values:\n  f_r(t) = 1 + sum_{k=0}^{7} amplitudes[r,k] * sin(frequencies[r,k]*t + phases[r,k]).\nThe mathematical reference is integral_0^1 f_r(t) dt, evaluated in float64:\n  reference[r] = 1 + sum_k amplitudes[r,k] *\n      (cos(phases[r,k])-cos(phases[r,k]+frequencies[r,k])) / frequencies[r,k].\nThis is the continuous integral; the 32-point grid in the implementation is an\napproximation method, not the definition of the reference.\n\nOutput must be a finite float32 vector of shape (4,). The numerical contract is\n  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035.\nDecide whether this implementation satisfies that contract for this fixed\npublic workload. Other amplitudes, frequencies, or phases are outside scope.\nThe launch disables FP multiply/add fusion.\n",
+        "entry": "case_t",
         "exists": true,
         "path": "problem.txt"
       },
@@ -331,17 +365,17 @@
     },
     {
       "args": {
-        "entry": "case_z"
+        "entry": "case_t"
       },
-      "created_at": "2026-09-24T01:10:39Z",
+      "created_at": "2026-09-24T01:07:31Z",
       "id": "t3",
       "output": {
-        "entry": "case_z",
+        "entry": "case_t",
         "files": [
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 1805
+            "size_bytes": 1478
           },
           {
             "kind": "metadata",
@@ -351,7 +385,7 @@
           {
             "kind": "problem",
             "path": "problem.txt",
-            "size_bytes": 1164
+            "size_bytes": 1060
           }
         ]
       },
@@ -360,14 +394,14 @@
     },
     {
       "args": {
-        "entry": "case_z",
+        "entry": "case_t",
         "path": "meta.json"
       },
-      "created_at": "2026-09-24T01:10:40Z",
+      "created_at": "2026-09-24T01:07:31Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_z\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
-        "entry": "case_z",
+        "content": "{\n  \"name\": \"case_t\",\n  \"passed\": null,\n  \"status\": \"unverified\"\n}\n",
+        "entry": "case_t",
         "kind": "metadata",
         "path": "meta.json",
         "size_chars": 67,
@@ -378,17 +412,17 @@
     },
     {
       "args": {
-        "rationale": "Kernel uses float32 expanded-identity accumulators, which can suffer cancellation since query and anchors are ~16 with tiny offsets; the final normalized error must be <= 0.05.",
+        "rationale": "Midpoint sampling with only 32 points aliases frequencies up to 220 Hz; the amplitude-weighted sample mean can deviate from the continuous integral enough to exceed the 0.035 relative L2 tolerance, especially since the reference norm is small (amplitudes ~0.1).",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Error is ||output-reference||_2 / max(||reference||_2, 0.05) on the fixed make_inputs() workload; satisfies contract iff <= 0.05."
+            "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs workload, with continuous integral as reference."
           }
         ],
-        "statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05."
+        "statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload."
       },
-      "created_at": "2026-09-24T01:10:42Z",
+      "created_at": "2026-09-24T01:07:38Z",
       "id": "t5",
       "output": {
         "error": {
@@ -406,36 +440,36 @@
     },
     {
       "args": {
-        "rationale": "Kernel uses float32 expanded-identity accumulators (norm_sum - 2*dot), which can suffer catastrophic cancellation since query and anchors are ~16 with offsets ~0.015; the contract requires final normalized error <= 0.05.",
+        "rationale": "Midpoint sampling with only 32 points aliases frequencies up to 220; the sample mean can deviate from the continuous integral enough to exceed the 3.5% relative L2 tolerance.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Error is ||output-reference||_2 / max(||reference||_2, 0.05) on the fixed make_inputs() workload; satisfies contract iff <= 0.05."
+            "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload, with the continuous float64 integral as reference."
           }
         ],
-        "scope_rationale": "problem.txt defines the sole in-scope workload as make_inputs() and requires the final normalized prediction error ||output-reference||_2 / max(||reference||_2, 0.05) to be <= 0.05.",
-        "statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05."
+        "scope_rationale": "The contract requires ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload with the continuous integral as reference; a midpoint-rule error exceeding that threshold violates it.",
+        "statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload."
       },
-      "created_at": "2026-09-24T01:10:46Z",
+      "created_at": "2026-09-24T01:07:42Z",
       "id": "t6",
       "output": {
-        "created_at": "2026-09-24T01:10:46Z",
+        "created_at": "2026-09-24T01:07:42Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "solo",
-        "rationale": "Kernel uses float32 expanded-identity accumulators (norm_sum - 2*dot), which can suffer catastrophic cancellation since query and anchors are ~16 with offsets ~0.015; the contract requires final normalized error <= 0.05.",
+        "rationale": "Midpoint sampling with only 32 points aliases frequencies up to 220; the sample mean can deviate from the continuous integral enough to exceed the 3.5% relative L2 tolerance.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Error is ||output-reference||_2 / max(||reference||_2, 0.05) on the fixed make_inputs() workload; satisfies contract iff <= 0.05."
+            "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload, with the continuous float64 integral as reference."
           }
         ],
-        "scope_rationale": "problem.txt defines the sole in-scope workload as make_inputs() and requires the final normalized prediction error ||output-reference||_2 / max(||reference||_2, 0.05) to be <= 0.05.",
-        "statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05.",
+        "scope_rationale": "The contract requires ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload with the continuous integral as reference; a midpoint-rule error exceeding that threshold violates it.",
+        "statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload.",
         "status": "open",
-        "updated_at": "2026-09-24T01:10:46Z"
+        "updated_at": "2026-09-24T01:07:42Z"
       },
       "status": "ok",
       "tool": "record_claim"
@@ -443,9 +477,9 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "\nimport numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_z\")\nimport kernel\n\nquery, anchors, values = kernel.make_inputs(\"cuda\")\nout = kernel.run(query, anchors, values)\ntorch.cuda.synchronize()\n\n# float64 reference from stored float32 values\nq = query.cpu().numpy().astype(np.float64)\na = anchors.cpu().numpy().astype(np.float64)\nv = values.cpu().numpy().astype(np.float64)\nd = ((a - q)**2).sum(axis=1)\nw = np.exp(-16.0 * d)\nref = (w * v).sum() / w.sum()\n\no = out.item()\nerr = abs(o - ref) / max(abs(ref), 0.05)\nprint(\"output\", o, \"reference\", ref, \"abs_diff\", abs(o-ref))\nprint(\"distances\", d.min(), d.max(), \"weights range\", w.min(), w.max())\nimport json\nprint(json.dumps({\"output\": o, \"reference\": ref, \"error\": err, \"finite\": bool(np.isfinite(o))}))\n"
+        "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_t\")\nimport numpy as np, torch\nimport kernel as K\n\namp, freq, ph = K.make_inputs(\"cuda\")\nout = K.run(amp, freq, ph)\ntorch.cuda.synchronize()\n\na = amp.double().cpu().numpy(); f = freq.double().cpu().numpy(); p = ph.double().cpu().numpy()\nref = 1.0 + (a * (np.cos(p) - np.cos(p + f)) / f).sum(axis=1)\no = out.double().cpu().numpy()\nrel = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\"output\": o.tolist(), \"reference\": ref.tolist(),\n                  \"rel_l2\": float(rel), \"threshold\": 0.035,\n                  \"passes\": bool(rel <= 0.035), \"finite\": bool(np.all(np.isfinite(o)))}))"
       },
-      "created_at": "2026-09-24T01:11:00Z",
+      "created_at": "2026-09-24T01:07:53Z",
       "id": "t7",
       "output": {
         "artifacts": [
@@ -453,13 +487,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t7_probe.py",
-            "sha256": "d8f2becc87473687f886433c866788a48180fc3c86b5adb0211da2dc6c6e4d17"
+            "sha256": "71efc2d4cfee555f71c3f74fab32f5efbf5102d4ff9b8d522845efa67f42113a"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t7_stdout.txt",
-            "sha256": "200f4201227a4f7be1439bf5fe09229049e8fb224394320b922295b4023f2f4c"
+            "sha256": "84f267c6d748e86c05d2aa3197c302dd1737001f8cf96a6a1fbbb4fba4137466"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -471,13 +505,13 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t7_json_result.json",
-            "sha256": "7aaee5dd604f8615953725dbc07f36a126b1caf05e75a29c88c584a6b305e536"
+            "sha256": "05505c3194534f7a2875071778aa8a55174409eb935d9eab6cf0011bf6f7df23"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05.",
-        "cwd": "/root/numerical_cases/case_z",
-        "duration_s": 6.120142,
+        "claim_statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload.",
+        "cwd": "/root/numerical_cases/case_t",
+        "duration_s": 5.922054,
         "event_id": "t7",
         "evidence_draft": {
           "claim_id": "c1",
@@ -487,13 +521,13 @@
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "d8f2becc87473687f886433c866788a48180fc3c86b5adb0211da2dc6c6e4d17"
+                "sha256": "71efc2d4cfee555f71c3f74fab32f5efbf5102d4ff9b8d522845efa67f42113a"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "200f4201227a4f7be1439bf5fe09229049e8fb224394320b922295b4023f2f4c"
+                "sha256": "84f267c6d748e86c05d2aa3197c302dd1737001f8cf96a6a1fbbb4fba4137466"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -505,21 +539,33 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "7aaee5dd604f8615953725dbc07f36a126b1caf05e75a29c88c584a6b305e536"
+                "sha256": "05505c3194534f7a2875071778aa8a55174409eb935d9eab6cf0011bf6f7df23"
               }
             ],
-            "duration_s": 6.120142,
+            "duration_s": 5.922054,
             "exit_code": 0,
             "expected_signal": null,
             "json_parse_error": null,
             "json_result": {
-              "error": 0.2924063609705521,
               "finite": true,
-              "output": -0.018536671996116638,
-              "reference": -0.033156990044644244
+              "output": [
+                1.1304664611816406,
+                0.7976996898651123,
+                0.9610635042190552,
+                0.9959263205528259
+              ],
+              "passes": false,
+              "reference": [
+                1.01085189417418,
+                1.0002186761953267,
+                0.9988882450335536,
+                0.9978313214035637
+              ],
+              "rel_l2": 0.11888436797488026,
+              "threshold": 0.035
             },
             "stderr": "",
-            "stdout": "output -0.018536671996116638 reference -0.033156990044644244 abs_diff 0.014620318048527606\ndistances 0.005533461663617345 0.009803504550291109 weights range 0.8548270828287564 0.9152707218276462\n{\"output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"error\": 0.2924063609705521, \"finite\": true}\n",
+            "stdout": "{\"output\": [1.1304664611816406, 0.7976996898651123, 0.9610635042190552, 0.9959263205528259], \"reference\": [1.01085189417418, 1.0002186761953267, 0.9988882450335536, 0.9978313214035637], \"rel_l2\": 0.11888436797488026, \"threshold\": 0.035, \"passes\": false, \"finite\": true}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -532,10 +578,22 @@
         "expected_signal": null,
         "json_parse_error": null,
         "json_result": {
-          "error": 0.2924063609705521,
           "finite": true,
-          "output": -0.018536671996116638,
-          "reference": -0.033156990044644244
+          "output": [
+            1.1304664611816406,
+            0.7976996898651123,
+            0.9610635042190552,
+            0.9959263205528259
+          ],
+          "passes": false,
+          "reference": [
+            1.01085189417418,
+            1.0002186761953267,
+            0.9988882450335536,
+            0.9978313214035637
+          ],
+          "rel_l2": 0.11888436797488026,
+          "threshold": 0.035
         },
         "sandbox": {
           "cpu_limit_s": 90,
@@ -545,7 +603,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "output -0.018536671996116638 reference -0.033156990044644244 abs_diff 0.014620318048527606\ndistances 0.005533461663617345 0.009803504550291109 weights range 0.8548270828287564 0.9152707218276462\n{\"output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"error\": 0.2924063609705521, \"finite\": true}\n",
+        "stdout": "{\"output\": [1.1304664611816406, 0.7976996898651123, 0.9610635042190552, 0.9959263205528259], \"reference\": [1.01085189417418, 1.0002186761953267, 0.9988882450335536, 0.9978313214035637], \"rel_l2\": 0.11888436797488026, \"threshold\": 0.035, \"passes\": false, \"finite\": true}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -556,40 +614,50 @@
     {
       "args": {
         "data": {
-          "abs_diff": 0.014620318048527606,
-          "contract_error": 0.2924063609705521,
-          "output": -0.018536671996116638,
-          "reference": -0.033156990044644244,
-          "threshold": 0.05
+          "finite": true,
+          "output": [
+            1.1304664611816406,
+            0.7976996898651123,
+            0.9610635042190552,
+            0.9959263205528259
+          ],
+          "passes": false,
+          "reference": [
+            1.01085189417418,
+            1.0002186761953267,
+            0.9988882450335536,
+            0.9978313214035637
+          ],
+          "rel_l2": 0.11888436797488026,
+          "threshold": 0.035
         },
         "event_id": "t7",
         "status": "confirmed",
-        "summary": "Kernel output -0.018537 vs float64 reference -0.033157 on the fixed make_inputs() workload; contract error = 0.2924 > 0.05, output is finite. Confirms the claim.",
+        "summary": "On the fixed make_inputs() workload the kernel output [1.1305, 0.7977, 0.9611, 0.9959] vs float64 continuous-integral reference [1.0109, 1.0002, 0.9989, 0.9978] gives relative L2 error 0.1189 > 0.035 threshold, confirming the 32-point midpoint rule violates the numerical contract.",
         "supports": "confirmed"
       },
-      "created_at": "2026-09-24T01:11:04Z",
+      "created_at": "2026-09-24T01:07:58Z",
       "id": "t8",
       "output": {
         "claim": {
-          "created_at": "2026-09-24T01:10:46Z",
+          "created_at": "2026-09-24T01:07:42Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-24T01:11:04Z",
+              "created_at": "2026-09-24T01:07:58Z",
               "data": {
-                "abs_diff": 0.014620318048527606,
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
                     "path": "probes/t7_probe.py",
-                    "sha256": "d8f2becc87473687f886433c866788a48180fc3c86b5adb0211da2dc6c6e4d17"
+                    "sha256": "71efc2d4cfee555f71c3f74fab32f5efbf5102d4ff9b8d522845efa67f42113a"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t7_stdout.txt",
-                    "sha256": "200f4201227a4f7be1439bf5fe09229049e8fb224394320b922295b4023f2f4c"
+                    "sha256": "84f267c6d748e86c05d2aa3197c302dd1737001f8cf96a6a1fbbb4fba4137466"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -601,67 +669,90 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t7_json_result.json",
-                    "sha256": "7aaee5dd604f8615953725dbc07f36a126b1caf05e75a29c88c584a6b305e536"
+                    "sha256": "05505c3194534f7a2875071778aa8a55174409eb935d9eab6cf0011bf6f7df23"
                   }
                 ],
-                "contract_error": 0.2924063609705521,
-                "duration_s": 6.120142,
+                "duration_s": 5.922054,
                 "exit_code": 0,
                 "expected_signal": null,
+                "finite": true,
                 "json_parse_error": null,
                 "json_result": {
-                  "error": 0.2924063609705521,
                   "finite": true,
-                  "output": -0.018536671996116638,
-                  "reference": -0.033156990044644244
+                  "output": [
+                    1.1304664611816406,
+                    0.7976996898651123,
+                    0.9610635042190552,
+                    0.9959263205528259
+                  ],
+                  "passes": false,
+                  "reference": [
+                    1.01085189417418,
+                    1.0002186761953267,
+                    0.9988882450335536,
+                    0.9978313214035637
+                  ],
+                  "rel_l2": 0.11888436797488026,
+                  "threshold": 0.035
                 },
-                "output": -0.018536671996116638,
-                "reference": -0.033156990044644244,
+                "output": [
+                  1.1304664611816406,
+                  0.7976996898651123,
+                  0.9610635042190552,
+                  0.9959263205528259
+                ],
+                "passes": false,
+                "reference": [
+                  1.01085189417418,
+                  1.0002186761953267,
+                  0.9988882450335536,
+                  0.9978313214035637
+                ],
+                "rel_l2": 0.11888436797488026,
                 "stderr": "",
-                "stdout": "output -0.018536671996116638 reference -0.033156990044644244 abs_diff 0.014620318048527606\ndistances 0.005533461663617345 0.009803504550291109 weights range 0.8548270828287564 0.9152707218276462\n{\"output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"error\": 0.2924063609705521, \"finite\": true}\n",
-                "threshold": 0.05,
+                "stdout": "{\"output\": [1.1304664611816406, 0.7976996898651123, 0.9610635042190552, 0.9959263205528259], \"reference\": [1.01085189417418, 1.0002186761953267, 0.9988882450335536, 0.9978313214035637], \"rel_l2\": 0.11888436797488026, \"threshold\": 0.035, \"passes\": false, \"finite\": true}\n",
+                "threshold": 0.035,
                 "timed_out": false,
                 "timeout_s": 60
               },
               "id": "c1.e1",
               "kind": "runtime_probe",
-              "summary": "Kernel output -0.018537 vs float64 reference -0.033157 on the fixed make_inputs() workload; contract error = 0.2924 > 0.05, output is finite. Confirms the claim.",
+              "summary": "On the fixed make_inputs() workload the kernel output [1.1305, 0.7977, 0.9611, 0.9959] vs float64 continuous-integral reference [1.0109, 1.0002, 0.9989, 0.9978] gives relative L2 error 0.1189 > 0.035 threshold, confirming the 32-point midpoint rule violates the numerical contract.",
               "supports": "confirmed",
               "tool_event_id": "t7"
             }
           ],
           "id": "c1",
           "raised_by": "solo",
-          "rationale": "Kernel uses float32 expanded-identity accumulators (norm_sum - 2*dot), which can suffer catastrophic cancellation since query and anchors are ~16 with offsets ~0.015; the contract requires final normalized error <= 0.05.",
+          "rationale": "Midpoint sampling with only 32 points aliases frequencies up to 220; the sample mean can deviate from the continuous integral enough to exceed the 3.5% relative L2 tolerance.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "Error is ||output-reference||_2 / max(||reference||_2, 0.05) on the fixed make_inputs() workload; satisfies contract iff <= 0.05."
+              "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.035 for the fixed make_inputs() workload, with the continuous float64 integral as reference."
             }
           ],
-          "scope_rationale": "problem.txt defines the sole in-scope workload as make_inputs() and requires the final normalized prediction error ||output-reference||_2 / max(||reference||_2, 0.05) to be <= 0.05.",
-          "statement": "The kernel's output for the fixed make_inputs() workload has contract error (||output-reference||_2 / max(||reference||_2, 0.05)) greater than 0.05.",
+          "scope_rationale": "The contract requires ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload with the continuous integral as reference; a midpoint-rule error exceeding that threshold violates it.",
+          "statement": "The kernel's 32-point midpoint rule violates the contract that ||output-reference||_2/||reference||_2 <= 0.035 on the fixed make_inputs() workload.",
           "status": "confirmed",
-          "updated_at": "2026-09-24T01:11:04Z"
+          "updated_at": "2026-09-24T01:07:58Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-24T01:11:04Z",
+          "created_at": "2026-09-24T01:07:58Z",
           "data": {
-            "abs_diff": 0.014620318048527606,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t7_probe.py",
-                "sha256": "d8f2becc87473687f886433c866788a48180fc3c86b5adb0211da2dc6c6e4d17"
+                "sha256": "71efc2d4cfee555f71c3f74fab32f5efbf5102d4ff9b8d522845efa67f42113a"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t7_stdout.txt",
-                "sha256": "200f4201227a4f7be1439bf5fe09229049e8fb224394320b922295b4023f2f4c"
+                "sha256": "84f267c6d748e86c05d2aa3197c302dd1737001f8cf96a6a1fbbb4fba4137466"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -673,31 +764,55 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t7_json_result.json",
-                "sha256": "7aaee5dd604f8615953725dbc07f36a126b1caf05e75a29c88c584a6b305e536"
+                "sha256": "05505c3194534f7a2875071778aa8a55174409eb935d9eab6cf0011bf6f7df23"
               }
             ],
-            "contract_error": 0.2924063609705521,
-            "duration_s": 6.120142,
+            "duration_s": 5.922054,
             "exit_code": 0,
             "expected_signal": null,
+            "finite": true,
             "json_parse_error": null,
             "json_result": {
-              "error": 0.2924063609705521,
               "finite": true,
-              "output": -0.018536671996116638,
-              "reference": -0.033156990044644244
+              "output": [
+                1.1304664611816406,
+                0.7976996898651123,
+                0.9610635042190552,
+                0.9959263205528259
+              ],
+              "passes": false,
+              "reference": [
+                1.01085189417418,
+                1.0002186761953267,
+                0.9988882450335536,
+                0.9978313214035637
+              ],
+              "rel_l2": 0.11888436797488026,
+              "threshold": 0.035
             },
-            "output": -0.018536671996116638,
-            "reference": -0.033156990044644244,
+            "output": [
+              1.1304664611816406,
+              0.7976996898651123,
+              0.9610635042190552,
+              0.9959263205528259
+            ],
+            "passes": false,
+            "reference": [
+              1.01085189417418,
+              1.0002186761953267,
+              0.9988882450335536,
+              0.9978313214035637
+            ],
+            "rel_l2": 0.11888436797488026,
             "stderr": "",
-            "stdout": "output -0.018536671996116638 reference -0.033156990044644244 abs_diff 0.014620318048527606\ndistances 0.005533461663617345 0.009803504550291109 weights range 0.8548270828287564 0.9152707218276462\n{\"output\": -0.018536671996116638, \"reference\": -0.033156990044644244, \"error\": 0.2924063609705521, \"finite\": true}\n",
-            "threshold": 0.05,
+            "stdout": "{\"output\": [1.1304664611816406, 0.7976996898651123, 0.9610635042190552, 0.9959263205528259], \"reference\": [1.01085189417418, 1.0002186761953267, 0.9988882450335536, 0.9978313214035637], \"rel_l2\": 0.11888436797488026, \"threshold\": 0.035, \"passes\": false, \"finite\": true}\n",
+            "threshold": 0.035,
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Kernel output -0.018537 vs float64 reference -0.033157 on the fixed make_inputs() workload; contract error = 0.2924 > 0.05, output is finite. Confirms the claim.",
+          "summary": "On the fixed make_inputs() workload the kernel output [1.1305, 0.7977, 0.9611, 0.9959] vs float64 continuous-integral reference [1.0109, 1.0002, 0.9989, 0.9978] gives relative L2 error 0.1189 > 0.035 threshold, confirming the 32-point midpoint rule violates the numerical contract.",
           "supports": "confirmed",
           "tool_event_id": "t7"
         }
@@ -707,22 +822,22 @@
     },
     {
       "args": {
-        "confidence": 0.95,
+        "confidence": 0.98,
         "decisive_claims": [
           "c1"
         ],
-        "reason": "Ran the contract's sole in-scope workload (kernel.make_inputs(\"cuda\")) on the real GPU (tool event t7). Kernel output -0.0185367 vs float64 reference -0.0331570; contract error = |output-reference| / max(|reference|,0.05) = 0.01462/0.05 = 0.2924 > 0.05 threshold, while the output is finite and correctly shaped. Root cause is consistent with the source: float32 expanded-identity accumulators (norm_sum - 2*dot with values ~16, deltas ~0.015) catastrophically cancel, flattening the true distance variation (float64 distances 0.0055-0.0098) and hence the weights, which shifts the normalized prediction. The contract requires error <= 0.05 on this fixed workload; claim c1 (in_scope, scope evidence from problem.txt) is confirmed by runtime probe t7, so the kernel fails the contract.",
+        "reason": "Probe t7 ran the fixed make_inputs() workload through the kernel on GPU and compared against the contract's float64 continuous-integral reference: rel_l2 = 0.1189, far above the 0.035 threshold (output [1.1305, 0.7977, 0.9611, 0.9959] vs reference [1.0109, 1.0002, 0.9989, 0.9978]). The 32-point midpoint rule aliases frequencies up to 220, violating the required numerical contract on the only in-scope input. Claim c1 is in_scope and confirmed.",
         "verdict": "reject"
       },
-      "created_at": "2026-09-24T01:11:10Z",
+      "created_at": "2026-09-24T01:08:02Z",
       "id": "t9",
       "output": {
-        "confidence": 0.95,
-        "created_at": "2026-09-24T01:11:10Z",
+        "confidence": 0.98,
+        "created_at": "2026-09-24T01:08:02Z",
         "decisive_claims": [
           "c1"
         ],
-        "reason": "Ran the contract's sole in-scope workload (kernel.make_inputs(\"cuda\")) on the real GPU (tool event t7). Kernel output -0.0185367 vs float64 reference -0.0331570; contract error = |output-reference| / max(|reference|,0.05) = 0.01462/0.05 = 0.2924 > 0.05 threshold, while the output is finite and correctly shaped. Root cause is consistent with the source: float32 expanded-identity accumulators (norm_sum - 2*dot with values ~16, deltas ~0.015) catastrophically cancel, flattening the true distance variation (float64 distances 0.0055-0.0098) and hence the weights, which shifts the normalized prediction. The contract requires error <= 0.05 on this fixed workload; claim c1 (in_scope, scope evidence from problem.txt) is confirmed by runtime probe t7, so the kernel fails the contract.",
+        "reason": "Probe t7 ran the fixed make_inputs() workload through the kernel on GPU and compared against the contract's float64 continuous-integral reference: rel_l2 = 0.1189, far above the 0.035 threshold (output [1.1305, 0.7977, 0.9611, 0.9959] vs reference [1.0109, 1.0002, 0.9989, 0.9978]). The 32-point midpoint rule aliases frequencies up to 220, violating the required numerical contract on the only in-scope input. Claim c1 is in_scope and confirmed.",
         "verdict": "reject"
       },
       "status": "ok",
@@ -730,12 +845,12 @@
     }
   ],
   "verdict": {
-    "confidence": 0.95,
-    "created_at": "2026-09-24T01:11:10Z",
+    "confidence": 0.98,
+    "created_at": "2026-09-24T01:08:02Z",
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the contract's sole in-scope workload (kernel.make_inputs(\"cuda\")) on the real GPU (tool event t7). Kernel output -0.0185367 vs float64 reference -0.0331570; contract error = |output-reference| / max(|reference|,0.05) = 0.01462/0.05 = 0.2924 > 0.05 threshold, while the output is finite and correctly shaped. Root cause is consistent with the source: float32 expanded-identity accumulators (norm_sum - 2*dot with values ~16, deltas ~0.015) catastrophically cancel, flattening the true distance variation (float64 distances 0.0055-0.0098) and hence the weights, which shifts the normalized prediction. The contract requires error <= 0.05 on this fixed workload; claim c1 (in_scope, scope evidence from problem.txt) is confirmed by runtime probe t7, so the kernel fails the contract.",
+    "reason": "Probe t7 ran the fixed make_inputs() workload through the kernel on GPU and compared against the contract's float64 continuous-integral reference: rel_l2 = 0.1189, far above the 0.035 threshold (output [1.1305, 0.7977, 0.9611, 0.9959] vs reference [1.0109, 1.0002, 0.9989, 0.9978]). The 32-point midpoint rule aliases frequencies up to 220, violating the required numerical contract on the only in-scope input. Claim c1 is in_scope and confirmed.",
     "verdict": "reject"
   }
 }

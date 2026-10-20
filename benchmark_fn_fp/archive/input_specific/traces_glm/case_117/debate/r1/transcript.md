@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_y`
-- Turns: 10
-- Tool events: 17
+- Entry: `case_s`
+- Turns: 7
+- Tool events: 13
 - Claims: 2
-- Description updates: 2
-- LLM time: 96.28s across 9 calls | tokens: in=213652 out=6358 total=220010
+- Description updates: 1
+- LLM time: 55.16s across 6 calls | tokens: in=117800 out=3450 total=121250
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
 - Confidence: 0.95
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_y"
+    "entry": "case_s"
   }
   Output summary:
   {
-    "entry": "case_y"
+    "entry": "case_s"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_y"
+    "entry": "case_s"
   }
   Output summary:
   {
-    "entry": "case_y"
+    "entry": "case_s"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_y"
+    "entry": "case_s"
   }
   Output summary:
   {
-    "entry": "case_y"
+    "entry": "case_s"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_y",
+    "entry": "case_s",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_y"
+    "entry": "case_s"
   }
 
-### Turn 2 - `describer` (15.977765286000022s, in=5070 out=921)
+### Turn 2 - `describer` (14.121187862s, in=4890 out=911)
 
 Message:
 
 ```text
-I have full context: a small single-block Triton RBF kernel whose key risk is catastrophic cancellation in the expanded squared-distance identity — anchors are constructed extremely close to the query (std 0.015625), so distances are tiny while the norm/dot terms are large (~16²·32), amplifying float32 rounding error relative to the float64 reference. I'll record the description model now.
+I have full context from the artifact. Recording the description model now; the key risk surface is the 32-point midpoint rule facing frequencies up to 220 rad/unit.
 ```
 
 Tool calls:
@@ -75,308 +75,218 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Only in-scope workload: the fixed seed-119130 make_inputs() tensors \u2014 query (32,), anchors (16,32) with anchors \u2248 query + N(0, 0.015625), values (16,), all float32.",
-      "Reference is defined in float64 from stored float32 values: distance via direct (anchors-query)**2, weight = exp(-16*distance), output = weighted-mean of values.",
-      "Metric: ||output-reference||_2 / max(||reference||_2, 0.05) must be <= 0.05; output must be finite and shape (1,).",
-      "No per-intermediate accuracy requirements; only the final normalized prediction matters. Alternative inputs/seeds are out of scope."
+      "Reference is the continuous float64 integral reference[r] = 1 + sum_k a[r,k]*(cos(phase)-cos(phase+freq))/freq of f_r(t)=1+sum_k a*sin(freq*t+phase) over [0,1]",
+      "Only in-scope inputs: float32 (4,8) tensors from make_inputs (seed 711165; amplitudes ~N(0,0.1), frequencies ~U(0.5,220), phases ~U(-pi,pi))",
+      "Output must be a finite float32 vector of shape (4,) with relative L2 error ||out-ref||/max(||ref||,1e-12) <= 0.035",
+      "The 32-point grid is an approximation method, not the reference definition; the grader compares against the continuous integral",
+      "Other inputs are explicitly out of scope; launch disables FP multiply/add fusion"
     ],
     "kernel_model": [
-      "Single Triton program (grid (1,), N=16, D=32, num_warps=1, enable_fp_fusion=False) computing the normalized RBF prediction in float32."
-  ...[truncated 2742 chars]
+      "Kernel computes a 32-point midpoint-rule quadrature: point=(i+0.5)/32 for i in 0..31, 
+  ...[truncated 2179 chars]
   Output summary:
   {
     "contract_model": [
-      "Only in-scope workload: the fixed seed-119130 make_inputs() tensors \u2014 query (32,), anchors (16,32) with anchors \u2248 query + N(0, 0.015625), values (16,), all float32.",
-      "Reference is defined in float64 from stored float32 values: distance via direct (anchors-query)**2, weight = exp(-16*distance), output = weighted-mean of values.",
-      "Metric: ||output-reference||_2 / max(||reference||_2, 0.05) must be <= 0.05; output must be finite and shape (1,).",
-      "No per-intermediate accuracy requirements; only the final normalized prediction matters. Alternative inputs/seeds are out of scope."
+      "Reference is the continuous float64 integral reference[r] = 1 + sum_k a[r,k]*(cos(phase)-cos(phase+freq))/freq of f_r(t)=1+sum_k a*sin(freq*t+phase) over [0,1]",
+      "Only in-scope inputs: float32 (4,8) tensors from make_inputs (seed 711165; amplitudes ~N(0,0.1), frequencies ~U(0.5,220), phases ~U(-pi,pi))",
+      "Output must be a finite float32 vector of shape (4,) with relative L2 error ||out-ref||/max(||ref||,1e-12) <= 0.035",
+      "The 32-point grid is an approximation method, not the reference definition; the grader compares against the continuous integral",
+      "Other inputs are explicitly out of scope; launch disables FP multiply/add fusion"
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Single Triton program (grid (1,), N=16, D=32, num_warps=1, enable_fp_fusion=False) computing the normalized RBF prediction in float32.",
-      "Uses the expanded identity distance = ||a||^2 + ||q||^2 - 2\u00b7a\u00b7q instead of direct differences, with per-k float32 rounding of accumulators (lines 9-24).",
-      "Clamps negative computed distances to zero via tl.maximum before exp(-16*distance); weights and weighted sums reduced with tl.sum in float32; final divide is round-to-nearest (tl.div_rn).",
-      "Ou
-  ...[truncated 2432 chars]
+      "Kernel computes a 32-point midpoint-rule quadrature: point=(i+0.5)/32 for i in 0..31, sums 1 + sum_k a*sin(freq*point+phase) per row, then divides by GRID=32",
+      "One Triton program per row (grid (4,)), num_warps=1, TERMS=8 static loop over the (4,8) parameter tensors, all math in float32, sin computed in float32",
+      "run() allocates a (4,) float32 output; indexing assumes contiguous row-major (4,8) inputs (row*TERMS+k)",
+      "No fusion of multiply/add
+  ...[truncated 1903 chars]
 
-### Turn 3 - `skeptic` (8.499619431999974s, in=12365 out=602)
+### Turn 3 - `skeptic` (8.739963310000007s, in=11510 out=632)
 
 Message:
 
 ```text
-I'll record the highest-risk, testable claims for the fixed in-scope workload: cancellation in the expanded distance identity and the clamp masking negatives.
+The core risk is clear: a 32-point midpoint rule against frequencies up to ~220 rad/unit, graded against the continuous integral. I'll record the main testable claims.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 error`
+- `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Anchors differ from query by only ~0.0156 per component, so true distances are ~1e-3\u20131e-2, while anchor_norm, query_norm, and twice_dot are each ~8e3\u20131.6e4. Float32 rounding of these large accumulators (problem.txt states they round to float32 each step) gives absolute distance errors ~1e-3, comparable to the true distances; exp(-16*d) then distorts weights by O(10%) relative, and after normalization the weighted mean of values could shift by more than the 5% tolerance.",
+    "rationale": "Nyquist sampling requires >2*freq/pi points per unit interval for sinusoids; freq=220 needs ~140 points, so midpoint rule error per term is O(amplitude*freq*h^2)~O(0.1) at worst, which can exceed the 3.5% relative tolerance since ||reference|| ~ 1-2.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference in float64: distance[i]=sum_k(anchors[i,k]-query[k])**2, weight=exp(-16*distance), output=weighted mean; error metric ||output-reference||_2/max(||ref||,0.05) must be <= 0.05 for the fi
-  ...[truncated 503 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-- `record_claim -> t7 error`
-  Args:
-  {
-    "rationale": "Cancelling norm_sum \u2212 twice_dot can go slightly negative for anchors very close to the query; the clamp turns these into distance 0 (weight 1, maximal), whereas the reference weight is exp(-16*d_small) < 1. Over-weighting such anchors reweights the normalized mean toward their values.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The problem text explicitly states the implementation clamps negative computed distances to zero before the exponential, while the float64 reference uses the direct squared differences; the 5%-tolerance final-prediction metric governs whether this bias is a failure."
+        "summary": "Reference is the continuous float64 integral; only in-scope inputs are the make_inputs workload with frequencies up to 220; tolerance is relative L2 <= 0.035."
       }
     ],
-    "statement": "The tl.maximum(norm_sum - twice_dot, 0.0) clamp can mask cancellation-produced negative distan
-  ...[truncated 157 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 4 - `skeptic` (8.205558740000015s, in=13991 out=662)
-
-Message:
-
-```text
-Both in-scope claims were rejected for missing `scope_rationale`; I'll re-send them with the required field.
-```
-
-Tool calls:
-
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "Anchors differ from query by only ~0.0156 per component, so true distances are ~1e-3\u20131e-2, while anchor_norm, query_norm, and twice_dot are each ~8e3\u20131.6e4. Float32 rounding of these large accumulators gives absolute distance errors ~1e-3, comparable to the true distances; exp(-16*d) then distorts weights by O(10%) relative, and the normalized weighted mean of values could shift beyond the 5% tolerance.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Reference in float64: distance[i]=sum_k(anchors[i,k]-query[k])**2, weight=exp(-16*distance), output=weighted mean; error metric ||output-reference||_2/max(||ref||,0.05) must be <= 0.05 for the fixed make_inputs() workload. The contract notes the implementation us
-  ...[truncated 745 chars]
+    "scope_rationale": "The contract fixes the workload (frequencies uniform in [0.5,220] with seed 711165) and compares against the continuous integral with a 0.035 relative-L2 tolerance; if the undersampled midpoint rule's quadrature error on this exact work
+  ...[truncated 379 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Anchors differ from query by only ~0.0156 per component, so true distances are ~1e-3\u20131e-2, while anchor_norm, query_norm, and twice_dot are each ~8e3\u20131.6e4. Float32 rounding of these large accumulators gives absolute distance errors ~1e-3, comparable to the true distances; exp(-16*d) then distorts weights by O(10%) relative, and the normalized weighted mean of values could shift beyond the 5% tolerance.",
+    "rationale": "Nyquist sampling requires >2*freq/pi points per unit interval for sinusoids; freq=220 needs ~140 points, so midpoint rule error per term is O(amplitude*freq*h^2)~O(0.1) at worst, which can exceed the 3.5% relative tolerance since ||reference|| ~ 1-2.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference in float64: distance[i]=sum_k(anchors[i,k]-query[k])**2, weight=exp(-16*distance), output=weighted mean; error metric ||output-reference||_2/max(||ref||,0.05) must be <= 0.05 for the fixed make_inputs() workload. The contract notes the implementation uses the expanded identity with float32 accumulator rounding."
+        "summary": "Reference is the continuous float64 integral; only in-scope inputs are the make_inputs workload with frequencies up to 220; tolerance is relative L2 <= 0.035."
       }
     ],
-    "scope_rationale": "The claim tests exactly the contract's fixed seed-119130 make_inputs() workload and its 0.05-tolerance final-prediction metric; problem.txt itself states the implementation uses the expanded squared-distance identity with float32-rounding accumulators, which is the suspected failure mechanis
-  ...[truncated 379 chars]
-- `record_claim -> t9 ok`
+    "scope_rationale": "The contract fixes the workload (frequencies uniform in [0.5,220] with seed 711165) and compares against the continuous integral with a 0.035 relative-L2 tolerance; if the undersampled midpoint rule's quadrature error on this exact workload exceeds that budget, the kernel violates the stated numerical contract.",
+    "statement": "For the fixed seeded workload from make_inputs (seed 711165, frequencies up to ~220), the 32-point midpoint-rule quadrature in run() yields relative L2 error ||output - float64 continuous reference|| / max(||ref||,1e-12) greater than 0.035, violating the stated numerical contract.",
+    "stat
+  ...[truncated 13 chars]
+- `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Cancelling norm_sum \u2212 twice_dot can go slightly negative for anchors very close to the query; the clamp turns these into distance 0 (weight 1, maximal), whereas the reference weight is exp(-16*d_small) < 1. Over-weighting such anchors reweights the normalized mean toward their values.",
+    "rationale": "With 32 samples and freq up to 220, the sampled average of a term's sine is essentially an aliased pseudo-random value in [-a, a], so individual rows can show absolute errors up to ~0.1-0.2 even if the aggregate L2 relative error happens to pass. This is directly testable and shows error concentrated in high-frequency terms.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The problem text explicitly states the implementation clamps negative computed distances to zero before the exponential, while the float64 reference uses the direct squared differences; the 5%-tolerance final-prediction metric governs whether this bias is a failure."
+        "summary": "Output must satisfy the relative L2 contract against the continuous integral; per-row errors feed directly into the L2 norm, and output must be a finite float32 vector of shape (4,)."
       }
     ],
-    "scope_rationale": "The clamp behavior is explicitly described in problem.txt as part of the implementation 
-  ...[truncated 409 chars]
+    "scope_rationale": "The contract's tolerance is the aggregate relative L2 over the (4,) vector for exactly this workload; per-row quadrature errors are the 
+  ...[truncated 344 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Cancelling norm_sum \u2212 twice_dot can go slightly negative for anchors very close to the query; the clamp turns these into distance 0 (weight 1, maximal), whereas the reference weight is exp(-16*d_small) < 1. Over-weighting such anchors reweights the normalized mean toward their values.",
+    "rationale": "With 32 samples and freq up to 220, the sampled average of a term's sine is essentially an aliased pseudo-random value in [-a, a], so individual rows can show absolute errors up to ~0.1-0.2 even if the aggregate L2 relative error happens to pass. This is directly testable and shows error concentrated in high-frequency terms.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The problem text explicitly states the implementation clamps negative computed distances to zero before the exponential, while the float64 reference uses the direct squared differences; the 5%-tolerance final-prediction metric governs whether this bias is a failure."
+        "summary": "Output must satisfy the relative L2 contract against the continuous integral; per-row errors feed directly into the L2 norm, and output must be a finite float32 vector of shape (4,)."
       }
     ],
-    "scope_rationale": "The clamp behavior is explicitly described in problem.txt as part of the implementation under the fixed-workload contract, and the 0.05-tolerance final-prediction metric is the stated success criterion this claim could violate.",
-    "statement": "The tl.maximum(norm_sum - twice_dot, 0.0) clamp can mask cancellation-produced negative distances, setting affected anchors' weights to exactly 1 (exp(0)) and biasing the normalized prediction toward those anchors' values beyond
-  ...[truncated 43 chars]
-
-### Turn 5 - `describer` (20.983387155999992s, in=15447 out=1634)
-
-Message:
-
-```text
-The description model is already complete for this artifact; what's missing is quantitative context that would help the Skeptic/Experimenter size the cancellation error against the 5% tolerance. I'll record a refinement with concrete magnitude estimates derived from the input construction, plus notes on what a decisive probe should measure.
-```
-
-Tool calls:
-
-- `record_description_update -> t10 ok`
-  Args:
-  {
-    "contract_model": [
-      "Unchanged: single fixed seed-119130 workload, float64 reference over stored float32 inputs, final-prediction metric ||out-ref||/max(||ref||,0.05) <= 0.05, shape (1,), finite.",
-      "The reference weights themselves span only a narrow band: true distance d_i \u2248 sum of 32 squared N(0,0.015625) terms, i.e. mean \u2248 32\u00b7(0.015625)\u00b2 \u2248 0.0078 with chi-square-like spread; so -16\u00b7d_i \u2248 -0.125 and reference weights all lie roughly in [0.85, 1.0]."
-    ],
-    "kernel_model": [
-      "Unchanged: one Triton program, expanded identity ||a||\u00b2+||q||\u00b2\u22122a\u00b7q, per-k float32 accumulation (separate anchor_norm, query_norm, dot accumulators), clamp at 0, exp(-16d), float32 tl.sum reductions, tl.div_rn final divide.",
-      "Quantitative err
-  ...[truncated 4040 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "Unchanged: single fixed seed-119130 workload, float64 reference over stored float32 inputs, final-prediction metric ||out-ref||/max(||ref||,0.05) <= 0.05, shape (1,), finite.",
-      "The reference weights themselves span only a narrow band: true distance d_i \u2248 sum of 32 squared N(0,0.015625) terms, i.e. mean \u2248 32\u00b7(0.015625)\u00b2 \u2248 0.0078 with chi-square-like spread; so -16\u00b7d_i \u2248 -0.125 and reference weights all lie roughly in [0.85, 1.0]."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Unchanged: one Triton program, expanded identity ||a||\u00b2+||q||\u00b2\u22122a\u00b7q, per-k float32 accumulation (separate anchor_norm, query_norm, dot accumulators), clamp at 0, exp(-16d), float32 tl.sum reductions, tl.div_rn final divide.",
-      "Quantitative error scale: norm_sum and twice_dot are each \u2248 2\u00b732\u00b716\u00b2 \u2248 1.6e4; one fp32 ulp there is \u2248 2e-3, so rounding across three ~8e3 accumulators (anchor_norm \u2248 8.2e3, query_norm \u2248 8.2e3, dot \u2248 8.2e3) gives per-anchor distance errors plausibly of order 1e-3\u20133e-3 vs true distances \u2248 4e-3\u20131.5e-2.",
-      "Consequence for weight
-  ...[truncated 3730 chars]
-
-### Turn 6 - `skeptic` (6.064623017000031s, in=25909 out=330)
-
-Message:
-
-```text
-The ledger already contains both high-risk, in-scope claims (c1 catastrophic cancellation, c2 clamp masking negative distances), which fully cover the risk map for this single fixed workload. The describer's refinement adds quantitative context but no new attack surface warranting an additional claim — secondary effects (tl.exp, tl.sum rounding) are unlikely to breach the generous 0.05 tolerance on their own, and both would be captured by the decisive fixed-workload probe anyway. I'll record that the Skeptic review found no new claims.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t11 ok`
-  Args:
-  {
-    "reason": "The two existing in-scope claims (c1: float32 catastrophic cancellation in the expanded identity distorting weights beyond the 0.05 final-prediction tolerance; c2: clamp masking negative computed distances and over-weighting those anchors) cover all high-risk attack surfaces for the single fixed seed-119130 workload. Secondary effects (tl.exp/tl.sum float32 rounding, accumulation order) are sub-percent and subsumed by the same decisive probe (kernel output vs float64 reference on the fixed inputs, plus per-anchor distance signs). The describer's quantitative refinement cuts against tolerance breach but is not new evidence; only runtime probing can resolve c1/c2.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "The two existing in-scope claims (c1: float32 catastrophic cancellation in the expanded identity distorting weights beyond the 0.05 final-prediction tolerance; c2: clamp masking negative computed distances and over-weighting those anchors) cover all high-risk attack surfaces for the single fixed seed-119130 workload. Secondary effects (tl.exp/tl.sum float32 rounding, accumulation order) are sub-percent and subsumed by the same decisive probe (kernel output vs float64 reference on the fixed inputs, plus per-anchor distance signs). The describer's quantitative refinement cuts against tolerance breach but is not new evidence; only runtime probing can resolve c1/c2.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 10,
-    "turn": 6
+    "scope_rationale": "The contract's tolerance is the aggregate relative L2 over the (4,) vector for exactly this workload; per-row quadrature errors are the mechanism by which the aggregate could fail, so per-row magnitudes are in scope for this fixed input.",
+    "statement": "Per-row absolute quadrature error for rows containing high-frequency terms (freq > ~100) is large (order of the amplitude, e.g. >0.05), indicating the failure mode is aliasing of high-frequency terms rather than roundoff.",
+    "status": "open"
   }
 
-### Turn 7 - `experimenter` (14.210362171999975s, in=27163 out=1114)
+### Turn 4 - `experimenter` (10.089862490000002s, in=14568 out=739)
 
 Message:
 
 ```text
-Both claims are resolved by the same fixed-workload comparison, but I'll target them with separate probes: c1 via the actual GPU kernel output vs the float64 reference metric, and c2 via per-anchor computed (expanded-identity, fp32, pre-clamp) distance signs vs true distances. They're independent, so I'm launching both together.
+Both open claims test the same fixed workload, so I'll launch one claim probe per claim together, computing the kernel output, the float64 continuous reference, per-row errors, and the relative L2 metric.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t12 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport numpy as np, json\n\n# Fixed inputs exactly as in kernel.py make_inputs_numpy()\nrng = np.random.Generator(np.random.PCG64(119130))\nquery = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\nanchors = (query.astype(np.float64)[None, :] +\n           rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\nvalues = rng.normal(0.0, 1.0, 16).astype(np.float32)\n\n# float64 reference per contract\na64 = anchors.astype(np.float64); q64 = query.astype(np.float64); v64 = values.astype(np.float64)\nd_ref = ((a64 - q64[None, :])**2).sum(axis=1)\nw_ref = np.exp(-16.0 * d_ref)\nref = (w_ref * v64).sum() / w_ref.sum()\n\nres = {\"gpu_used\": False, \"kernel_output\": None, \"reference\": float(ref), \"metric\": None, \"error\": None}\ntry:\n    import torc
-  ...[truncated 649 chars]
+    "code": "\nimport numpy as np, torch, json, math, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/numerical_cases/case_s/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\na, f, p = k.make_inputs(\"cuda\")\nout = k.run(a, f, p)\nA = a.double().cpu().numpy(); F = f.double().cpu().numpy(); P = p.double().cpu().numpy()\nref = 1 + (A*(np.cos(P)-np.cos(P+F))/F).sum(axis=1)\no = out.double().cpu().numpy()\nrel = np.linalg.norm(o-ref)/max(np.linalg.norm(ref),1e-12)\nprint(json.dumps({\"output\": o.tolist(), \"reference\": ref.tolist(),\n                  \"rel_l2\": float(rel), \"tolerance\": 0.035,\n                  \"within_tol\": bool(rel<=0.035),\n                  \"finite\": bool(np.isfinite(o).all())}))
+  ...[truncated 93 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "d156240cb3a669e9a78ab93b5ad1c65d52c045dad7eee0f7a6a3281c71f9334b"
+        "path": "probes/t8_probe.py",
+        "sha256": "589ad5ce85d6360b02bec69fc85942b9913ba6de2189e7e8bddeb86b4cbf4e2a"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "ada131f3a05f4e40cae515ef705d1bd60d5ced3f6e717105a0f8d53078e8682a"
+        "path": "probes/t8_stdout.txt",
+        "sha256": "552ca5417158c22bce0f813bbf4d06aa0bac030ed905ddc27aeb9c6b3d686101"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "4cad0f6c37417d872f9b8c11b8aab8cb20881c9bf0e91202e36af2c2a7610c8a"
+        "path": "probes/t8_json_result.json",
+        "sha256": "103433be8aa94a06a4cddfc99e10e7726d9f5d8091cda9f6eb51effd7a8a23bd"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the fixed seed-119130 workload, float32 catastrophic cancellation in the expanded identity distance = ||a||\u00b2+||q||\u00b2\u22122\u00b7a\u00b7q yields per-anchor distance errors comparable to or larger t
-  ...[truncated 2761 chars]
-- `run_claim_probe -> t13 ok`
+    "claim_statement": "For the fixed seeded workload from make_inputs (seed 711165, frequencies up to ~220), the 32-point midpoint-rule quadrature in run() yields relative L2 error ||output - float64 continuous reference|| / max(||ref||
+  ...[truncated 3261 chars]
+- `run_claim_probe -> t9 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport numpy as np, json\n\nrng = np.random.Generator(np.random.PCG64(119130))\nquery = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)\nanchors = (query.astype(np.float64)[None, :] +\n           rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)\nvalues = rng.normal(0.0, 1.0, 16).astype(np.float32)\n\n# Emulate kernel fp32 accumulation exactly: per-k fp32 adds, fusion disabled\ndef f32(x): return np.float32(x)\nN, D = 16, 32\na32 = anchors.astype(np.float32); q32 = query.astype(np.float32); v32 = values.astype(np.float32)\nanchor_norm = np.zeros(N, np.float32); query_norm = f32(0.0); dot = np.zeros(N, np.float32)\nfor k in range(D):\n    a = a32[:, k].astype(np.float32); q = q32[k].astype(np.float32)\n    anchor_norm = (anchor_norm + (a*a).asty
-  ...[truncated 991 chars]
+    "code": "\nimport numpy as np, torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/numerical_cases/case_s/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\na, f, p = k.make_inputs(\"cuda\")\nout = k.run(a, f, p)\nA = a.double().cpu().numpy(); F = f.double().cpu().numpy(); P = p.double().cpu().numpy()\nref = 1 + (A*(np.cos(P)-np.cos(P+F))/F).sum(axis=1)\no = out.double().cpu().numpy()\nrow_err = np.abs(o-ref)\n# per-term contribution breakdown: term r,k sampled avg vs exact integral contribution\npts = (np.arange(32)+0.5)/32.0\nsine_avg = np.sin(np.multiply.outer(np.arange(4)*0, pts)+pts*0)  # placeholder\nterm_err = np.zeros((4,8))\nfor r in range(4):\n    for kk in range(8):\n        avg = np.
+  ...[truncated 666 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t13_probe.py",
-        "sha256": "b14b939c7e147e8f9b380b86b7d16e425e25bf4615d94699ff756a6d702cda99"
+        "path": "probes/t9_probe.py",
+        "sha256": "5d389d744339ce15826a0cd695138e1558b6da0edf5917c5e19dafb1f324dfb5"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t13_stdout.txt",
-        "sha256": "0a9c5f6f09397a8cdc771bd912352ae179aaa5b937bf729a40bd7c46b4213517"
+        "path": "probes/t9_stdout.txt",
+        "sha256": "2f2920f30c62b88345035aee60017c4131d5c7a30f6ee00fecb596c63d59dd45"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t13_stderr.txt",
+        "path": "probes/t9_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t13_json_result.json",
-        "sha256": "226c51b6251e7e7004ac4b914431d128632f3cb841187f27ce6912303d71f3ed"
+        "path": "probes/t9_json_result.json",
+        "sha256": "46ccd9d1d45b7b80c78d5c9a4745205d8c0d949ba8f7b4ea35251fa8571efcb9"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "The tl.maximum(norm_sum - twice_dot, 0.0) clamp can mask cancellation-produced negative distances, setting affected anchors' weights to exactly 1 (exp(0)) and biasing the normalized prediction toward those anc
-  ...[truncated 5815 chars]
+    "claim_statement": "Per-row absolute quadrature error for rows containing high-frequency terms (freq > ~100) is large (order of the amplitude, e.g. >0.05), indicating the failure mode is aliasing of high-frequency terms rather than r
+  ...[truncated 6274 chars]
 
-### Turn 8 - `experimenter` (8.614400652000029s, in=33043 out=488)
+### Turn 5 - `experimenter` (9.111792375999983s, in=21524 out=600)
 
 Message:
 
 ```text
-Both probe results are in. c1: actual GPU kernel output vs float64 reference gives metric 0.000142, far below 0.05 — the claim of tolerance breach is rebutted. c2: zero negative pre-clamp distances (min 0.00195, all true distances positive) — the clamp never activates, so it cannot bias anything; rebutted.
+Both probes completed and both decisively contradict the skeptic claims: rel L2 = 0.00155 (far below 0.035) and per-row errors ≤ 0.0023 with no row exceeding 0.05. Finalizing both as rebutted.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t14 ok`
+- `finalize_probe_evidence -> t10 ok`
   Args:
   {
     "data": {
-      "device": "cuda:0",
-      "kernel_output": 0.29975396394729614,
-      "metric": 0.00014222208321505462,
-      "reference": 0.2997113383763891,
-      "tolerance": 0.05
+      "finite": true,
+      "output": [
+        0.9963262677192688,
+        0.9724535942077637,
+        0.9964014887809753,
+        1.0057293176651
+      ],
+      "reference": [
+        0.9985579837365723,
+        0.9712194438594058,
+        0.9969299182698699,
+        1.0040801986608385
+      ],
+      "rel_l2": 0.001552519962372429,
+      "tolerance": 0.035,
+      "within_tol": true
     },
-    "event_id": "t12",
+    "event_id": "t8",
     "status": "rebutted",
-    "summary": "On the fixed seed-119130 workload, the actual GPU kernel output is 0.29975396 vs float64 reference 0.29971134; the contract metric ||out-ref||/max(||ref||,0.05) = 1.42e-4, which is ~350x below the 0.05 tolerance. The cancellation-induced weight distortion exists but is far from breaching the final-prediction tolerance, rebutting the claim.",
+    "summary": "Kernel output vs float64 continuous reference on the exact seeded workload gives relative L2 error 0.00155, well within the 0.035 tolerance; output is finite and correct shape. The undersampling/alasing hypothesis does not violate the contract for this fixed workload.",
     "supports": "rebutted"
   }
   Output summary:
@@ -384,21 +294,34 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed seed-119130 workload, the actual GPU kernel output is 0.29975396 vs float64 reference 0.29971134; the contract metric ||out-ref||/max(||ref||,0.05) = 1.42e-4, which is ~350x below the 0.05 tolerance. The cancellation-induced weight distortion exists but is far from breaching the final-prediction tolerance, rebutting the claim.",
+    "summary": "Kernel output vs float64 continuous reference on the exact seeded workload gives relative L2 error 0.00155, well within the 0.035 tolerance; output is finite and correct shape. The undersampling/alasing hypothesis does not violate the contract for this fixed workload.",
     "supports": "rebutted",
-    "tool_event_id": "t12"
+    "tool_event_id": "t8"
   }
-- `finalize_probe_evidence -> t15 ok`
+- `finalize_probe_evidence -> t11 ok`
   Args:
   {
     "data": {
-      "n_negative_preclamp": 0,
-      "preclamp_min": 0.001953125,
-      "true_dist_min": 0.005349516306523583
+      "freq_max": 185.7,
+      "max_row_abs_err": 0.002231716017303542,
+      "row_abs_err": [
+        0.002231716017303542,
+        0.001234150348357832,
+        0.0005284294888945329,
+        0.0016491190042615678
+      ],
+      "row_err_over_0p05": false,
+      "rows_with_freq_gt100": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "term_abs_err_max": 0.002571695337218107
     },
-    "event_id": "t13",
+    "event_id": "t9",
     "status": "rebutted",
-    "summary": "CPU emulation of the kernel's exact per-step fp32 accumulation (fusion disabled) shows zero negative pre-clamp distances on the fixed workload: min computed distance is +0.00195 and all 16 values are positive, so tl.maximum never clamps anything and the clamp cannot bias any weights. No negative distance exists to mask, rebutting the claim for this fixed workload.",
+    "summary": "All 4 rows contain frequencies >100 (max 185.7), yet per-row absolute errors are at most 0.0022 and max per-term quadrature error is 0.0026 \u2014 far below the claimed >0.05 aliasing-order errors. High-frequency terms did not produce amplitude-order row errors.",
     "supports": "rebutted"
   }
   Output summary:
@@ -406,25 +329,25 @@ Tool calls:
     "claim_id": "c2",
     "claim_status": "rebutted",
     "evidence_id": "c2.e1",
-    "summary": "CPU emulation of the kernel's exact per-step fp32 accumulation (fusion disabled) shows zero negative pre-clamp distances on the fixed workload: min computed distance is +0.00195 and all 16 values are positive, so tl.maximum never clamps anything and the clamp cannot bias any weights. No negative distance exists to mask, rebutting the claim for this fixed workload.",
+    "summary": "All 4 rows contain frequencies >100 (max 185.7), yet per-row absolute errors are at most 0.0022 and max per-term quadrature error is 0.0026 \u2014 far below the claimed >0.05 aliasing-order errors. High-frequency terms did not produce amplitude-order row errors.",
     "supports": "rebutted",
-    "tool_event_id": "t13"
+    "tool_event_id": "t9"
   }
 
-### Turn 9 - `skeptic` (5.368339192000008s, in=40234 out=242)
+### Turn 6 - `skeptic` (5.29050392100001s, in=32074 out=237)
 
 Message:
 
 ```text
-The decisive GPU probe on the fixed workload shows the contract metric at 1.42e-4 (vs 0.05 tolerance) and the clamp never activates (all pre-clamp distances positive). Both in-scope claims are rebutted by direct runtime evidence; no new attack surface remains for this single fixed workload.
+Both in-scope claims were decisively rebutted: rel L2 error is 0.00155 (vs 0.035 tolerance) and per-row errors are ≤0.0023 on the exact seeded workload. No new evidence exposes a material problem, so I'll record no new claims.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_no_new_claims -> t12 ok`
   Args:
   {
-    "reason": "Final review: both in-scope claims (c1 cancellation tolerance breach, c2 clamp bias) are rebutted by direct runtime evidence on the fixed seed-119130 workload \u2014 actual GPU kernel output vs float64 reference yields metric 1.42e-4, ~350x below the 0.05 tolerance, and exact fp32 accumulation emulation shows zero negative pre-clamp distances so the clamp never activates. Secondary effects (tl.exp, tl.sum rounding) are subsumed by the final-metric probe result and cannot plausibly bridge a 350x margin. No material, testable, in-scope problem remains uncovered.",
+    "reason": "Final review: both in-scope claims (c1 aggregate tolerance breach, c2 per-row aliasing errors) were tested on the exact seeded workload and decisively rebutted \u2014 relative L2 error 0.00155 vs 0.035 tolerance, finite output of shape (4,), per-row errors \u22640.0023 and per-term errors \u22640.0026. Remaining risk-map items (non-contiguous inputs, other distributions, float32 sin argument reduction) are out of scope per problem.txt or negligible relative to the passing margin. No new material, testable, in-scope problem found.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -433,26 +356,26 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: both in-scope claims (c1 cancellation tolerance breach, c2 clamp bias) are rebutted by direct runtime evidence on the fixed seed-119130 workload \u2014 actual GPU kernel output vs float64 reference yields metric 1.42e-4, ~350x below the 0.05 tolerance, and exact fp32 accumulation emulation shows zero negative pre-clamp distances so the clamp never activates. Secondary effects (tl.exp, tl.sum rounding) are subsumed by the final-metric probe result and cannot plausibly bridge a 350x margin. No material, testable, in-scope problem remains uncovered.",
+    "reason": "Final review: both in-scope claims (c1 aggregate tolerance breach, c2 per-row aliasing errors) were tested on the exact seeded workload and decisively rebutted \u2014 relative L2 error 0.00155 vs 0.035 tolerance, finite output of shape (4,), per-row errors \u22640.0023 and per-term errors \u22640.0026. Remaining risk-map items (non-contiguous inputs, other distributions, float32 sin argument reduction) are out of scope per problem.txt or negligible relative to the passing margin. No new material, testable, in-scope problem found.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 15,
-    "turn": 9
+    "reviewed_tool_event_count": 11,
+    "turn": 6
   }
 
-### Turn 10 - `judge` (8.35617928900001s, in=40430 out=365)
+### Turn 7 - `judge` (7.806960113000002s, in=33234 out=331)
 
 Message:
 
 ```text
-Both in-scope claims are rebutted by decisive runtime evidence: the actual GPU kernel output on the fixed seed-119130 workload yields a contract metric of 1.42e-4 versus the 0.05 tolerance, and no pre-clamp distance is negative so the clamp never activates. The Skeptic signed off with no new claims, and no open claims remain. Recording a trust verdict.
+The evidence is decisive: on the exact in-scope seeded workload, the kernel's relative L2 error against the float64 continuous reference is 0.00155, far below the 0.035 tolerance, with finite output and no aliasing-order per-row errors. Both skeptic claims were rebutted and the Skeptic signed off with no new claims. I'll record a trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `record_verdict -> t13 ok`
   Args:
   {
     "confidence": 0.95,
@@ -460,8 +383,8 @@ Tool calls:
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt) requires only that the final normalized prediction on the fixed seed-119130 make_inputs() workload satisfy ||output-reference||_2/max(||reference||_2,0.05) <= 0.05, and explicitly declares the expanded-identity fp32 accumulation and zero-clamp as part of the implementation. A direct GPU probe (t12) shows kernel output 0.299754 vs float64 reference 0.299711, metric 1.42e-4 \u2014 roughly 350x inside tolerance \u2014 rebutting c1 (cancellation-induced tolerance breach). An exact fp32 accumulation emulation (t13) shows all 16 pre-clamp distances positive (min +0.00195), so the clamp never activates and cannot bias weights, rebutting c2. Secondary effects (tl.exp, tl.sum rounding) are
-  ...[truncated 249 chars]
+    "reason": "Both in-scope claims were tested on the exact seeded workload (make_inputs, seed 711165) and decisively rebutted by runtime probes. c1: relative L2 error vs the float64 continuous-integral reference is 0.00155, well within the 0.035 contract tolerance; output is a finite float32 (4,) vector (probe t8). c2: all rows contain frequencies >100 (max 185.7), yet per-row absolute errors are <=0.0023 and per-term quadrature errors <=0.0026, far below the claimed >0.05 aliasing-order errors (probe t9). Remaining risk-map items (non-contiguous inputs, other distributions, float32 sin argument reduction) are explicitly out of scope per problem.txt or negligible given the ~20x margin. Skeptic reviewed all evidence and 
+  ...[truncated 131 chars]
   Output summary:
   {
     "confidence": 0.95,
@@ -469,7 +392,7 @@ Tool calls:
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt) requires only that the final normalized prediction on the fixed seed-119130 make_inputs() workload satisfy ||output-reference||_2/max(||reference||_2,0.05) <= 0.05, and explicitly declares the expanded-identity fp32 accumulation and zero-clamp as part of the implementation. A direct GPU probe (t12) shows kernel output 0.299754 vs float64 reference 0.299711, metric 1.42e-4 \u2014 roughly 350x inside tolerance \u2014 rebutting c1 (cancellation-induced tolerance breach). An exact fp32 accumulation emulation (t13) shows all 16 pre-clamp distances positive (min +0.00195), so the clamp never activates and cannot bias weights, rebutting c2. Secondary effects (tl.exp, tl.sum rounding) are subsumed by the end-to-end metric result with a large margin. No open claims remain; Skeptic reviewed the latest evidence and recorded no new concerns. The kernel satisfies the stated contract on the only in-scope workload.",
+    "reason": "Both in-scope claims were tested on the exact seeded workload (make_inputs, seed 711165) and decisively rebutted by runtime probes. c1: relative L2 error vs the float64 continuous-integral reference is 0.00155, well within the 0.035 contract tolerance; output is a finite float32 (4,) vector (probe t8). c2: all rows contain frequencies >100 (max 185.7), yet per-row absolute errors are <=0.0023 and per-term quadrature errors <=0.0026, far below the claimed >0.05 aliasing-order errors (probe t9). Remaining risk-map items (non-contiguous inputs, other distributions, float32 sin argument reduction) are explicitly out of scope per problem.txt or negligible given the ~20x margin. Skeptic reviewed all evidence and recorded no new claims. The kernel satisfies the stated numerical contract for this fixed public workload.",
     "verdict": "trust"
   }
 
@@ -477,223 +400,180 @@ Tool calls:
 
 {
   "contract_model": [
-    "Only in-scope workload: the fixed seed-119130 make_inputs() tensors \u2014 query (32,), anchors (16,32) with anchors \u2248 query + N(0, 0.015625), values (16,), all float32.",
-    "Reference is defined in float64 from stored float32 values: distance via direct (anchors-query)**2, weight = exp(-16*distance), output = weighted-mean of values.",
-    "Metric: ||output-reference||_2 / max(||reference||_2, 0.05) must be <= 0.05; output must be finite and shape (1,).",
-    "No per-intermediate accuracy requirements; only the final normalized prediction matters. Alternative inputs/seeds are out of scope.",
-    "Unchanged: single fixed seed-119130 workload, float64 reference over stored float32 inputs, final-prediction metric ||out-ref||/max(||ref||,0.05) <= 0.05, shape (1,), finite.",
-    "The reference weights themselves span only a narrow band: true distance d_i \u2248 sum of 32 squared N(0,0.015625) terms, i.e. mean \u2248 32\u00b7(0.015625)\u00b2 \u2248 0.0078 with chi-square-like spread; so -16\u00b7d_i \u2248 -0.125 and reference weights all lie roughly in [0.85, 1.0]."
+    "Reference is the continuous float64 integral reference[r] = 1 + sum_k a[r,k]*(cos(phase)-cos(phase+freq))/freq of f_r(t)=1+sum_k a*sin(freq*t+phase) over [0,1]",
+    "Only in-scope inputs: float32 (4,8) tensors from make_inputs (seed 711165; amplitudes ~N(0,0.1), frequencies ~U(0.5,220), phases ~U(-pi,pi))",
+    "Output must be a finite float32 vector of shape (4,) with relative L2 error ||out-ref||/max(||ref||,1e-12) <= 0.035",
+    "The 32-point grid is an approximation method, not the reference definition; the grader compares against the continuous integral",
+    "Other inputs are explicitly out of scope; launch disables FP multiply/add fusion"
   ],
   "kernel_model": [
-    "Single Triton program (grid (1,), N=16, D=32, num_warps=1, enable_fp_fusion=False) computing the normalized RBF prediction in float32.",
-    "Uses the expanded identity distance = ||a||^2 + ||q||^2 - 2\u00b7a\u00b7q instead of direct differences, with per-k float32 rounding of accumulators (lines 9-24).",
-    "Clamps negative computed distances to zero via tl.maximum before exp(-16*distance); weights and weighted sums reduced with tl.sum in float32; final divide is round-to-nearest (tl.div_rn).",
-    "Output is a single float32 scalar tensor of shape (1,) allocated in run().",
-    "Unchanged: one Triton program, expanded identity ||a||\u00b2+||q||\u00b2\u22122a\u00b7q, per-k float32 accumulation (separate anchor_norm, query_norm, dot accumulators), clamp at 0, exp(-16d), float32 tl.sum reductions, tl.div_rn final divide.",
-    "Quantitative er
-...[truncated 5676 chars]
+    "Kernel computes a 32-point midpoint-rule quadrature: point=(i+0.5)/32 for i in 0..31, sums 1 + sum_k a*sin(freq*point+phase) per row, then divides by GRID=32",
+    "One Triton program per row (grid (4,)), num_warps=1, TERMS=8 static loop over the (4,8) parameter tensors, all math in float32, sin computed in float32",
+    "run() allocates a (4,) float32 output; indexing assumes contiguous row-major (4,8) inputs (row*TERMS+k)",
+    "No fusion of multiply/add (enable_fp_fusion=False), matching a stated contract detail"
+  ],
+  "open_questions": [],
+  "risk_map": [
+    "Quadrature error vs the continuous integral: midpoint rule with only 32 points on frequencies up to ~220 rad/unit is severely undersampled; per-term error can reach order amplitude*(2/freq)*~freq*h ~ amplitude*O(1), and with amplitude~0.1 and 8 terms the total error may or may not exceed the 0.035 relative tolerance -- needs a runtime probe of the actual seeded workload",
+    "Midpoint-rule error depends on frequency values in the workload; a specific high-frequency term (e.g. freq near 220 with small amplitude 0.1 gives error up to ~0.1*2/pi ~ 0.064 per term in worst phase alignment) could breach the 3.5% relative budget since ||reference|| is ~1-2",
+    "Float32 sin at large angles (freq*point+phase up 
+...[truncated 697 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Initial description of case_y: single normalized RBF prediction kernel, fixed seed-119130 workload, float32 kernel vs float64 reference, 5% relative error tolerance.
-- `du2` tasks=`initial`: Refinement of case_y description with quantitative error magnitudes: true distances ~4e-3-1.5e-2 vs ~1e-3-3e-3 float32 cancellation error, weights confined to ~[0.85,1], values mean-zero \u2014 so whether the 5% tolerance is breached is an empirical question; single fixed-workload probe of kernel output vs float64 reference (plus per-anchor distance signs) resolves both open claims.
+- `du1` tasks=`initial`: case_s kernel implements a 32-point midpoint-rule quadrature of f_r(t)=1+sum_k a_k sin(freq_k t + phase_k) over [0,1] in Triton float32; the contract compares against the exact float64 continuous integral with 3.5% relative L2 tolerance for the single fixed seeded workload (frequencies up to ~220).
 
 ## Claims
 
 ### c1 - `rebutted`
 
-Statement: On the fixed seed-119130 workload, float32 catastrophic cancellation in the expanded identity distance = ||a||²+||q||²−2·a·q yields per-anchor distance errors comparable to or larger than the true distances, distorting the weights enough that the final normalized prediction's error exceeds the 0.05 tolerance.
+Statement: For the fixed seeded workload from make_inputs (seed 711165, frequencies up to ~220), the 32-point midpoint-rule quadrature in run() yields relative L2 error ||output - float64 continuous reference|| / max(||ref||,1e-12) greater than 0.035, violating the stated numerical contract.
 
 Scope: `in_scope`
 
-Scope rationale: The claim tests exactly the contract's fixed seed-119130 make_inputs() workload and its 0.05-tolerance final-prediction metric; problem.txt itself states the implementation uses the expanded squared-distance identity with float32-rounding accumulators, which is the suspected failure mechanism.
+Scope rationale: The contract fixes the workload (frequencies uniform in [0.5,220] with seed 711165) and compares against the continuous integral with a 0.035 relative-L2 tolerance; if the undersampled midpoint rule's quadrature error on this exact workload exceeds that budget, the kernel violates the stated numerical contract.
 
 Scope evidence:
-- `problem.txt`: Reference in float64: distance[i]=sum_k(anchors[i,k]-query[k])**2, weight=exp(-16*distance), output=weighted mean; error metric ||output-reference||_2/max(||ref||,0.05) must be <= 0.05 for the fixed make_inputs() workload. The contract notes the implementation uses the expanded identity with float32 accumulator rounding.
+- `problem.txt`: Reference is the continuous float64 integral; only in-scope inputs are the make_inputs workload with frequencies up to 220; tolerance is relative L2 <= 0.035.
 
-Rationale: Anchors differ from query by only ~0.0156 per component, so true distances are ~1e-3–1e-2, while anchor_norm, query_norm, and twice_dot are each ~8e3–1.6e4. Float32 rounding of these large accumulators gives absolute distance errors ~1e-3, comparable to the true distances; exp(-16*d) then distorts weights by O(10%) relative, and the normalized weighted mean of values could shift beyond the 5% tolerance.
+Rationale: Nyquist sampling requires >2*freq/pi points per unit interval for sinusoids; freq=220 needs ~140 points, so midpoint rule error per term is O(amplitude*freq*h^2)~O(0.1) at worst, which can exceed the 3.5% relative tolerance since ||reference|| ~ 1-2.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: On the fixed seed-119130 workload, the actual GPU kernel output is 0.29975396 vs float64 reference 0.29971134; the contract metric ||out-ref||/max(||ref||,0.05) = 1.42e-4, which is ~350x below the 0.05 tolerance. The cancellation-induced weight distortion exists but is far from breaching the final-prediction tolerance, rebutting the claim.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t8: Kernel output vs float64 continuous reference on the exact seeded workload gives relative L2 error 0.00155, well within the 0.035 tolerance; output is finite and correct shape. The undersampling/alasing hypothesis does not violate the contract for this fixed workload.
 
 ### c2 - `rebutted`
 
-Statement: The tl.maximum(norm_sum - twice_dot, 0.0) clamp can mask cancellation-produced negative distances, setting affected anchors' weights to exactly 1 (exp(0)) and biasing the normalized prediction toward those anchors' values beyond the 0.05 tolerance.
+Statement: Per-row absolute quadrature error for rows containing high-frequency terms (freq > ~100) is large (order of the amplitude, e.g. >0.05), indicating the failure mode is aliasing of high-frequency terms rather than roundoff.
 
 Scope: `in_scope`
 
-Scope rationale: The clamp behavior is explicitly described in problem.txt as part of the implementation under the fixed-workload contract, and the 0.05-tolerance final-prediction metric is the stated success criterion this claim could violate.
+Scope rationale: The contract's tolerance is the aggregate relative L2 over the (4,) vector for exactly this workload; per-row quadrature errors are the mechanism by which the aggregate could fail, so per-row magnitudes are in scope for this fixed input.
 
 Scope evidence:
-- `problem.txt`: The problem text explicitly states the implementation clamps negative computed distances to zero before the exponential, while the float64 reference uses the direct squared differences; the 5%-tolerance final-prediction metric governs whether this bias is a failure.
+- `problem.txt`: Output must satisfy the relative L2 contract against the continuous integral; per-row errors feed directly into the L2 norm, and output must be a finite float32 vector of shape (4,).
 
-Rationale: Cancelling norm_sum − twice_dot can go slightly negative for anchors very close to the query; the clamp turns these into distance 0 (weight 1, maximal), whereas the reference weight is exp(-16*d_small) < 1. Over-weighting such anchors reweights the normalized mean toward their values.
+Rationale: With 32 samples and freq up to 220, the sampled average of a term's sine is essentially an aliased pseudo-random value in [-a, a], so individual rows can show absolute errors up to ~0.1-0.2 even if the aggregate L2 relative error happens to pass. This is directly testable and shows error concentrated in high-frequency terms.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: CPU emulation of the kernel's exact per-step fp32 accumulation (fusion disabled) shows zero negative pre-clamp distances on the fixed workload: min computed distance is +0.00195 and all 16 values are positive, so tl.maximum never clamps anything and the clamp cannot bias any weights. No negative distance exists to mask, rebutting the claim for this fixed workload.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t9: All 4 rows contain frequencies >100 (max 185.7), yet per-row absolute errors are at most 0.0022 and max per-term quadrature error is 0.0026 — far below the claimed >0.05 aliasing-order errors. High-frequency terms did not produce amplitude-order row errors.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_y"
+  "entry": "case_s"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_y"
+  "entry": "case_s"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_y"
+  "entry": "case_s"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_y"
+  "entry": "case_s"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Only in-scope workload: the fixed seed-119130 make_inputs() tensors \u2014 query (32,), anchors (16,32) with anchors \u2248 query + N(0, 0.015625), values (16,), all float32.",
-    "Reference is defined in float64 from stored float32 values: distance via direct (anchors-query)**2, weight = exp(-16*distance), output = weighted-mean of values.",
-    "Metric: ||output-reference||_2 / max(||reference||_2, 0.05) must be <= 0.05; output must be finite and shape (1,).",
-    "No per-intermediate accuracy requirements; only the final normalized prediction matters. Alternative inputs/seeds are out of scope."
+    "Reference is the continuous float64 integral reference[r] = 1 + sum_k a[r,k]*(cos(phase)-cos(phase+freq))/freq of f_r(t)=1+sum_k a*sin(freq*t+phase) over [0,1]",
+    "Only in-scope inputs: float32 (4,8) tensors from make_inputs (seed 711165; amplitudes ~N(0,0.1), frequencies ~U(0.5,220), phases ~U(-pi,pi))",
+    "Output must be a finite float32 vector of shape (4,) with relative L2 error ||out-ref||/max(||ref||,1e-12) <= 0.035",
+    "The 32-point grid is an approximation method, not the reference definition; the grader compares against the continuous integral",
+    "Other inputs are explicitly out of scope; launch disables FP multiply/add fusion"
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Single Triton program (grid (1,), N=16, D=32, num_warps=1, enable_fp_fusion=False) computing the normalized RBF prediction in float32.",
-    "Uses the expanded identity distance = ||a||^2 + ||q||^2 - 2\u00b7a\u00b7q instead of direct differences, with per-k float32 rounding of accumulators (lines 9-24).",
-    "Clamps negative computed distances to zero via tl.maximum before exp(-16*distance); weights and weighted sums reduced with tl.sum in float32; final divide is round-to-nearest (tl.div_rn).",
-    "Output is a single float32 scalar tensor of shape (1,) allocated in run()."
+    "Kernel computes a 32-point midpoint-rule quadrature: point=(i+0.5)/32 for i in 0..31, sums 1 + sum_k a*sin(freq*point+phase) per row, then divides by GRID=32",
+    "One Triton program per row (grid (4,)), num_warps=1, TERMS=8 static loop over the (4,8) parameter tensors, all math in float32, sin computed in float32",
+    "run() allocates a (4,) float32 output; indexing assumes contiguous row-major (4,8) inputs (row*TERMS+k)",
+    "No fusion of multiply/add (enable_fp_fusion=False), matching a stated contract detail"
   ],
-  "open_questions": [
-    "What is the actual computed reference value and the kernel's output on this fixed input? Needs a runtime probe (Experimenter's job).",
-    "Does tl.exp in Triton match double-precision exp closely enough at these weight magnitudes to not be the dominant error term, or is cancellation the sole risk?"
-  ],
+  "open_questions": [],
   "resolved_tasks": [],
   "risk_map": [
-    "Catastrophic cancellation: anchors are within ~0.016 of query components (make_inputs_numpy), so true distances are ~1e-3\u20131e-2 scale while norm_sum and twice_dot terms are ~2\u00b732\u00b716\u00b2 \u2248 1.6e4; float32 rounding of these large terms can produce relative distance errors of order 1e4\u00b71e-7 \u2248 1e-3 absolute, potenti
-...[truncated 1632 chars]
+    "Quadrature error vs the continuous integral: midpoint rule with only 32 points on frequencies up to ~220 rad/unit is severely undersampled; per-term error can reach order amplitude*(2/freq)*~freq*h ~ amplitude*O(1), and with amplitude~0.1 and 8 terms the total error may or may not exceed the 0.035 relative tolerance -- needs a runtime probe of the actual seeded workload",
+    "Midpoint-rule error depends on frequency values in the workload; a specific high-frequency term (e.g. freq near 220 with small amplitude 0.1 gives error up to ~0.1*2/pi ~ 0.064 per term in worst phase alignment) could breach the 3.5% relative budget since ||reference|| is ~1-2",
+    
+...[truncated 1103 chars]
 
-### t6 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t7 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t8 - record_claim - ok
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Anchors differ from query by only ~0.0156 per component, so true distances are ~1e-3\u20131e-2, while anchor_norm, query_norm, and twice_dot are each ~8e3\u20131.6e4. Float32 rounding of these large accumulators gives absolute distance errors ~1e-3, comparable to the true distances; exp(-16*d) then distorts weights by O(10%) relative, and the normalized weighted mean of values could shift beyond the 5% tolerance.",
+  "rationale": "Nyquist sampling requires >2*freq/pi points per unit interval for sinusoids; freq=220 needs ~140 points, so midpoint rule error per term is O(amplitude*freq*h^2)~O(0.1) at worst, which can exceed the 3.5% relative tolerance since ||reference|| ~ 1-2.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Reference in float64: distance[i]=sum_k(anchors[i,k]-query[k])**2, weight=exp(-16*distance), output=weighted mean; error metric ||output-reference||_2/max(||ref||,0.05) must be <= 0.05 for the fixed make_inputs() workload. The contract notes the implementation uses the expanded identity with float32 accumulator rounding."
+      "summary": "Reference is the continuous float64 integral; only in-scope inputs are the make_inputs workload with frequencies up to 220; tolerance is relative L2 <= 0.035."
     }
   ],
-  "scope_rationale": "The claim tests exactly the contract's fixed seed-119130 make_inputs() workload and its 0.05-tolerance final-prediction metric; problem.txt itself states the implementation uses the expanded squared-distance identity with float32-rounding accumulators, which is the suspected failure mechanism.",
-  "statement": "On the fixed seed-119130 workload, float32 catastrophic cancellation in the expanded identity distance = ||a||\u00b2+||q||\u00b2\u22122\u00b7a\u00b7q yields per-anchor distance errors comparable to or larger than the true distances, distorting the weights enough that the final normalized prediction's error exceeds the 0.05 tolerance.",
+  "scope_rationale": "The contract fixes the workload (frequencies uniform in [0.5,220] with seed 711165) and compares against the continuous integral with a 0.035 relative-L2 tolerance; if the undersampled midpoint rule's quadrature error on this exact workload exceeds that budget, the kernel violates the stated numerical contract.",
+  "statement": "For the fixed seeded workload from make_inputs (seed 711165, frequencies up to ~220), the 32-point midpoint-rule quadrature in run() yields relative L2 error ||output - float64 continuous reference|| / max(||ref||,1e-12) greater than 0.035, violating the stated numerical contract.",
   "status": "open"
 }
 
-### t9 - record_claim - ok
+### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Cancelling norm_sum \u2212 twice_dot can go slightly negative for anchors very close to the query; the clamp turns these into distance 0 (weight 1, maximal), whereas the reference weight is exp(-16*d_small) < 1. Over-weighting such anchors reweights the normalized mean toward their values.",
+  "rationale": "With 32 samples and freq up to 220, the sampled average of a term's sine is essentially an aliased pseudo-random value in [-a, a], so individual rows can show absolute errors up to ~0.1-0.2 even if the aggregate L2 relative error happens to pass. This is directly testable and shows error concentrated in high-frequency terms.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The problem text explicitly states the implementation clamps negative computed distances to zero before the exponential, while the float64 reference uses the direct squared differences; the 5%-tolerance final-prediction metric governs whether this bias is a failure."
+      "summary": "Output must satisfy the relative L2 contract against the continuous integral; per-row errors feed directly into the L2 norm, and output must be a finite float32 vector of shape (4,)."
     }
   ],
-  "scope_rationale": "The clamp behavior is explicitly described in problem.txt as part of the implementation under the fixed-workload contract, and the 0.05-tolerance final-prediction metric is the stated success criterion this claim could violate.",
-  "statement": "The tl.maximum(norm_sum - twice_dot, 0.0) clamp can mask cancellation-produced negative distances, setting affected anchors' weights to exactly 1 (exp(0)) and biasing the normalized prediction toward those anchors' values beyond the 0.05 tolerance.",
+  "scope_rationale": "The contract's tolerance is the aggregate relative L2 over the (4,) vector for exactly this workload; per-row quadrature errors are the mechanism by which the aggregate could fail, so per-row magnitudes are in scope for this fixed input.",
+  "statement": "Per-row absolute quadrature error for rows containing high-frequency terms (freq > ~100) is large (order of the amplitude, e.g. >0.05), indicating the failure mode is aliasing of high-frequency terms rather than roundoff.",
   "status": "open"
 }
 
-### t10 - record_description_update - ok
-
-{
-  "contract_model": [
-    "Unchanged: single fixed seed-119130 workload, float64 reference over stored float32 inputs, final-prediction metric ||out-ref||/max(||ref||,0.05) <= 0.05, shape (1,), finite.",
-    "The reference weights themselves span only a narrow band: true distance d_i \u2248 sum of 32 squared N(0,0.015625) terms, i.e. mean \u2248 32\u00b7(0.015625)\u00b2 \u2248 0.0078 with chi-square-like spread; so -16\u00b7d_i \u2248 -0.125 and reference weights all lie roughly in [0.85, 1.0]."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Unchanged: one Triton program, expanded identity ||a||\u00b2+||q||\u00b2\u22122a\u00b7q, per-k float32 accumulation (separate anchor_norm, query_norm, dot accumulators), clamp at 0, exp(-16d), float32 tl.sum reductions, tl.div_rn final divide.",
-    "Quantitative error scale: norm_sum and twice_dot are each \u2248 2\u00b732\u00b716\u00b2 \u2248 1.6e4; one fp32 ulp there is \u2248 2e-3, so rounding across three ~8e3 accumulators (anchor_norm \u2248 8.2e3, query_norm \u2248 8.2e3, dot \u2248 8.2e3) gives per-anchor distance errors plausibly of order 1e-3\u20133e-3 vs true distances \u2248 4e-3\u20131.5e-2.",
-    "Consequence for weights: a distance error \u03b5 changes weight by relative factor exp(\u00b116\u03b5); with \u03b5 \u2248 1e-3\u20133e-3 this is ~1.6%\u20135% per anchor \u2014 not obviously the O(10%) suggested in c1's rationale, but errors across anchors are correlated only partially and the denominator normalization only partially cancels them."
-  ],
-  "open_questions": [
-    "Does the empirically observed per-anchor distance error (kernel vs float64 direct differences) actually reach 1e-3 scale, or is it smaller (sequential accumulation rounding can partially cancel)?",
-    "How much does the final normalized prediction shift relative to the 5% tolerance floor of 0.05\u00b7max(||ref||,0.05)? With weights all near 1 and values N(0,1), the reference is near an unweighted mean of 16 values, so its magnitude i
-...[truncated 2930 chars]
-
-### t11 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "The two existing in-scope claims (c1: float32 catastrophic cancellation in the expanded identity distorting weights beyond the 0.05 final-prediction tolerance; c2: clamp masking negative computed distances and over-weighting those anchors) cover all high-risk attack surfaces for the single fixed seed-119130 workload. Secondary effects (tl.exp/tl.sum float32 rounding, accumulation order) are sub-percent and subsumed by the same decisive probe (kernel output vs float64 reference on the fixed inputs, plus per-anchor distance signs). The describer's quantitative refinement cuts against tolerance breach but is not new evidence; only runtime probing can resolve c1/c2.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 10,
-  "turn": 6
-}
-
-### t12 - run_claim_probe - ok
+### t8 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "d156240cb3a669e9a78ab93b5ad1c65d52c045dad7eee0f7a6a3281c71f9334b"
+      "path": "probes/t8_probe.py",
+      "sha256": "589ad5ce85d6360b02bec69fc85942b9913ba6de2189e7e8bddeb86b4cbf4e2a"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "ada131f3a05f4e40cae515ef705d1bd60d5ced3f6e717105a0f8d53078e8682a"
+      "path": "probes/t8_stdout.txt",
+      "sha256": "552ca5417158c22bce0f813bbf4d06aa0bac030ed905ddc27aeb9c6b3d686101"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
+      "path": "probes/t8_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "4cad0f6c37417d872f9b8c11b8aab8cb20881c9bf0e91202e36af2c2a7610c8a"
+      "path": "probes/t8_json_result.json",
+      "sha256": "103433be8aa94a06a4cddfc99e10e7726d9f5d8091cda9f6eb51effd7a8a23bd"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the fixed seed-119130 workload, float32 catastrophic cancellation in the expanded identity distance = ||a||\u00b2+||q||\u00b2\u22122\u00b7a\u00b7q yields per-anchor distance errors comparable to or larger than the true distances, distorting the weights enough that the final normalized prediction's error exceeds the 0.05 tolerance.",
-  "duration_s": 5.10809,
-  "event_id": "t12",
+  "claim_statement": "For the fixed seeded workload from make_inputs (seed 711165, frequencies up to ~220), the 32-point midpoint-rule quadrature in run() yields relative L2 error ||output - float64 continuous reference|| / max(||ref||,1e-12) greater than 0.035, violating the stated numerical contract.",
+  "duration_s": 6.222996,
+  "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -701,52 +581,53 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "d156240cb3a669e9a78ab93b5ad1c65d52c045dad7eee0f7a6a3281c71f9334b"
+          "path": "probes/t8_probe.py",
+          "sha256": "589ad5ce85d6360b02bec69fc85942b9913ba6de2189e7e8bddeb86b4cbf4e2a"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "ada131f3a05f4e40cae515ef705d1bd60d5ced3f6e717105a0f8d53078e8682a"
+          "path": "probes/t8_stdout.txt",
+          "sha256": "552ca5417158c22bce0f813bbf4d06aa0bac030ed905ddc27aeb9c6b3d686101"
         },
         {
-          "description": "Captured 
-...[truncated 1961 chars]
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+...[truncated 2461 chars]
 
-### t13 - run_claim_probe - ok
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t13_probe.py",
-      "sha256": "b14b939c7e147e8f9b380b86b7d16e425e25bf4615d94699ff756a6d702cda99"
+      "path": "probes/t9_probe.py",
+      "sha256": "5d389d744339ce15826a0cd695138e1558b6da0edf5917c5e19dafb1f324dfb5"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t13_stdout.txt",
-      "sha256": "0a9c5f6f09397a8cdc771bd912352ae179aaa5b937bf729a40bd7c46b4213517"
+      "path": "probes/t9_stdout.txt",
+      "sha256": "2f2920f30c62b88345035aee60017c4131d5c7a30f6ee00fecb596c63d59dd45"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t13_stderr.txt",
+      "path": "probes/t9_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t13_json_result.json",
-      "sha256": "226c51b6251e7e7004ac4b914431d128632f3cb841187f27ce6912303d71f3ed"
+      "path": "probes/t9_json_result.json",
+      "sha256": "46ccd9d1d45b7b80c78d5c9a4745205d8c0d949ba8f7b4ea35251fa8571efcb9"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "The tl.maximum(norm_sum - twice_dot, 0.0) clamp can mask cancellation-produced negative distances, setting affected anchors' weights to exactly 1 (exp(0)) and biasing the normalized prediction toward those anchors' values beyond the 0.05 tolerance.",
-  "duration_s": 0.249561,
-  "event_id": "t13",
+  "claim_statement": "Per-row absolute quadrature error for rows containing high-frequency terms (freq > ~100) is large (order of the amplitude, e.g. >0.05), indicating the failure mode is aliasing of high-frequency terms rather than roundoff.",
+  "duration_s": 4.75885,
+  "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -754,57 +635,58 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t13_probe.py",
-          "sha256": "b14b939c7e147e8f9b380b86b7d16e425e25bf4615d94699ff756a6d702cda99"
+          "path": "probes/t9_probe.py",
+          "sha256": "5d389d744339ce15826a0cd695138e1558b6da0edf5917c5e19dafb1f324dfb5"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t13_stdout.txt",
-          "sha256": "0a9c5f6f09397a8cdc771bd912352ae179aaa5b937bf729a40bd7c46b4213517"
+          "path": "probes/t9_stdout.txt",
+          "sha256": "2f2920f30c62b88345035aee60017c4131d5c7a30f6ee00fecb596c63d59dd45"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes
-...[truncated 5015 chars]
+          "path": "probes/t9_stderr.txt",
+          "sha256"
+...[truncated 5474 chars]
 
-### t14 - finalize_probe_evidence - ok
+### t10 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed seed-119130 workload, the actual GPU kernel output is 0.29975396 vs float64 reference 0.29971134; the contract metric ||out-ref||/max(||ref||,0.05) = 1.42e-4, which is ~350x below the 0.05 tolerance. The cancellation-induced weight distortion exists but is far from breaching the final-prediction tolerance, rebutting the claim.",
+  "summary": "Kernel output vs float64 continuous reference on the exact seeded workload gives relative L2 error 0.00155, well within the 0.035 tolerance; output is finite and correct shape. The undersampling/alasing hypothesis does not violate the contract for this fixed workload.",
   "supports": "rebutted",
-  "tool_event_id": "t12"
+  "tool_event_id": "t8"
 }
 
-### t15 - finalize_probe_evidence - ok
+### t11 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "rebutted",
   "evidence_id": "c2.e1",
-  "summary": "CPU emulation of the kernel's exact per-step fp32 accumulation (fusion disabled) shows zero negative pre-clamp distances on the fixed workload: min computed distance is +0.00195 and all 16 values are positive, so tl.maximum never clamps anything and the clamp cannot bias any weights. No negative distance exists to mask, rebutting the claim for this fixed workload.",
+  "summary": "All 4 rows contain frequencies >100 (max 185.7), yet per-row absolute errors are at most 0.0022 and max per-term quadrature error is 0.0026 \u2014 far below the claimed >0.05 aliasing-order errors. High-frequency terms did not produce amplitude-order row errors.",
   "supports": "rebutted",
-  "tool_event_id": "t13"
+  "tool_event_id": "t9"
 }
 
-### t16 - record_no_new_claims - ok
+### t12 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: both in-scope claims (c1 cancellation tolerance breach, c2 clamp bias) are rebutted by direct runtime evidence on the fixed seed-119130 workload \u2014 actual GPU kernel output vs float64 reference yields metric 1.42e-4, ~350x below the 0.05 tolerance, and exact fp32 accumulation emulation shows zero negative pre-clamp distances so the clamp never activates. Secondary effects (tl.exp, tl.sum rounding) are subsumed by the final-metric probe result and cannot plausibly bridge a 350x margin. No material, testable, in-scope problem remains uncovered.",
+  "reason": "Final review: both in-scope claims (c1 aggregate tolerance breach, c2 per-row aliasing errors) were tested on the exact seeded workload and decisively rebutted \u2014 relative L2 error 0.00155 vs 0.035 tolerance, finite output of shape (4,), per-row errors \u22640.0023 and per-term errors \u22640.0026. Remaining risk-map items (non-contiguous inputs, other distributions, float32 sin argument reduction) are out of scope per problem.txt or negligible relative to the passing margin. No new material, testable, in-scope problem found.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 15,
-  "turn": 9
+  "reviewed_tool_event_count": 11,
+  "turn": 6
 }
 
-### t17 - record_verdict - ok
+### t13 - record_verdict - ok
 
 {
   "confidence": 0.95,
@@ -812,7 +694,7 @@ Evidence:
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt) requires only that the final normalized prediction on the fixed seed-119130 make_inputs() workload satisfy ||output-reference||_2/max(||reference||_2,0.05) <= 0.05, and explicitly declares the expanded-identity fp32 accumulation and zero-clamp as part of the implementation. A direct GPU probe (t12) shows kernel output 0.299754 vs float64 reference 0.299711, metric 1.42e-4 \u2014 roughly 350x inside tolerance \u2014 rebutting c1 (cancellation-induced tolerance breach). An exact fp32 accumulation emulation (t13) shows all 16 pre-clamp distances positive (min +0.00195), so the clamp never activates and cannot bias weights, rebutting c2. Secondary effects (tl.exp, tl.sum rounding) are subsumed by the end-to-end metric result with a large margin. No open claims remain; Skeptic reviewed the latest evidence and recorded no new concerns. The kernel satisfies the stated contract on the only in-scope workload.",
+  "reason": "Both in-scope claims were tested on the exact seeded workload (make_inputs, seed 711165) and decisively rebutted by runtime probes. c1: relative L2 error vs the float64 continuous-integral reference is 0.00155, well within the 0.035 contract tolerance; output is a finite float32 (4,) vector (probe t8). c2: all rows contain frequencies >100 (max 185.7), yet per-row absolute errors are <=0.0023 and per-term quadrature errors <=0.0026, far below the claimed >0.05 aliasing-order errors (probe t9). Remaining risk-map items (non-contiguous inputs, other distributions, float32 sin argument reduction) are explicitly out of scope per problem.txt or negligible given the ~20x margin. Skeptic reviewed all evidence and recorded no new claims. The kernel satisfies the stated numerical contract for this fixed public workload.",
   "verdict": "trust"
 }
 
@@ -820,11 +702,11 @@ Evidence:
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-24T01:03:58Z",
+  "created_at": "2026-09-24T01:00:40Z",
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt) requires only that the final normalized prediction on the fixed seed-119130 make_inputs() workload satisfy ||output-reference||_2/max(||reference||_2,0.05) <= 0.05, and explicitly declares the expanded-identity fp32 accumulation and zero-clamp as part of the implementation. A direct GPU probe (t12) shows kernel output 0.299754 vs float64 reference 0.299711, metric 1.42e-4 \u2014 roughly 350x inside tolerance \u2014 rebutting c1 (cancellation-induced tolerance breach). An exact fp32 accumulation emulation (t13) shows all 16 pre-clamp distances positive (min +0.00195), so the clamp never activates and cannot bias weights, rebutting c2. Secondary effects (tl.exp, tl.sum rounding) are subsumed by the end-to-end metric result with a large margin. No open claims remain; Skeptic reviewed the latest evidence and recorded no new concerns. The kernel satisfies the stated contract on the only in-scope workload.",
+  "reason": "Both in-scope claims were tested on the exact seeded workload (make_inputs, seed 711165) and decisively rebutted by runtime probes. c1: relative L2 error vs the float64 continuous-integral reference is 0.00155, well within the 0.035 contract tolerance; output is a finite float32 (4,) vector (probe t8). c2: all rows contain frequencies >100 (max 185.7), yet per-row absolute errors are <=0.0023 and per-term quadrature errors <=0.0026, far below the claimed >0.05 aliasing-order errors (probe t9). Remaining risk-map items (non-contiguous inputs, other distributions, float32 sin argument reduction) are explicitly out of scope per problem.txt or negligible given the ~20x margin. Skeptic reviewed all evidence and recorded no new claims. The kernel satisfies the stated numerical contract for this fixed public workload.",
   "verdict": "trust"
 }

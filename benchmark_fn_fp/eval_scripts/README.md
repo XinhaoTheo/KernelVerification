@@ -48,7 +48,7 @@ requests/responses, and tool runs retain their full transcripts, ledgers and
 probe artifacts. See [the trace guide](../TRACES.md) and [GLM index](../traces_glm/INDEX.md).
 The scorer discovers nested trials and groups them by dataset, provider, model,
 arm and original experimental batch, while linking to current per-case `rN`
-paths; repeats and the historical case_93/case_94 cohorts are not pooled silently.
+paths; repeats and the historical case_99/case_100 cohorts are not pooled silently.
 
 ## Filling missing arms
 
@@ -63,7 +63,7 @@ pilot cases. Current reports exclude the archive.
 modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset benchmark_fn_fp --arm both --all --provider fireworks --only-missing --total-output-tokens 32768
 ```
 
-The command above selects the original 32 cases. Use `--dataset real_kernel_challenges` for cases 33–90 and 163–168.
+The command above selects the original 32 cases. Use `--dataset real_kernel_challenges` for cases 33–96.
 
 `--only-missing` skips case/arm slots with an existing valid judgment anywhere
 in the selected model-family trace tree, including historical GLM providers.
@@ -72,7 +72,7 @@ preserved; use a new `rN` for a retry and do not submit a second batch
 while the same slots are still running. The source-only Fireworks runner has
 no such flag: pass an audited missing-case list with `--cases`.
 
-Current selections are the original suite (`benchmark_fn_fp`, cases 01–32) and `real_kernel_challenges` (cases 33–90 and 163–168). The input-specific challenge groups (cases 91–138) are archived and excluded from new experiments.
+Current selections are the original suite (`benchmark_fn_fp`, cases 01–32) and `real_kernel_challenges` (cases 33–96). The input-specific challenge groups (cases 97–144) are archived and excluded from new experiments.
 The [early pilot](../archive/numerical_pilot/README.md) is archived and closed
 to expansion or reruns. Coverage completion combines historical and new
 records, so it does not establish identical model/settings across arms.

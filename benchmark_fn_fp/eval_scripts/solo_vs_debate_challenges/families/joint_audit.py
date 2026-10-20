@@ -17,7 +17,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_123", "case_124")
+CASES = ("case_129", "case_130")
 NBITS, CHANNELS = 10, 8
 DOMAIN_SIZE = 1 << NBITS
 TOLERANCE = 1.0 / DOMAIN_SIZE

@@ -21,20 +21,20 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Evaluate numerical compliance of run(*make_inputs()) on exactly the
-fully specified workload in kernel.py. There is one contiguous float32 input
-matrix of shape (64,128). The PCG64 seed and complete column permutation are
-public; no hidden inputs are used.
+Evaluate numerical compliance of run(*make_inputs()) on exactly the workload
+specified in kernel.py. All inputs are float32 and contiguous, with x of shape
+(128,) and A, B of shape (64,128). The complete input construction, PCG64 seed
+and row permutation are provided in the source; no hidden input is involved.
 
-Reference: for each row, sum the ORIGINAL float32 entries in real arithmetic,
-evaluated with float64 or an independently checked high-accuracy summation.
-Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008).
-Contract: every output must be finite and E <= 0.1. Only the final result on
-the specified input is in scope. The kernel may use float32 arithmetic and any
-summation order if this numerical requirement is met. This is not a universal
-correctness claim about all possible inputs.
-Target: the supplied Triton kernel on an NVIDIA T4. Decide trust, reject, or
-needs_more_evidence.
+Reference: y = A @ x + B @ x on the original float32 inputs, evaluated in float64.
+Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64)).
+Contract: all outputs must be finite and E <= 0.1. Approximate intermediate
+values are allowed if the FINAL output meets this requirement. Either branch
+may individually exceed 0.1 without violating the contract.
+Target implementation: the supplied Triton kernel, on an NVIDIA T4. Input
+generator uses NumPy PCG64 on CPU. This is finite-workload compliance, not a
+claim about all inputs, and not a requirement to reproduce INT4 arithmetic
+bit-for-bit. Decide trust, reject, or needs_more_evidence.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -45,34 +45,43 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(X, Y, K: tl.constexpr, R: tl.constexpr):
-    rows = tl.arange(0, R)
-    acc = tl.full((R,), 0, tl.float32)
-    for j in range(K):
-        value = tl.load(X + rows * K + j)
-        acc = acc + value
-    tl.store(Y + rows, acc)
+def _kernel(X, A, B, Y, K: tl.constexpr):
+    row = tl.program_id(0)
+    j = tl.arange(0, K)
+    x = tl.load(X + j)
+    a = tl.load(A + row * K + j)
+    b = tl.load(B + row * K + j)
+    sa = tl.max(tl.abs(a), 0) / 7.0
+    sb = tl.max(tl.abs(b), 0) / 7.0
+    qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))
+    qb = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(b / sb + 0.5)))
+    ya = tl.sum((qa * sa) * x, 0)
+    yb = tl.sum((qb * sb) * x, 0)
+    tl.store(Y + row, ya + yb)
 
-def run(values):
-    out = torch.empty((values.shape[0],), dtype=torch.float32, device=values.device)
-    _kernel[(1,)](values, out, values.shape[1], values.shape[0], enable_fp_fusion=False)
+def run(x, a, b):
+    out = torch.empty(a.shape[0], device=x.device, dtype=torch.float32)
+    _kernel[(a.shape[0],)](x, a, b, out, a.shape[1], enable_fp_fusion=False)
     return out
 
-SEED = 730119
-PERMUTATION = [123, 54, 34, 37, 17, 97, 46, 110, 36, 107, 32, 114, 14, 86, 40, 33, 122, 103, 70, 121, 63, 80, 62, 65, 72, 68, 55, 105, 113, 53, 7, 108, 59, 93, 58, 125, 89, 94, 18, 87, 30, 82, 56, 3, 119, 96, 127, 118, 20, 22, 24, 60, 117, 35, 16, 85, 41, 76, 81, 48, 0, 5, 101, 26, 44, 11, 51, 43, 104, 71, 9, 78, 39, 84, 90, 47, 45, 115, 57, 98, 66, 79, 77, 52, 49, 2, 91, 116, 4, 100, 19, 75, 69, 112, 120, 21, 88, 23, 109, 15, 27, 126, 28, 31, 6, 29, 61, 38, 92, 102, 73, 83, 95, 42, 67, 64, 99, 25, 106, 1, 8, 50, 74, 124, 12, 111, 10, 13]
-
-def make_inputs_numpy():
-    import numpy as np
-    rng = np.random.Generator(np.random.PCG64(SEED))
-    w = rng.integers(1, 33, size=(64, 32)).astype(np.float32) * np.float32(1048576)
-    small = rng.integers(1, 4, size=(64, 64)).astype(np.float32) * np.float32(0.25)
-    values = np.concatenate([w, -w, small], axis=1)
-    order = rng.permutation(128)
-    values = values[:, order][:, PERMUTATION].copy()
-    return (values,)
+SEED = 921000
+PERMUTATION = [4, 1, 2, 53, 44, 13, 11, 56, 46, 57, 33, 8, 25, 35, 39, 20, 36, 14, 51, 52, 40, 29, 23, 26, 3, 31, 38, 16, 21, 62, 41, 24, 61, 45, 30, 59, 19, 42, 27, 28, 12, 17, 60, 47, 43, 54, 6, 34, 22, 10, 18, 50, 32, 0, 7, 15, 9, 5, 63, 55, 49, 37, 48, 58]
 
 def make_inputs(device="cuda"):
-    return tuple(torch.from_numpy(a.copy()).to(device) for a in make_inputs_numpy())
+    import numpy as np
+    rng = np.random.Generator(np.random.PCG64(SEED))
+    x = rng.standard_normal(128)
+    x /= np.linalg.norm(x)
+    # Construct two dense projections with similar signal magnitudes.
+    matrices = []
+    for _ in range(2):
+        w = rng.standard_normal((64, 128))
+        target = 0.5 + 0.02 * rng.standard_normal(64)
+        projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+        w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+        matrices.append(w.astype(np.float32))
+    arrays = [x.astype(np.float32), matrices[0], matrices[1][PERMUTATION].copy()]
+    return tuple(torch.from_numpy(a.copy()).to(device) for a in arrays)
 
 ```
 
@@ -80,388 +89,802 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Let me analyze this carefully.
+Let me analyze this problem carefully.
 
-The problem: We have a (64, 128) float32 input matrix. For each row, we need to sum the original float32 entries, with reference evaluated in float64/high accuracy. Metric: relative error E = ||output - reference||_2 / max(||reference||_2, 0.008) must be <= 0.1, and all outputs finite.
+We have a Triton kernel that computes y = A @ x + B @ x, where x is shape (128,), A and B are shape (64, 128). The reference is computed in float64 on the original float32 inputs.
 
-The kernel: A Triton kernel that, for each row, accumulates values in float32 sequentially:
+The kernel implements a form of quantization: for each row of A (and B), it computes a scale sa = max(|a|) / 7.0, then quantizes a to integers in [-7, 7] via q = clamp(floor(a/sa + 0.5), -7, 7), and computes ya = sum((q * sa) * x).
+
+So the kernel approximates A @ x + B @ x using quantized versions of A and B. The question is whether the resulting error E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64)) is <= 0.1.
+
+Key question: how accurate is this quantization? Each row of A is quantized with a per-row scale max(|a|)/7. The quantization error per element is at most sa/2 = max(|a|)/14 (roughly, since q = round(a/sa) clamped). Actually with clamping to [-7, 7], and scale = max/7, all values fit within [-7, 7] after scaling, so clamping rarely binds. The quantization error per element is at most sa/2.
+
+So the error in ya for row i is sum_j (a_ij - qa_ij * sa) * x_j. The quantization error e_ij is bounded by sa/2 = max_j|a_ij| / 14 in absolute value, and is roughly uniform in [-sa/2, sa/2] (well, quantization to a grid... the error distribution depends on a).
+
+The relative error per row: |ya - y_ref_a| <= sum_j |e_ij| * |x_j| <= (sa/2) * sum_j |x_j| = (max_j |a_ij| / 14) * ||x||_1.
+
+Now, ||x||_1: x is a normalized standard normal vector of length 128, so ||x||_2 = 1, and ||x||_1 ≈ sqrt(2/pi) * ... Actually for a random unit vector in R^128, E[||x||_1] ≈ sqrt(128) * sqrt(2/pi) / sqrt(128) = sqrt(2/pi) ≈ 0.798... wait let me redo. For standard normal z in R^n, ||z||_1 has expectation n * sqrt(2/π), and ||z||_2 ≈ sqrt(n). After normalization, x = z/||z||_2, so ||x||_1 ≈ n*sqrt(2/π)/sqrt(n) = sqrt(n) * sqrt(2/π) = sqrt(128 * 2/π) ≈ sqrt(81.49) ≈ 9.03. Hmm, that's the expected L1 norm ≈ 9.03.
+
+Meanwhile, the row of A: a_ij are standard normal (roughly, after the adjustment which is small). max_j |a_ij| over 128 entries ≈ 3.2 or so (expected max of 128 |N(0,1)| is about 3.2). So sa ≈ 0.46.
+
+Worst-case bound per row: (max|a|/14) * ||x||_1 ≈ 3.2/14 * 9.03 ≈ 0.229 * 9.03 ≈ 2.07. But that's worst case with all errors aligned; actual errors are random-ish.
+
+But we need the error relative to the reference y. What's the magnitude of the reference? The construction makes each row of A have projection onto x equal to target ≈ 0.5 + 0.02*N(0,1), i.e., about 0.5. Wait, the projection is computed in float64 on w (before cast to float32? Let's see: w = rng.standard_normal((64,128)) float64; target float64; projection float64; w adjusted; then w.astype(float32)). So (A x)_i ≈ target_i ≈ 0.5, and similarly for B. So reference y_i ≈ 0.5 + 0.5 = 1.0 (approximately, up to float32 rounding effects of order 1e-7... actually the float32 cast introduces small errors, and reference is computed on the float32 inputs in float64, so y_ref_i ≈ target_i + target'_i ≈ 1.0 ± 0.03).
+
+||reference||_2 ≈ sqrt(64 * 1.0) ≈ 8. So the denominator is about 8.
+
+Now, the quantization error: for each row, error_a_i = sum_j e_ij x_j where e_ij = a_ij - sa*round(a_ij/sa) is quantization error in [-sa/2, sa/2]. These errors are essentially random relative to x. Let me estimate.
+
+Hmm, actually the errors e_ij are deterministic given a, but they behave like roughly uniform random in [-sa/2, sa/2], uncorrelated with x. So error_a_i ≈ sqrt(sum_j e_ij^2 x_j^2) in typical magnitude ≈ (sa/sqrt(12)) * ||x||_2 ≈ (sa/sqrt(12)) * 1 = sa * 0.289.
+
+Wait, but there's a subtlety: the quantization error e_ij is not independent of a_ij... Actually for random a, the fractional parts of a/sa are roughly uniform, so e is roughly uniform on [-sa/2, sa/2], independent-ish of x (x is independent of A's construction? Actually A's rows were adjusted to have specific projections onto x, but the adjustment is small: ((target - projection)/||x||^2) x added to the row, where target - projection ≈ 0.5 - N(0, 128^0.5)... wait, projection = sum_j w_ij x_j with w_ij ~ N(0,1) and ||x||=1, so projection ~ N(0,1). target ≈ 0.5. So the adjustment magnitude is about |0.5 - N(0,1)| / 1 ≈ O(1) per row, times x. So the row adjustment is a vector of magnitude up to ~2 along direction x. Fine—this changes the rows slightly but the rows remain roughly standard-normal-ish.)
+
+Hmm wait, actually the adjustment could be significant: w row has norm ~sqrt(128) ≈ 11.3, and the adjustment adds a vector of magnitude |target - projection| ≈ up to ~3 along x. So rows are still dominated by the random part.
+
+So per-row error from quantizing A: σ_e ≈ sa/sqrt(12) where sa ≈ max|a_row|/7 ≈ 3.2/7 ≈ 0.457. So σ_e ≈ 0.132. Then error_a_i = sum_j e_ij x_j. If e were independent uniform, variance = sum_j var(e) x_j^2 = σ_e^2 * ||x||_2^2 = σ_e^2. So error_a_i ~ N(0, σ_e) roughly, magnitude ~0.132 typical.
+
+Hmm wait, but that's not quite right because the quantization error is bounded and depends on a. Also there's a subtlety: the projection of the row onto x is ~0.5 by construction, but the error vector e is roughly orthogonal-ish to x... hmm, is it? The quantization errors e_ij depend on a_ij and the scale; there's no particular correlation with x_j. So the dot product e·x is roughly a random sum with variance σ_e^2 ||x||^2 = σ_e^2.
+
+Hmm, but wait: actually there could be a correlation issue. Since a_i = w_i + c x (adjustment along x), the quantization error... it's complicated but roughly random.
+
+So each branch contributes per-row error ~0.13 (1-sigma), and combined error per row ~ sqrt(2)*0.13 ≈ 0.19 (if independent). Over 64 rows, ||error||_2 ≈ sqrt(64) * 0.19 ≈ 1.5. Hmm, but E = ||error||/||ref|| ≈ 1.5/8 ≈ 0.19. That's over 0.1! Hmm.
+
+Wait, let me redo this more carefully. Let me be careful with the numbers.
+
+sa = max_j |a_ij| / 7. For a row of 128 standard normals, max |a| ≈ 3.2 (more precisely, E[max] ≈ sqrt(2 ln(128)) ≈ sqrt(2*4.85) ≈ 3.11; typical values 2.8-3.6).
+
+Quantization step sa ≈ 0.45. Quantization error uniform in [-sa/2, sa/2] = [-0.225, 0.225], std = sa/sqrt(12) = 0.45/3.46 ≈ 0.13.
+
+error_a_i = sum_j e_ij x_j. Treating e_ij as iid uniform with std 0.13 and independent of x: variance = 0.13^2 * sum x_j^2 = 0.13^2 * 1. So std ≈ 0.13.
+
+Similarly for B: std ≈ 0.13.
+
+Total per-row error std ≈ sqrt(0.13^2 + 0.13^2) ≈ 0.184.
+
+||error||_2 over 64 rows: expected ≈ sqrt(64) * 0.184 ≈ 1.47.
+
+||ref||_2: y_i = target_i + target'_i where target ≈ 0.5 + 0.02 N(0,1). So y_i ≈ 1.0 with std 0.02*sqrt(2) ≈ 0.028. ||ref||_2 ≈ sqrt(64)*1.0 ≈ 8.
+
+E ≈ 1.47/8 ≈ 0.18 > 0.1.
+
+Hmm, that suggests the kernel would fail. But wait — this is a rough estimate. Let me reconsider.
+
+Hmm, but actually, wait. There's an important consideration: the quantization error e_ij is not independent of a_ij in a way that matters, but more importantly, is e·x really random? Let me think again.
+
+Actually, hold on. Let me reconsider: is the error per row really ~0.13 std? Let me reconsider whether the fractional parts are uniform.
+
+a_ij ~ N(0,1) roughly. sa ≈ 0.45. a_ij/sa ~ N(0, 1/0.45) = N(0, 2.2), std ≈ 2.2. Quantizing to integers: the fractional part of a/sa is roughly uniform on [0,1) for a continuous distribution spread over many quantization steps. So e ~ uniform on [-sa/2, sa/2], std sa/sqrt(12) ≈ 0.13. Yes.
+
+error_a_i = sum_j e_ij x_j. With 128 terms, x_j ~ 1/sqrt(128) ≈ 0.088 each. Each term e_ij x_j has std 0.13 * 0.088 ≈ 0.0115. Sum of 128 such (independent-ish) terms: std ≈ 0.0115 * sqrt(128) ≈ 0.13. Yes, consistent.
+
+So per-row error ~0.13 per branch. Hmm.
+
+But wait — maybe I should think about whether the errors e are actually correlated with x in a way that... no, they shouldn't be.
+
+Hmm, but hold on. Let me reconsider the problem. The problem says "Approximate intermediate values are allowed if the FINAL output meets this requirement. Either branch may individually exceed 0.1 without violating the contract." This hints that the test is about the combined output. The quantization to 4-bit-ish levels (7 levels, i.e., int4 range) is a lossy approximation. The question is whether the final combined output meets E <= 0.1.
+
+My estimate says E ≈ 0.18, which would fail. But my estimate is rough. Let me think more carefully, because this is the crux.
+
+Hmm, wait. Actually, let me reconsider. Maybe there's something special about the construction. The rows of A are adjusted so that A x = target ≈ 0.5. Similarly B x ≈ 0.5. But the quantization destroys this precision. The quantized A' = Q(A) has A' x ≈ A x + e·x where e·x ~ 0.13 magnitude. So (A' x)_i = 0.5 ± 0.13. Similarly B' x ≈ 0.5 ± 0.13. Sum ≈ 1.0 ± 0.18.
+
+Relative error per row ≈ 0.18. And in the 2-norm over rows, the errors accumulate as sqrt(64) while the signal also accumulates as sqrt(64) (since signal is roughly constant ~1 per row). So E ≈ 0.18/1.0 ≈ 0.18.
+
+That's > 0.1. Hmm. So the kernel would fail the contract?
+
+Wait, but let me double-check the scale factor. sa = max(|a|)/7. Quantization levels: q ∈ {-7,...,7}, so 15 levels. The quantization step is sa. The max element maps to exactly 7 (well, floor(7 + 0.5) = 7). So the grid has 15 points covering [-max, max]. Relative quantization error per element: sa/2 / |a_ij|... For the RMS error: the row's RMS value is ~1 (standard normal). sa ≈ 0.45. Step/RMS ≈ 0.45. Hmm, that's coarse quantization: SNR ≈ 12 * (RMS/step)^2... The quantization error std relative to signal std: 0.13/1 = 13%. 
+
+So quantizing a N(0,1) row with 15 levels uniformly spaced to cover ±max gives ~13% error on the row. Then the projection onto a random direction x (||x||=1): the error in the projection is ~13% of... hmm, of what? The projection of the error vector onto x. The error vector e has norm ≈ 0.13 * sqrt(128) ≈ 1.47. Its projection onto a fixed unit vector x is ~1.47/sqrt(128) ≈ 0.13 (if e is random direction). Yes.
+
+But the signal: the row a has norm ~sqrt(128) ≈ 11.3, and its projection onto x is forced to be 0.5. So the signal in the projection is small compared to the row norm! The projection of the row onto x is only 0.5, while the row is mostly orthogonal to x. The quantization error is a random-ish vector of norm ~1.5, and its projection onto x is ~0.13, which is 26% of the 0.5 signal!
+
+So the per-branch relative error is ~0.13/0.5 = 26%, and combined ~0.18/1.0 = 18%. E ≈ 0.18 > 0.1. Fails.
+
+Hmm wait, but let me double check ||ref||. Actually, wait: is the reference y = A@x + B@x where the projections are each ~0.5? Yes, by construction. So y_i ≈ 1.0.
+
+And the error per row: quantization error of A projected on x, plus quantization error of B projected on x. Each ~ N(0, 0.13^2)? Let me be more careful about the quantization error std.
+
+Actually, hmm, wait. Let me reconsider: is the quantization error really uniform over the full step? The values a_ij are continuous; a_ij/sa has fractional parts uniform in [0,1). The error a_ij - sa*round(a_ij/sa) is uniform in [-sa/2, sa/2]. Yes, std = sa/sqrt(12).
+
+sa = max|a|/7. For 128 samples of N(0,1), max|a|: let me compute more precisely. P(|Z| > m) = 2(1-Φ(m)). Expected max ≈ solution to 128 * 2(1-Φ(m)) ≈ 1, i.e., 1-Φ(m) ≈ 1/256 ≈ 0.0039, m ≈ 2.66? Hmm wait: 1-Φ(2.66) ≈ 0.0039. So expected max ≈ 2.7-ish. Actually E[max] is a bit above the median. Let me just say max ≈ 3.0 ± 0.3. So sa ≈ 0.43 ± 0.04. std of e ≈ 0.43/3.464 ≈ 0.124.
+
+Per-branch error per row: std ≈ 0.124 (projection of error vector onto unit x, where error entries iid-ish with std 0.124). Actually more precisely: variance of sum_j e_ij x_j = sum_j Var(e_ij) x_j^2 if independent = 0.124^2 * sum x_j^2 = 0.124^2 * 1 (since ||x||=1). So std 0.124. But e_ij are not exactly independent... they're deterministic given a, but across j they're like iid uniform. And x_j are fixed. So the sum is like a weighted sum of iid uniforms: std = 0.124 * ||x||_2 = 0.124. OK.
+
+Two branches: combined std ≈ sqrt(2)*0.124 ≈ 0.176 (assuming independence between A and B errors — yes, A and B are independent).
+
+Per row: y_i = 1.0 ± 0.176. ||error||_2 = sqrt(sum over 64 rows of err_i^2). E[||error||^2] = 64 * 0.176^2 = 64 * 0.031 = 1.98. So ||error||_2 ≈ 1.41. ||ref||_2 ≈ sqrt(64 * (1 + small)) ≈ 8.0. E ≈ 1.41/8 ≈ 0.176.
+
+So E ≈ 0.18 > 0.1. The kernel fails.
+
+Hmm, but wait. Let me double-check the reference more carefully. Also, hmm, is there something about `enable_fp_fusion=False`? That's just about floating point fusion, minor.
+
+But wait, maybe I should reconsider. Maybe there's a subtlety I'm missing: perhaps the error e·x is correlated with the signal in a way that reduces error? No—the construction forces A x ≈ 0.5, but after quantization, the projection is A'x = Ax + e·x. There's no mechanism making e·x small.
+
+Hmm, unless... wait. Let me reconsider the adjustment. The adjustment: w += ((target - projection)/sum(x*x))[:,None] * x[None,:]. So the final row a_i = w_i + c_i x where c_i = target_i - w_i·x. Then a_i · x = w_i·x + c_i = target_i. Yes, so A x = target exactly (in float64 before casting; after float32 cast, approximately).
+
+So A x ≈ 0.5 ± 0.02. B x ≈ 0.5 ± 0.02. y_ref ≈ 1.0 ± 0.03 per row. ||y_ref|| ≈ 8.
+
+Now the quantized computation: Q(a)·x = a·x + (Q(a)-a)·x = 0.5 + err. err std ≈ 0.124.
+
+Hmm, so per row, y_kernel_i = 1.0 + err_A_i + err_B_i, with combined std 0.176.
+
+E = ||err||_2 / ||ref||_2 ≈ (sqrt(64)*0.176) / 8 = 0.176.
+
+That's clearly above 0.1. Even with fluctuations, the probability that E <= 0.1 would require ||err||_2 <= 0.8, i.e., RMS per-row error <= 0.1, vs expected 0.176. That's like 2.5+ sigma below... chi-square with 64 dof: ||err||^2 ≈ 1.98 expected, need <= 0.64. That's a factor 3.1 below the mean; std of chi2_64 is sqrt(2*64)=11.3, mean 64, so need (0.64/1.98)*64 ≈ 20.7 vs mean 64, that's (64-20.7)/11.3 ≈ 3.8 sigma. So extremely unlikely.
+
+Hmm, so this kernel fails the contract? Let me double check my quantization error analysis though, because maybe I'm wrong about the error magnitude.
+
+Actually wait. Let me reconsider. Hmm, one thing: is the error per element really uniform in [-sa/2, sa/2]? The quantizer: q = floor(a/sa + 0.5), so q = round(a/sa). q*sa is the reconstruction. Error = a - q*sa = sa*(a/sa - round(a/sa)) = sa * frac-error, uniform in [-sa/2, sa/2] if fractional parts uniform. Yes.
+
+But hold on: with clamping to [-7,7]: since sa = max|a|/7, the element with max |a| maps to ±7 exactly (round(±7) = ±7... well floor(7+0.5)=7). Elements near max might round to 7.5? No: a/sa <= max/sa = 7, so round <= 7. So clamping never binds (except exactly at boundary, fine). OK.
+
+So the error analysis holds. Per-element error std ≈ sa/sqrt(12) ≈ 0.43/3.46 ≈ 0.124.
+
+Hmm, wait, but actually is the fractional part distribution uniform? a_ij/sa: sa ≈ 0.43, a_ij ~ N(0,1). The distribution of a_ij/sa is continuous with std ≈ 2.3, spanning many integers (from -7 to 7). The fractional part of a smooth distribution over multiple periods is approximately uniform. Yes.
+
+So the per-row projection error std ≈ 0.124 per branch. Hmm.
+
+But wait — actually, I want to double check the correlation between quantization error and x more carefully. There's a subtle point: a_i = w_i + c_i x. The quantization error of a_i... The elements a_ij for different j are iid-ish normal (plus the common c_i x_j adjustment). The quantization errors are deterministic functions of a_ij and sa (which depends on the whole row). So e_ij ≈ iid uniform, independent of x. e·x = sum e_ij x_j: this is a sum of 128 terms, each ~ uniform*0.088. By CLT, ~ N(0, sa^2/12 * ||x||^2) = N(0, 0.124^2). OK.
+
+So the total error per row std ≈ sqrt(0.124^2 + 0.124^2) = 0.175.
+
+Hmm OK so E ≈ 0.175. That fails E <= 0.1.
+
+Wait, but hold on. Let me reconsider whether the problem intends for the quantization to be accurate enough. The problem says "not a requirement to reproduce INT4 arithmetic bit-for-bit". So the intended implementation is INT4-ish quantization, and the reference... hmm. The problem statement says the reference is y = A@x + B@x in float64 on the original float32 inputs. So the quantization is an approximation. The question is whether this specific quantization scheme (per-row scale max/7, 15 levels, symmetric round) meets E <= 0.1 on this specific workload.
+
+Let me reconsider more carefully. Actually, maybe I should just try to compute this more precisely, since the seed is fixed. But I can't run code. Let me think about whether there's any chance the error is smaller than my estimate.
+
+Key quantities:
+- x: normalized 128-dim standard normal. ||x||=1. ||x||_1 ≈ 9. ||x||_2 = 1.
+- A rows: standard normal adjusted. max|a_row| ≈ 3.0. sa ≈ 0.43.
+- Quantization error per element: uniform ±0.215, std 0.124.
+- Projection error per row per branch: std 0.124.
+
+Hmm wait, actually, hold on. Let me reconsider: is the projection error std really sa/sqrt(12)*||x||_2? sum_j e_ij x_j. Var = sum_j x_j^2 Var(e_ij) = ||x||^2 * sa^2/12 = sa^2/12. Std = sa/sqrt(12) ≈ 0.43/3.464 ≈ 0.124. Yes.
+
+So per-row total error std = sqrt(2) * 0.124 ≈ 0.1755.
+
+RMS error over rows ≈ 0.1755. ||err||_2 ≈ 0.1755 * 8 = 1.40. ||ref||_2 ≈ 8.0 (well, sqrt(64*(1+0.0008)) ≈ 8.0). E ≈ 0.176.
+
+To pass E <= 0.1, we'd need per-row RMS error <= 0.1, i.e., sa/sqrt(12)*sqrt(2) <= 0.1, i.e., sa <= 0.245, i.e., max|a| <= 1.7. But max of 128 |N(0,1)| is ~3. So no.
+
+Alternatively, if the quantization were finer (e.g., max/7 with... hmm, 15 levels is what it is).
+
+Hmm, wait, maybe I'm wrong about the scale. Let me re-read the kernel:
+
 ```
-acc = 0 (float32)
-for j in range(K=128):
-    value = tl.load(X + rows * K + j)
-    acc = acc + value
+sa = tl.max(tl.abs(a), 0) / 7.0
+qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))
+ya = tl.sum((qa * sa) * x, 0)
 ```
 
-The key question: is float32 sequential summation accurate enough on this particular input?
+So yes: scale = max/7, quantized values in [-7,7] (integers), reconstruction qa*sa. Standard symmetric quantization to int4 range. Error per element ≤ sa/2.
 
-The input construction: 
-- w: integers in [1, 32] * 2^20 (1048576). So values like 1*2^20 to 32*2^20, i.e., ~1M to ~33.5M. These are exact in float32 (integers up to 2^24 exact; 32 * 2^20 = 2^25... wait, 32*2^20 = 2^25 = 33554432. Is 2^25 exact in float32? Yes, powers of 2 are exact. Any integer multiple of 2^20 up to 32*2^20: 32*2^20 = 2^25, and the spacing of float32 at 2^25 is 2^(25-23) = 4. So multiples of 2^20 are exactly representable. Actually all integers up to 2^24 are exact, and multiples of 2^k up to... let's think: float32 has 24 bits of mantissa. A number m * 2^20 where m in [1,32] requires at most 5 bits for m, so it's exactly representable. Yes, w entries are exact.
-- small: integers in [1,3] * 0.25, so {0.25, 0.5, 0.75}. Exact in float32.
-- values = concatenate([w, -w, small], axis=1): so per row, we have 32 positive large values, 32 negative large values (negatives of w, but note: -w are the exact negations), and 64 small values.
+Hmm, so the relative error per element of a: sa/2 / typical|a| ≈ 0.215/0.8 ≈ 27%. And the projection onto x: error 0.124 vs signal 0.5 → 25% per branch. Combined 17.6%. E ≈ 0.176 > 0.1.
 
-Per row, the exact sum: sum(w) - sum(w) + sum(small) = sum(small), which is 64 values each in {0.25, 0.5, 0.75}, so sum in [16, 48]. Actually 64 * 0.25 = 16 min, 64*0.75 = 48 max. So reference per row is between 16 and 48 (some exact multiple of 0.25).
+Hmm, so this seems to fail. But wait, let me reconsider the problem statement: "Either branch may individually exceed 0.1 without violating the contract." This suggests the test designer knows each branch (A@x alone, B@x alone) might exceed 0.1 relative... hmm, actually if each branch is 0.5 magnitude with error 0.124, the per-branch relative error is 0.124/0.5 = 0.25 > 0.1. And the combined is 0.176/1.0 = 0.176 > 0.1. So the combined also exceeds.
 
-So the exact answer is small (16-48), but intermediate sums involve huge cancellations: partial sums of large values ~ ±tens of millions scale. sum(w) per row: 32 values averaging ~16.5 * 2^20 ≈ 17.3M, so sum ~ 550M. float32 spacing at 550M (~2^29): 2^(29-23) = 2^6 = 64. So accumulating w values, rounding errors of up to 32 per addition (half ulp = 32). With 32 additions, error could be up to ~1000 in the partial sum.
+Hmm, but hold on. Maybe I'm miscalculating. Let me reconsider: maybe the errors don't add up the way I think. Let me reconsider whether the quantization error projection is really ~sa/sqrt(12).
 
-Wait, but actually, are the additions exact? w entries are multiples of 2^20. Partial sums are multiples of 2^20... let's check: each w value is m*2^20 with m ≤ 32 (5 bits). The partial sum after k additions is at most 32*32*2^20 = 2^5 * 2^5 * 2^20 = 2^30. A float32 can represent multiples of 2^(30-23) = 2^7 = 128 at magnitude 2^30... hmm, let me be careful.
+Hmm, alternatively, maybe there's a subtle cancellation: The rows are adjusted so a·x = 0.5 exactly. After quantization Q(a)·x. Is there any reason Q(a)·x would be closer to a·x than random? The quantization error e = a - Q(a) is roughly uniform per element. e·x is roughly N(0, sa²/12). No cancellation mechanism.
 
-The partial sum S_k = (sum of m_i) * 2^20, where sum of m_i ≤ 32*32 = 1024 (10 bits). The value S_k ≤ 1024 * 2^20 = 2^30. For float32 to represent S_k exactly, we need the mantissa: S_k = M * 2^20 where M is an integer ≤ 1024 (10 bits). Since M has at most 10 significant bits, and float32 has 24 bits of mantissa, M*2^20 is exactly representable as long as the exponent doesn't push it out. M*2^20 with M ≤ 2^10: the value is between 2^20 and 2^30. Representing it: normalize to 1.f * 2^e. If M is between 2^9 and 2^10, value is between 2^29 and 2^30, mantissa bits needed: M has 10 bits, shifted so leading bit at position... value = M * 2^20. The number of mantissa bits needed is the bit-length of M, which is ≤ 10 ≤ 24. So exact. Yes, all partial sums of the w values (and of w plus -w values) are exact in float32!
+Unless... hmm, wait. Actually, let me reconsider: maybe the error is smaller because the elements with large |a| (which dominate the scale) are... no.
 
-Because: all values are multiples of 2^20, with the multiplier sum bounded by 1024 (well, for w and -w combined, sum of |m| could be up to 2*1024 = 2048 = 2^11 bits, 11 bits ≤ 24). So accumulating the first 64 entries (w and -w in permuted order) — wait, the permutation scrambles the order! The values are permuted by column, so w, -w, and small values are interleaved in arbitrary order.
+Hmm, let me reconsider the problem. Maybe I'm wrong about the reference magnitude. target = 0.5 + 0.02*standard_normal(64). So targets ≈ 0.5 ± 0.02. A@x ≈ 0.5 per row. B@x ≈ 0.5 per row. y ≈ 1.0 per row. ||y||_2 ≈ sqrt(64) * 1.0 ≈ 8. Yes.
 
-Hmm, this complicates it. The small values (0.25, 0.5, 0.75) are interleaved with large values (~2^20 * m). When you add a small value to a large partial sum, the small value gets rounded away. E.g., partial sum ≈ 2^25, ulp = 4 (2^(25-23)=4). Adding 0.25 to a value of magnitude 2^25: the result rounds to the large value exactly (0.25 << ulp/2 = 2). Actually 0.25 < 2, so it rounds to the large value—lost completely.
+So E ≈ 0.176. This exceeds 0.1. So the kernel should be rejected?
 
-But wait — the exact answer only depends on sum of small values, since sum(w) - sum(w) = 0 exactly. But the floating-point summation in a scrambled order: small values added to large partial sums will be lost. Then the final result might be just the sum of the large values' rounding errors, not the small sum!
+Hmm wait, wait. But let me reconsider. Let me recompute the expected max of |a| over 128 standard normals more carefully, and think about whether the per-element error is really uniform.
 
-Hmm wait, let's think again. The reference is the exact sum of the ORIGINAL float32 entries in real arithmetic, which equals sum(small) per row (since w and -w cancel exactly in real arithmetic). The float32 sequential sum, however, may lose the small values entirely.
+Actually, hmm, there's another consideration: the adjustment term. a_i = w_i + c_i x, c_i = target_i - w_i·x. w_i·x ~ N(0,1) (since ||x||=1, w_i standard normal). So c_i ≈ 0.5 - N(0,1), magnitude ~1.2 typical, up to ~3.5. The adjustment adds c_i x_j to each element: c_i x_j ~ 1.2 * 0.088 ≈ 0.1 typical. So the elements a_ij ≈ N(0,1) + small. Fine, my analysis holds.
 
-Let's estimate: the reference per row is between 16 and 48. The relative error metric: E = ||output - ref||_2 / max(||ref||_2, 0.008). ||ref||_2 over 64 rows: each ref ~ 16-48, say average ~32, so ||ref||_2 ≈ 32*8 = 256. For E ≤ 0.1, we need ||output - ref||_2 ≤ 25.6. That's an average error per row of about 25.6/8 = 3.2 (RMS). So per-row error must be on the order of ≤ 3 (RMS).
+So per-row max ≈ 3.0 (max over 128 of |N(0,1)+ε|).
 
-Now, what does the float32 sequential sum produce? Let's think about the summation order: it's the permuted column order, j = 0..127.
+Let me estimate the max more carefully: For n=128, E[max |Z_i|]: The distribution: P(M ≤ m) = (1-2Φ(-m))^128. Median: (1-2Φ(-m))^128 = 0.5 → 1-2Φ(-m) = 0.5^(1/128) = e^{ln0.5/128} = e^{-0.0054} ≈ 0.9946 → 2Φ(-m) ≈ 0.0054 → Φ(-m) = 0.0027 → m ≈ 2.77. Mean is slightly higher, ~2.9-3.0. So sa ≈ 0.41-0.43.
 
-Values: 128 per row: 32 large positive (m*2^20, m∈[1,32]), 32 large negative (-m*2^20), 64 small (0.25, 0.5, 0.75).
+Per-element error std ≈ 0.41/3.464 ≈ 0.118. Per-row branch error std ≈ 0.118. Combined ≈ 0.167. E ≈ 0.167.
 
-The partial sum starts at 0. As we accumulate, the partial sum magnitude grows to ~hundreds of millions at times. When the partial sum is large (~2^28, ulp = 2^5 = 32), adding small values 0.25/0.5/0.75 loses them entirely (they round to 0 effect... wait, 0.75 vs ulp 32: 0.75 < 16, so no change). Even at partial sum 2^20 (ulp = 2^-3 = 0.125), small values are representable-ish: at magnitude 2^20, ulp = 2^(20-23) = 0.125. Adding 0.25 to a multiple of 2^20... hmm, partial sums might not be multiples of 2^20 once small values are mixed in.
+Still > 0.1. Comfortably above.
 
-Let me think about the actual error. The question is whether the rounding errors in summing large values (which cancel exactly in real arithmetic but may not in float due to rounding) exceed the tolerance.
+Hmm, but hmm, wait. Let me reconsider. Am I sure about "the error in the projection equals sa/sqrt(12)"? Let me sanity check with a simple case: suppose x = e_1 (one-hot). Then error = e_{i1}, uniform ±sa/2, std 0.118. Signal 0.5. Relative 24%. For random x, the error is a weighted average, std sa/sqrt(12)*||x|| = same. Yes.
 
-Key insight from above: sums of only the large values are exact in float32 because they're all multiples of 2^20 with small multipliers. Specifically, any partial sum of a subset of {±m*2^20} has magnitude ≤ 64*32*2^20 = 2048*2^20 = 2^31... wait 64 large values each up to 32*2^20 = 2^25, so max partial sum magnitude 64 * 2^25 = 2^31. Hmm, 2^31 exceeds... let me redo: the multiplier sum: each large value is m*2^20, m ∈ [1,32]. Sum of 64 values' m's ≤ 64*32 = 2048 = 2^11. So partial sum ≤ 2^11 * 2^20 = 2^31. The mantissa needed: the partial sum is an integer multiple of 2^20, multiplier M ≤ 2048 (11 bits). 11 bits ≤ 24 bits, so exact in float32. Yes! Any sum of large values alone is exact.
+OK here's the thing though — my analysis is a statistical estimate. The actual realized error on the fixed seed could differ, but not by a factor of 1.76 (needs 3.8 sigma). So the kernel fails with very high probability.
 
-But when small values are interleaved: partial sum = (integer multiple of 2^20) + (sum of some small values, each multiple of 0.25). The exact partial sum is a multiple of 0.25 with value up to ~2^31. At magnitude 2^31, ulp = 2^(31-23) = 2^8 = 256. So representing a value like M*2^20 + s where s is small: it must be rounded to a multiple of 256. The small part s (up to 48) is completely lost when the large part is ≥ 2^28 or so.
+Hmm, wait, but let me reconsider the problem statement once more: "Approximate intermediate values are allowed if the FINAL output meets this requirement." — This suggests the intended correct implementation might also use approximations (like splitting into branches, using bf16 or tf32 intermediates, etc.) as long as the final output is accurate. The quantization here is a *lossy* approximation of the inputs themselves, which introduces O(25%) errors — way beyond what's allowed.
 
-So the errors: each addition rounds to nearest float32. The question is the accumulated error at the end.
+Actually hold on, wait. Let me reconsider. Maybe I should reconsider whether the problem is designed such that the quantization IS accurate enough. The problem mentions "not a requirement to reproduce INT4 arithmetic bit-for-bit" — this strongly suggests the intended implementation involves INT4 quantization. So the intended correct implementation presumably quantizes A and B to int4 somehow and still meets E <= 0.1? How could that be?
 
-Let me think about the final result. At the end of summation, all large values have canceled (in exact arithmetic, sum of large = 0). But in float arithmetic, the intermediate roundings may have introduced errors.
+Hmm, if the intended implementation quantizes with per-row scale max/7 and 15 levels, the error would be as I computed ~17%. Unless the intended implementation uses a smarter quantization: e.g., scale chosen to minimize error, or error feedback, or... hmm.
 
-Let's think more carefully. Actually, let's think about what happens step by step. The order is a fixed permutation (given). Let me think about the structure: PERMUTATION and the numpy-generated order. The order = rng.permutation(128) after generating w and small. Then values = values[:, order][:, PERMUTATION]. So the final column order is a composition — effectively a pseudo-random permutation of columns.
+Wait, actually, maybe the intended approach: since A x = target ≈ 0.5 exactly by construction, maybe the intended implementation computes something entirely different, like using the structure? Hmm, no.
 
-The original columns: 0-31 are w (positive large), 32-63 are -w (negative large), 64-127 are small.
+Wait, actually, let me re-read the problem statement: "Evaluate numerical compliance of run(*make_inputs()) on exactly the workload specified in kernel.py." So the workload is fixed by the seed. The reference is exact A@x + B@x in float64. The kernel under test quantizes. The question: does E <= 0.1?
 
-So in the final matrix, each row has the same structure: 32 positive large, 32 negative large, 64 small, in positions determined by the composed permutation. Note: the permutation is the same for all rows (column permutation), but the values differ per row (w and small are per-row random).
+Given my analysis, E ≈ 0.17, so no. But let me double-check by considering the possibility that I'm wrong about the magnitude of quantization error.
 
-Hmm wait, but there's a subtlety: w is (64, 32), so w[r, c] for row r. The column permutation applies the same column reordering to all rows. So in row r, position p contains either w[r, c], -w[r, c], or small[r, c'] for appropriate c, c'.
+Let me redo it very concretely. Consider row i of A. Elements a_ij ~ N(0,1) (approx). max |a_ij| ≈ 2.9. sa = 2.9/7 = 0.414. Quantization grid: {-7,-6,...,0,...,6,7} * 0.414 = {-2.9, -2.49, ..., 2.9}, 15 points, spacing 0.414.
 
-Now, the float32 sequential summation per row. Let me consider the worst case: as we sum, partial sums wander. The large + large additions are exact (as shown: any sum of multiples of 2^20 with total multiplier ≤ 2048 is exact, since 11+... wait, also plus accumulated small sum which is a multiple of 0.25 — that's not a multiple of 2^20).
+Element a_ij = 0.5 → a/sa = 1.21 → q = 1 → recon 0.414. Error = 0.086.
+Element a_ij = 1.0 → 2.42 → q=2 → 0.83. Error 0.17.
+Element a_ij = -0.3 → -0.72 → q = -1 → -0.414. Error -0.114.
 
-Hmm, let me reconsider. Partial sum after some steps = A*2^20 + s where A is an integer (sum of ±m's, |A| ≤ 2048) and s is a multiple of 0.25 with |s| ≤ 48. In exact arithmetic this is fine. In float32: the value A*2^20 + s. If |A*2^20| ≥ 2^24 (i.e., |A| ≥ 16), then ulp at that magnitude: value v = A*2^20, |v| ∈ [2^24, 2^31], ulp = 2^(e-23) where e = floor(log2(|v|)). For A = 16, v = 2^24, ulp = 2. s is a multiple of 0.25 ≤ 48. Rounding A*2^20 + s to float32: error up to ulp/2 = 1. Hmm, but actually the rounding error each step is bounded by ulp/2 of the result.
+So errors are on the order of ±0.2, std ~0.12. Yes.
 
-But wait — I established that when adding two large values (both multiples of 2^20, with the accumulator being exactly a multiple of 2^20 if s was lost), the addition is exact. The issue is when adding a small value to a large accumulator, the small value is rounded (lost), and that loss is an error relative to the exact sum. But is it an error in the FINAL result? The exact final sum is s_total (sum of all small values) since large values cancel. If a small value is lost when added to a large accumulator, the accumulator deviates from the exact partial sum by that small value. This deviation persists until... the large values cancel out at the end, leaving accumulator = (rounding deviations). Hmm.
+Now the projection error: sum over 128 elements of e_ij x_j, x_j ~ ±0.088 random. This is a random sum; std = 0.12 * 1 = 0.12. Some rows will have error 0.05, others 0.25. RMS over rows ≈ 0.12.
 
-Let me think of it as: exact partial sum S_k = L_k + s_k where L_k = sum of large values so far (multiple of 2^20, exact), s_k = sum of smalls so far (multiple of 0.25). Float accumulator F_k.
+Yes, E ≈ 0.17.
 
-Case 1: adding large value to F: if F is a multiple of 2^20 (i.e., previously all smalls were lost or none yet), then F + large is exact (multiple of 2^20 with ≤ 11-bit multiplier... wait, need to check: F could be up to 2^31 in magnitude with multiplier ≤ 2048; adding another m*2^20 keeps multiplier ≤ 2080ish, 12 bits, still exact). Actually the bound: total sum of |m| over all 64 large values ≤ 64*32 = 2048, and partial sums of the signed m's are within ±2048. So any partial sum of large values is M*2^20 with |M| ≤ 2048, which needs ≤ 12 bits of mantissa, exact in float32. Good.
+Hmm, hold on, but wait. Let me reconsider — maybe I should double check with the L1 bound instead: worst case per row = (sa/2)*||x||_1 = 0.207 * 9 = 1.86. RMS actual ≈ 0.12. OK.
 
-Case 2: adding small value (multiple of 0.25, ≤ 0.75 magnitude... each small value is 0.25, 0.5, or 0.75) to accumulator F:
-- If F = 0 or |F| tiny: exact or near-exact. E.g., F=0: F + 0.75 = 0.75 exact. If |F| ≤ 2^21 (ulp 0.25): sums of multiples of 0.25 up to... F = M*2^20 + s: if |M| ≤ 2, hmm.
-- If |F| large: the small value is lost or partially lost. E.g., F = 100*2^20 ≈ 1.05e8, ulp = 2^(26-23)... 100*2^20 ≈ 2^26.64, so e=26, ulp = 8. Adding 0.75: result rounds to F (0.75 < 4). So F unchanged. The exact partial sum increased by 0.75, but F didn't. Now F deviates from exact by 0.75. But then future large additions: F stays a multiple of 2^20, so large+large additions remain exact. At the end, L_final = 0 exactly (all large values cancel), so F_final = 0 + (whatever smalls were absorbed) — wait no.
+So the verdict: the kernel introduces quantization error ~17% relative, exceeding the 10% threshold. Reject.
 
-Hmm wait. Let's re-think. F tracks the sum. If smalls are lost when the accumulator is large, F_final = sum of large values (exactly 0, computed exactly since all large additions are exact) + smalls that were added when accumulator was small enough to absorb them.
+But wait, hold on. Let me reconsider the problem statement once more. It says: "Contract: all outputs must be finite and E <= 0.1." and "Either branch may individually exceed 0.1 without violating the contract."
 
-So F_final = sum of smalls that were "absorbed" (added when |F| small enough that they weren't rounded away, or partially rounded). The exact reference = sum of ALL smalls. The error = sum of lost smalls (plus partial rounding losses).
+Hmm, "either branch may individually exceed 0.1" — this is a hint about what? Perhaps in other (correct) implementations, the two branches A@x and B@x are computed... hmm. Actually maybe this hint is about implementations that compute y = (A+B)@x by first summing A+B — no wait.
 
-So the question becomes: how many of the 64 small values per row get lost? Each lost small is 0.25-0.75. If, say, half of them are lost (32 smalls × 0.5 avg = 16), the per-row error would be ~16 vs ref ~32, i.e., 50% error. That would blow the 10% tolerance... but wait, the tolerance is on the L2 norm of the whole vector relative to ||ref||_2 ≈ 256. Need ||err||_2 ≤ 25.6. If each row loses ~16 on average, ||err||_2 ≈ 16*8 = 128 >> 25.6. Fail.
+Hmm, actually, maybe the hint means: some implementations quantize only... no. Let me think about what the "branches" are: A@x and B@x. The statement says each branch individually may exceed 0.1 (presumably relative to its own norm) without violating the contract — only the combined E matters. This is just clarifying the metric applies to the final output.
 
-But hold on — whether smalls are lost depends on the order. Let me think about the actual order. The permutation is fixed and public. Also, the values are per-row random. Hmm, but the key structural fact: the column permutation is the same for all rows. So the sequence of "column types" (large+, large-, small) is the same across rows. But the magnitudes differ per row.
+So the question remains: does the quantized computation meet E <= 0.1 on this workload? My analysis says E ≈ 0.17.
 
-Let me think about when a small is lost: accumulator magnitude ≥ 2^22 (ulp = 0.5)? At |F| = 2^22 ≈ 4.2e6, ulp = 2^(22-23) = 0.5. Adding 0.25: rounds to nearest multiple of 0.5 — could round down (lost) or... 0.25 is exactly halfway between F and F+0.5; round-to-nearest-even: F is a multiple of 2^20 hence even multiple of 0.5, so ties round to F. Lost. Adding 0.5: exact (F multiple of 2^20 is a multiple of 0.5... wait, is F a multiple of 0.5? F = M*2^20, yes multiple of 0.5). F + 0.5 representable? F = M*2^20 with |M| ≤ 2048; F + 0.5 = M*2^20 + 0.5: mantissa bits: M needs up to 12 bits, plus the 0.5 needs bits down to 2^-1, so spanning from 2^-1 to 2^31 — that's way more than 24 bits of precision. NOT exact. Hmm wait: at magnitude 2^22, ulp = 0.5, so representable values are multiples of 0.5. F + 0.5 is a multiple of 0.5, so it IS representable at that magnitude. But is it representable in float32? A float32 near 2^22 represents multiples of 0.5 (ulp = 2^(22-23) = 0.5). F = M*2^20: if M ∈ [4, 8), F ∈ [2^22, 2^23), ulp = 0.5, F is a multiple of 2^20 hence of 0.5. F + 0.5 is a multiple of 0.5 in [2^22, 2^23), so representable. Exact. OK so at |F| up to just below 2^23, adding 0.5 is exact; adding 0.25 rounds (ties to even → lost or gained 0.25?).
+Hmm, but wait, now I doubt myself: would the problem designers create a kernel that so clearly fails? This is a "verification" task — the kernel under test is presumably a candidate that either passes or fails, and I need to decide. The quantization to int4 with per-row max/7 scale is a plausible "wrong" implementation that a test-taker might produce if they thought int4 quantization was the intended approach. The problem says "not a requirement to reproduce INT4 arithmetic bit-for-bit" — suggesting the intended implementation DOES use int4 arithmetic but the requirement is only on the final numerical accuracy. Hmm! That's interesting. If the intended implementation uses INT4 quantization, then the quantization error must be within the tolerance... which contradicts my analysis.
 
-Hmm, this is getting complicated. Let me just think about the magnitude of the problem. Actually, let me think about it from the perspective of the test designer. This looks like a deliberately constructed adversarial test: large values that cancel exactly, plus small values that are the true signal, scrambled so that naive float32 sequential summation loses the small values. The reference is the exact sum (~16-48 per row), while the float32 sequential sum would produce ~0 (all smalls lost) or garbage.
+Unless the intended INT4 approach is different: e.g., quantize with error compensation, or use a residual: y = A@x + B@x computed as Q(A)x + (A - Q(A))x + ... no, that defeats the purpose.
 
-Actually wait — but the kernel sums in the ORIGINAL column order (j = 0..127 of the input as given, which is the permuted matrix). The permutation scrambles. So yes, the smalls are scattered throughout.
-
-Hmm, but wait: is the exact sum of large values per row exactly zero? w and -w: yes, columns 0-31 are w, 32-63 are -w (exact negations). Column permutation preserves the multiset. So each row has exactly {w[r,c]} and {-w[r,c]} for c in 0..31, plus smalls. Exact large sum = 0. Yes.
-
-So exact row sum = sum of 64 smalls ∈ [16, 48], multiple of 0.25.
-
-Now the float32 sequential sum: let's think about what actually happens. The accumulator wanders as large± values accumulate. The magnitude of the accumulator at various points: depends on the order of large+ and large- values. Since the permutation is pseudo-random, the walk is like a random walk of steps ±m*2^20.
-
-At any point where |F| ≥ 2^24 = 16777216 (i.e., |M| ≥ 16), ulp ≥ 2, so ALL small values (≤0.75) are lost (round to no change). At |F| ∈ [2^23, 2^24) (M ∈ [8,16)), ulp = 1, smalls 0.25 lost, 0.5 lost (tie to even: F is multiple of 2^20, hence even integer... F + 0.5 is halfway between F and F+1; F is even integer, F+1 odd; ties-to-even rounds to F. So 0.5 lost), 0.75 rounds to F+1 (gain of 0.25). Hmm interesting.
-
-At |F| ∈ [2^22, 2^23) (M ∈ [4,8)), ulp = 0.5: 0.25 lost (tie→even→F, since F multiple of 2^20 is an even multiple of 0.5), 0.5 exact, 0.75 → rounds to F+0.5 or F+1? 0.75 is 1.5 ulp: F + 0.75 is between F+0.5 and F+1, closer to F+1 (distance 0.25) vs F+0.5 (distance 0.25) — tie! Rounds to even: F+1 is an even multiple of 0.5? Multiples of 0.5 near: F (=k*0.5 with k even, since F multiple of 2^20), F+0.5 (k odd), F+1 (k even). Tie between F+0.5 and F+1 → round to even → F+1. So gain of 0.25.
-
-At |F| ∈ [2^21, 2^22) (M ∈ [2,4)), ulp = 0.25: all smalls exact (F multiple of 2^20 is a multiple of 0.25; F + 0.25/0.5/0.75 all representable multiples of 0.25 in that range... need mantissa: F = M*2^20 + s, magnitude < 2^22, ulp 0.25, so any multiple of 0.25 in range is representable. Exact.)
-
-At |F| < 2^21: also exact (finer ulp).
-
-But once F is no longer a multiple of 2^20 (has smalls absorbed), subsequent large additions: F = M*2^20 + s with s a multiple of 0.25, |s| ≤ 48. Adding large m*2^20: result M'*2^20 + s. Is this exact in float32? Magnitude up to 2^31, ulp up to 2^8 = 256. If |M'*2^20| ≥ 2^29 or so, s gets lost! I.e., adding a large value to F when the result's magnitude is ≥ 2^24ish... let's see: result R = M'*2^20 + s. If |M'| ≥ 16, |R| ≥ 16*2^20 - 48 ≈ 2^24, ulp = 2. R must be a multiple of 2 (ulp=2) — s is a multiple of 0.25, generally NOT a multiple of 2, so R rounds: s is partially lost! The accumulated small-sum s gets destroyed whenever a large addition pushes the magnitude above 2^24.
-
-So actually the picture: smalls only survive if they're added near the END of the summation, after the last time the accumulator magnitude exceeds ~2^24 (or 2^23 etc.), AND after all the large values have mostly canceled... Actually more precisely, smalls survive if they're added when |F| < 2^21ish, and no subsequent large addition pushes |F| back above the threshold where s gets rounded away.
-
-Hmm, wait: if F = M*2^20 + s with |M| ≤ 2 (|F| < 2^21 + 48), adding large m*2^20 (m ≤ 32): result M'*2^20 + s with |M'| ≤ 34ish < 2^6... magnitude < 2^26. ulp at 2^25..2^26 is 4 or 8. Hmm: if |M'| ∈ [16, 32), |R| ∈ [2^24, 2^25), ulp = 2: s (multiple of 0.25, |s| ≤ 48) rounds to nearest multiple of 2: error up to... s mod 2 lost, up to 1 per rounding? No wait, s itself is up to 48; rounding R = M'*2^20 + s to a multiple of 2 loses (s mod 2) ∈ [0,1). Not the whole s! Because M'*2^20 is huge but s is added to it; the sum rounds to nearest multiple of 2 (ulp), so we lose only s mod 2 ≤ 1. Hmm right! The rounding is to ulp of the RESULT, so we lose at most ulp/2 per addition, not the whole s.
-
-Wait, I conflated things. Let me redo. Rounding error per addition ≤ ulp(result)/2. So the total error of sequential summation ≤ sum over steps of ulp/2 at each step. The final error is bounded by sum of ulp(F_k)/2.
-
-But the SMALL values being lost: when adding small value v (0.25-0.75) to large F, the error is ≤ ulp(F)/2 but the small value's contribution is lost entirely — error = v (the value added rounds to nothing). Actually the error from that step = |round(F + v) - (F + v)| ≤ ulp/2, but the effect on F is that F stays ~same, so F no longer tracks the exact sum: the discrepancy is v. But formally, F_new = round(F_old + v), and exact partial = F_old + v (if F_old was exact). Error introduced = |F_new - (F_old+v)| ≤ ulp/2. With ulp = 2 (at |F| ~ 2^24), error ≤ 1 > v. Hmm, so the error introduced per step is ≤ ulp/2, which at large magnitudes (2^30, ulp = 128) is up to 64 per step! Over ~60 large-magnitude steps, error up to... but errors are random-ish (round to nearest), so they partially cancel.
-
-Hmm OK so this is really about: sequential float32 summation of 128 values where large values cancel exactly, and the exact result is small (~16-48). Classic catastrophic cancellation scenario. The intermediate rounding errors at magnitude ~2^26-2^30 (ulp 8-128) over ~64 large-value steps give errors of magnitude ~sqrt(64)*avg_ulp/2*uniform... Let's estimate: random walk of rounding errors, each uniform in [-ulp/2, ulp/2]. Typical ulp: the accumulator magnitude varies; RMS ulp maybe ~16-64 (magnitudes 2^27-2^30 happen when many same-sign large values accumulate). Say typical error step σ ~ ulp/sqrt(12) ~ 10. Over 64 steps: RMS total ~ 10*8 = 80. Compared to ref ~32 per row. Error 80 per row → E ~ 80/32 = 2.5 >> 0.1. MASSIVE failure.
-
-Wait, but hold on. I previously argued that sums of ONLY large values are EXACT (multiples of 2^20 with ≤ 12-bit multipliers). Let me recheck: large values are ±m*2^20, m ∈ [1,32] (5 bits each). Sum of 64 of them: the multiplier M = sum of ±m_i, |M| ≤ 64*32 = 2048 = 2^11. So M needs ≤ 12 bits. Value = M*2^20. For float32: normalize M*2^20 = 1.xxx * 2^e. The mantissa precision needed = bit length of M ≤ 12 bits ≤ 24. So exact. YES — pure large-value sums are exact regardless of order.
-
-So the ONLY rounding errors come from steps involving small values (adding smalls to large accumulators) and from large additions when the accumulator contains a non-zero small residue s that's not representable at the new magnitude... wait no: adding large to F = M*2^20 + s: result M'*2^20 + s. If this is representable, exact; if not, rounding error ≤ ulp/2. When is M'*2^20 + s representable? Need the value as multiple of 2^-2 (0.25) to fit in 24 mantissa bits: value = M'*2^20 + s, with |M'*2^20| possibly ~2^25 and s ~ 2^-2..2^5: spanning exponent range from 2^-2 to 2^25 → needs ~28 bits > 24. Not representable. So rounding error occurs, ≤ ulp(result)/2. At |result| ~ 2^25, ulp = 4, error ≤ 2. And the lost part is (s mod 4)-ish, i.e., only the low bits of s, NOT all of s. Because M'*2^20 is a multiple of 4 (2^20 is a multiple of any ulp ≥ ... hmm, 2^20 is a multiple of 4, yes). So round(M'*2^20 + s) = M'*2^20 + round_ulp(s), where round_ulp(s) = s rounded to nearest multiple of ulp (with the caveat of how the huge value's grid aligns — M'*2^20 is a multiple of ulp for ulp ≤ 2^20 dividing... ulp = 2^(e-23), and M'*2^20 is a multiple of 2^20, which is a multiple of ulp iff ulp ≤ 2^20 and ulp is a power of 2 ≤ 2^20 — yes, ulp = 2^k with k ≤ 20... at magnitude ≥ 2^20, e ≥ 20, ulp = 2^(e-23) ≤ 2^(20-23)... hmm wait if e = 20, ulp = 2^-3. OK whatever: M'*2^20 is a multiple of ulp whenever ulp = 2^k with k ≤ 20, and for magnitude ~2^25, ulp = 4 = 2^2 ≤ 2^20. Yes multiple.)
-
-So: round(M'*2^20 + s) = M'*2^20 + (s rounded to multiple of ulp). Error = |s - round_ulp(s)| ≤ ulp/2. So each large addition, when accumulator holds residue s, knocks s down to a multiple of the current ulp, losing ≤ ulp/2 from s (not the whole s!). Interesting. So s erodes gradually as ulp grows.
-
-And adding small v to F = M*2^20 + s: result M*2^20 + s + v; rounds to multiple of ulp: error ≤ ulp/2; effectively s+v gets re-rounded to ulp grid. If ulp ≥ 1 (magnitude ≥ 2^23), smalls are essentially absorbed into the rounding of s: s_new = round_ulp(s + v). Hmm, so s tracks round_ulp(exact small sum so far) as long as the large part is a clean multiple of 2^20!
-
-Wait, so actually, here's the cleaner model: Let me define the exact partial sum S_k = L_k + s_k (L large part multiple of 2^20, s_k small part multiple of 0.25, |s_k| ≤ 48). Claim: the float accumulator F_k = L_k + ŝ_k where ŝ_k = round to ulp-grid of something close to s_k? Let's verify by induction:
-
-F_0 = 0 = L_0 + 0. ✓.
-
-Step: add value x.
-- x large (±m*2^20): F + x = (L + x) + ŝ. (L+x) is a multiple of 2^20, call L'. F_new = round(L' + ŝ) = L' + round_ulp(L', ŝ)... as argued, since L' is a multiple of ulp(F+x) (is it? ulp depends on magnitude of L' + ŝ ≈ L'; L' = M'*2^20 is a multiple of 2^20; ulp = 2^(e-23) where e = exponent of result; for the result magnitude ≥ 2^20, e ≥ 20, ulp ≤ 2^-3?? No wait: ulp = 2^(e-23); if e = 25, ulp = 4. L' = M'*2^20, multiple of 2^20, and 2^20 is a multiple of 4. ✓. If e = 20 (result magnitude in [2^20, 2^21)), ulp = 2^-3 = 0.125; is L' a multiple of 0.125? L' = M'*2^20, yes it's a multiple of 0.125 (2^20 is a multiple of 2^-3? 2^20 / 2^-3 = 2^23, integer ✓).) So in all cases, L' is a multiple of the ulp grid, and F_new = L' + round_to_ulp_grid(ŝ). The error introduced: |round(ŝ) - ŝ| ≤ ulp/2. Hmm, but wait: is it true that round(L' + ŝ) = L' + round(ŝ)? Since L' is on the grid and the grid is uniform (powers of 2 grids are uniform across the binade... float32 grids: within a binade [2^e, 2^(e+1)), grid spacing is 2^(e-23); at binade boundaries the spacing changes. If L' + ŝ and L' are in the same binade, then yes, rounding L'+ŝ to the grid = L' + round(ŝ) as long as round(ŝ) keeps it in the binade. Edge cases near binade boundaries could differ by one ulp, but the error bound ≤ ulp/2 + something small still holds roughly. Fine, approximately.)
-
-- x small (v ∈ {0.25, 0.5, 0.75}): F + v = L + ŝ + v. Similarly, F_new = L + round_ulp(ŝ + v), error ≤ ulp/2 (plus boundary effects).
-
-So the model: the large part L is tracked EXACTLY throughout (since L' always a multiple of 2^20 with ≤ 12-bit multiplier — wait, need F_new = L' + something to be representable... hmm, actually the claim F_new = L' + round(ŝ) requires that L' + round(ŝ) is representable, which it is by construction (it's on the grid), and that round(L' + ŝ) equals it. Fine.)
-
-Hmm wait, there's a subtlety: is the rounding of L' + ŝ really equal to L' + round_grid(ŝ)? Consider L' = 2^25 (ulp grid = 4 in [2^25, 2^26)) and ŝ = 40. L' + ŝ = 2^25 + 40, which is in [2^25, 2^26), grid 4: rounds to 2^25 + 40 (40 is a multiple of 4). Exact. If ŝ = 41: rounds to 2^25+40 (nearest multiple of 4: 40 or 44, 41→40). L' + round(41 to grid 4) = 2^25 + 40 ✓.
-
-Consider L' = 2^25 - 2^20 (i.e., M' = 31, value = 31*2^20 ≈ 3.25e7, in [2^24, 2^25), grid = 2): ŝ = 41 → L'+ŝ in [2^24,2^25)? 31*2^20 + 41: yes since 31*2^20 < 2^25 and adding 41 keeps it below 2^25 (31*2^20 = 32505856, 2^25 = 33554432, difference = 1048576 >> 41). Grid 2: round(41→40 or 42, tie? 41 is odd, nearest even multiple of 2: 40 and 42 both distance 1, tie → round to even multiple: 40 (even) vs 42 (even)... hmm, ties-to-even in terms of the last bit: 40 = 20*2, 42 = 21*2; in binary: 40 = 101000, 42 = 101010; last bit of mantissa: 40/2=20 even → 40. Whatever, error ≤ 1 either way.)
-
-OK so the model is: ŝ evolves as ŝ_new = round_to_grid(ŝ + v) for small additions, and ŝ_new = round_to_grid(ŝ) for large additions, where the grid depends on the current magnitude |L + ŝ| ≈ |L|. And the final F_128 = L_128 + ŝ_128 = 0 + ŝ_128 (since L_final = 0 exactly — all 64 large values included, sum = 0).
-
-Wait, but is L tracked exactly? F_k = L_k + ŝ_k with L_k exact multiple of 2^20 = exact sum of large values so far. By induction: F_new = round(L' + ŝ) = L' + round_grid(ŝ), so yes, L' is the exact large partial sum, and the only corruption is in ŝ. 
-
-Hold on, but there's the edge case where L' + ŝ crosses a binade boundary and the grid near the boundary... e.g., L' = 2^24 exactly (M' = 16), ŝ = 45: L' + ŝ = 2^24 + 45. Grid in [2^24, 2^25) is 2. 2^24 + 44 or +46: 45 → 44 or 46 (tie? 45 odd, 44 even multiple... error ≤ 1). Fine, model holds with error ≤ ulp/2 always. Also the case where L' + ŝ < L' (can't happen, ŝ ≥ 0? ŝ could be negative? s_k ≥ 0 always (all smalls positive, 0.25-0.75 each, so exact small sum s_k ≥ 0, and ŝ ≈ s_k ≥ -something tiny). Actually ŝ ≥ 0 basically. And L' could be negative. |L' + ŝ| ≈ |L'|. Grid at magnitude of the sum. Fine.)
-
-Also, one more subtlety: when the accumulator magnitude is small (|L| < 2^20, e.g., near the end when large values have canceled), the grid is fine (ulp ≤ 0.125), so ŝ is exact-ish.
-
-And what about when |L| is small but we add smalls: exact. When |L| = 0 (end): F = ŝ_128.
-
-So the final result = ŝ_128 ≈ s_128 = exact sum of smalls, CORRUPTED only by the roundings of ŝ at each step, each ≤ ulp/2 where ulp is determined by |L_k| at that time!
-
-So the error = |ŝ_128 - s_128| ≤ sum over steps of ulp_k/2 (roughly), where ulp_k = 2^(e_k - 23), e_k = exponent of |L_k + ŝ_k| ≈ |L_k|.
-
-Hmm wait, but no: the errors in ŝ don't accumulate arbitrarily — each step, ŝ_new = round_grid(ŝ + v) or round_grid(ŝ); the error relative to the exact s: e_k = ŝ_k - s_k. e_new = round(ŝ + v) - (s + v) = round(ŝ+v) - (ŝ + v) + e. So errors accumulate: |e_128| ≤ Σ ulp_k/2. But they're round-to-nearest errors, essentially random signs, so RMS ≈ sqrt(Σ (ulp_k/√12)²)... but also correlated: hmm, actually there's a drift aspect: when the grid is coarse (ulp = 64, say) and ŝ ≈ 30, then round_grid(ŝ) with grid 64: ŝ = 30 → rounds to 64 or 0? Nearest multiple of 64 to 30 is 0 (distance 30) vs 64 (distance 34) → 0. So ŝ collapses to ~0 when ulp is huge! Then subsequent smalls added: ŝ + v ≈ 0.75, rounds to 0 (ulp 64). So ŝ stays 0 while |L| is huge. So the smalls summed during high-|L| periods are ENTIRELY LOST (ŝ pinned to 0), not just perturbed by ulp/2!
-
-Ah I see, so my earlier concern was right in a different form: ŝ tracks s only up to the grid; when the grid is coarse, ŝ is pinned to a multiple of the coarse grid (typically 0, since |s| ≤ 48 < ulp/2 for ulp ≥ 128, i.e., |L| ≥ 2^30). So all smalls added while |L| ≥ 2^29 (ulp 64; |s| ≤ 48 → could round to 0 or 64 if s > 32) are lost.
-
-Let me quantify: ulp at |L|: |L| ∈ [2^e, 2^(e+1)) → ulp = 2^(e-23).
-- e ≥ 30 (|L| ≥ 2^30 ≈ 1.07e9): ulp ≥ 128. |s| ≤ 48 < 64 = ulp/2 → ŝ pinned to 0. All smalls lost.
-- e = 29 (|L| ∈ [2^29, 2^30), ulp = 64): ŝ rounds to 0 if ŝ+s ≤ 32, to 64 if ≥ 32. Mostly pinned to 0 or 64. Smalls effectively lost (error up to ~32-64 possible! Actually if ŝ = 64 and true s = 40, error = 24; drift possible).
-- e = 28 (ulp = 32): ŝ quantized to multiples of 32; s up to 48: ŝ ∈ {0, 32, 64}; error up to 16.
-- e = 27 (ulp = 16): error up to 8.
-- e = 26 (ulp = 8): error up to 4.
-- e = 25 (ulp = 4): error up to 2.
-- e = 24 (ulp = 2): error up to 1.
-- e ≤ 23 (|L| < 2^24 ≈ 1.68e7, ulp ≤ 1): error up to 0.5; and for e ≤ 21, exact.
-
-Now, what's the trajectory of |L_k|? L_k is a random walk of ±m*2^20 steps, m ~ uniform[1,32], over 64 steps (interleaved with 64 small steps that don't change L). The maximum |L_k| over the walk: random walk with step RMS ~ sqrt((1+32)²/12)... m uniform 1..32: E[m] ≈ 16.5, E[m²] ≈ (1²+...+32²)/32 = (32·33·65/6)/32 = 33·65/6 = 357.5, var ≈ 357.5 - 272.25 ≈ 85, σ_m ≈ 9.2. Step ±m*2^20: variance per step ≈ 85·2^40, σ_step ≈ 9.2·2^20 ≈ 9.6e6. Over 64 steps: σ_total ≈ 9.6e6·8 = 7.7e7 ≈ 2^26.2. But it's a bridge (ends at 0)! A random walk conditioned to end at 0 — Brownian bridge: max magnitude ~ same order, ~2^26-2^27 typically.
-
-So typical |L| peaks around 2^26-2^27 (ulp 8-16), meaning ŝ quantization error ~4-8 per rounding event, and smalls lost when... at ulp = 8, ŝ = round to multiple of 8: smalls not entirely lost but heavily quantized (error ≤ 4 per event, and drift up to ~4). Hmm, wait, at ulp = 8, adding v = 0.25 to ŝ = 30: round(30.25 to grid 8) = 32 (30.25 → nearest multiple of 8: 32 (dist 1.75) vs 24 (dist 6.25) → 32). ŝ = 32. Exact s = 30.25. Error 1.75. Then add 0.5: s = 30.75, ŝ + 0.5 = 32.5 → round to 32. Error 1.25. Hmm, so ŝ ≈ s rounded to grid 8: error ≤ 4 at any time.
-
-So during periods where |L| ~ 2^26 (ulp 8), ŝ has error ≤ 4 (quantization to grid 8). When |L| drops (large values cancel), ulp drops, and ŝ re-quantizes finely but retains its error (e.g., ŝ = 32 with s = 30.5: error 1.5 persists). When |L| rises again to 2^28 (ulp 32), ŝ re-quantizes to grid 32: error ≤ 16.
-
-The final error = ŝ_128 - s_128: bounded by roughly the last coarse quantization experienced... no wait: e_k accumulates: e_new = e + round_err. The round errors are ±ulp/2-ish, random. But there's a bias: since s ∈ [0, 48] and grids quantize ŝ toward multiples of ulp... hmm, when ulp ≥ 128, ŝ → 0 (since s ≤ 48 < 64): the error becomes -s (all small sum so far lost). Then when |L| drops below 2^24, subsequent smalls are tracked exactly, but the previously lost ones stay lost. So the final error ≈ -(sum of smalls added during high-|L| periods) + (quantization drift errors).
-
-So the crucial question: what fraction of the 64 smalls per row are added during periods where |L_k| ≥ 2^24 (ulp ≥ 2, quantization error ≥ 1) or ≥ 2^26 (error ≥ 4) or ≥ 2^28?
-
-Hmm, and also: the smalls are scattered uniformly (random permutation), so ~half of them (32) are added in the first half of the walk, etc. The walk |L_k|: starts at 0, grows, meanders, returns to 0 at the end (all 64 large values used). The expected |L_k| at "time" t (after k of the 64 large values): for a bridge, E|L| ≈ σ√(k(1-k/64))·√(2/π)... Let me estimate: the variance of the bridge at fraction f: σ²_total·f(1-f) where σ²_total = 64·85·2^40 ≈ 5440·2^40. σ_total ≈ 73.7·2^20 ≈ 7.7e7 ≈ 2^26.2. At f = 0.5: std ≈ 2^26.2/2 = 2^25.2. E|L| ≈ 0.8·std ≈ 2^24.9. So mid-walk, |L| ~ 2^25 (ulp 4). At f = 0.25: std = σ_total·√(0.25·0.75) = 2^26.2·0.433 = 2^25.4; E|L| ≈ 2^24.3. Hmm, so |L| is around 2^24-2^26 for most of the middle of the walk.
-
-So ulp ~ 2-16 for most smalls-added-during-middle. Quantization error per event ≤ ulp/2 ~ 1-8. Errors accumulate as random walk with step size ~ few. Over ~64 events: RMS error ~ √64·(avg ulp/√12)... let's say typical ulp ≈ 4-8 → step σ ≈ 1.5-2.5 → RMS total ≈ 12-20. Hmm. Plus the bias toward 0 when ulp ≥ 128 — rare (needs |L| ≥ 2^30, i.e., 5σ event at peak... σ_max ~ 2^26-2^27; |L| = 2^30 is ~8-16σ. Unlikely but the walk max over 64 steps... still unlikely).
-
-Hmm, so per-row error RMS ~ 10-20 vs ref ~32 per row, ||err||_2 ≈ 10-20·8 = 80-160 vs ||ref||_2 ≈ 256 → E ≈ 0.3-0.6 > 0.1. FAIL?
-
-Hmm wait, but let me reconsider. Maybe I should think about the actual specific permutation and values rather than statistical estimates. The seed and permutation are fixed and public. The intended answer presumably: this is a "cancellation trap" test where naive float32 summation fails, and the kernel under test uses naive float32 sequential summation → reject.
-
-But wait, let me reconsider the error analysis. Let me redo it more carefully, because the exactness of large-value arithmetic is a strong structural property. Let me re-examine: is F_k really = L_k + ŝ_k with L_k exact?
-
-Potential flaw in my induction: when adding large x to F = L + ŝ, I claimed round(L' + ŝ) = L' + round_grid(ŝ). This requires L' to be a multiple of the grid AND the grid to be uniform around L' + ŝ. But binade boundaries: if L' + ŝ is just below 2^e and rounds up to 2^e, the grid changes... e.g., L' = 2^24 - 2^20 (15·2^20 = 15728640), ŝ = 48: L'+ŝ = 15728688 < 2^24 = 16777216. Grid in [2^23, 2^24) is 1. 15728688 is an integer? 15·2^20 = 15728640, +48 = 15728688, integer, so exactly representable (multiple of 1 in [2^23,2^24), and integers < 2^24 are exact ✓). Fine.
-
-Another edge: L' + ŝ slightly above a power of 2 where grid coarsens: rounding within the coarser binade... e.g., L' = 2^24 (16777216), ŝ = 48: value 16777264, grid in [2^24, 2^25) = 2: 16777264 = 2^24 + 48; 48 is a multiple of 2 ✓ exact. ŝ = 47: 2^24 + 47 → round to 2^24 + 46 or 48 (47 odd → tie? 47 is 1 away from both 46 and 48 → tie → round to even: 46 (23·2, 23 odd → hmm, "even" means the mantissa's last bit is 0: 46 = 101110₂, /2 = 10111 (odd); 48 = 110000, /2 = 11000 (even) → rounds to 48). Whatever, error ≤ 1 = ulp/2 ✓.
-
-OK the model holds. Also one more check: adding large x when F = L + ŝ and result magnitude < 2^20 (fine, exact since everything is a multiple of 0.25 well within precision... L' + ŝ: L' multiple of 2^20, ŝ multiple of 0.25 with |ŝ| ≤ 48ish... wait can ŝ be a non-multiple of 0.25? ŝ = round_grid stuff: grids are powers of 2 ≥ 0.25, so ŝ is always a multiple of 0.25 ✓. And magnitude < 2^21: multiples of 0.25 up to 2^21 need 23 bits ✓ exact.)
-
-So the model is solid: F_final = ŝ_128, error = ŝ_128 - s_128 where s_128 = exact small sum = the reference.
-
-Now, the dynamics of ŝ: ŝ_new = Q_g(ŝ + v) where Q_g rounds to grid g = ulp of |L_new| roughly, v = small added (or 0 for large steps: ŝ_new = Q_g(ŝ)).
-
-Hmm wait, careful: for a large step: F_new = round(L' + ŝ). The grid is determined by the magnitude of L' + ŝ. If |L'| ≥ 2^24, grid ≥ 2. So ŝ_new = Q_g(ŝ), error change ≤ g/2. If |L'| < 2^21, no rounding (exact).
-
-For a small step: F_new = round(L + ŝ + v), grid from |L + ŝ + v|.
-
-So EVERY step (128 steps) potentially re-rounds ŝ to the current grid. The error e_k = ŝ_k - s_k evolves: e_new = e_k + δ_k, δ_k = Q_g(ŝ + v) - (ŝ + v) ∈ [-g/2, g/2] (or for large steps, v = 0). The δ's are roughly random (round-to-nearest of a "random" value on the grid).
-
-RMS of final error: √(Σ δ_k²) ≈ √(Σ g_k²/12). With g_k = ulp of |L_k|.
-
-Now, |L_k| for the specific data: I can't compute exactly without running, but statistically: 64 large steps, ±m·2^20. The bridge variance at step k: Var ≈ σ²_step·k·(1 - k/64) (for a bridge with random ±... hmm, actually the signs here: the multiset is fixed: 32 positive, 32 negative, in random order. It's a random permutation of 32 +m's and 32 -m's (with random m's). Bridge-ish.)
-
-Σ g_k²/12 over the 64 small-addition steps (large steps also round ŝ, so include them too — ~128 steps total, but let's focus on magnitude): typical |L| during the middle ~ 2^24-2^26 → g ~ 2-8 → g²/12 ~ 0.3-5.3. Sum over ~100 effective steps: ~ 100·2 ≈ 200 → RMS error ≈ √200 ≈ 14.
-
-Hmm, so per-row error ~ 14 (RMS), but with variance across rows. ||err||_2 ≈ 14·√64 = 112 (if errors independent across rows). ||ref||_2: refs are sums of 64 smalls ~ [16,48], mean 32, std... each small uniform in {0.25,0.5,0.75} (mean 0.5, var 1/48 ≈ 0.0208), sum of 64: mean 32, var 64/48 = 1.33, std 1.155. So refs ≈ 32 ± 1.15, ||ref||_2 ≈ √(64·(32² + 1.33)) ≈ √(64·1025.3) ≈ √65620 ≈ 256.
-
-E ≈ 112/256 ≈ 0.44 >> 0.1. FAIL.
-
-Hmm, but wait. Let me double check the typical |L| magnitude, since this drives everything. Actually, let me reconsider: maybe I'm overestimating. Let me reconsider the walk: 32 positive values (m ~ U[1,32]·2^20) and 32 negative. Random interleaving. |L_k|: at k of 64 large steps done, with p positives and q negatives done (p+q = k), L = (sum of p m's - sum of q m's)·2^20. E[L] = (p - q)·16.5·2^20. Hmm, so it's not a mean-zero bridge at each point; E|L| depends on the imbalance of positives vs negatives so far. At k = 32, p - q ~ ±√32·... random: p ~ Hypergeometric(64, 32, 32): std of p ≈ √(32·(1/2)·(1/2)·(64-32)/(64-1)) ≈ √(32·0.25·0.508) ≈ √4.06 ≈ 2. So p - q = 2p - 32 ~ ±4. E|L| at k=32 ≈ 4·16.5·2^20·(1/2-ish) ≈ 2·16.5·2^20·... hmm, let me just say |p - q| ~ 4 typical → |L| ~ 4·16.5·2^20 ≈ 66·2^20 ≈ 6.9e7 ≈ 2^26. Plus fluctuation of sums: var of (Σp m - Σq m) = (p + q)·var(m) ≈ 32·85 = 2720 → std ≈ 52 → ±52·2^20 ≈ 5.4e7 ≈ 2^25.7. So |L| ~ 2^26-2^27 at mid-walk. Consistent with earlier: g ~ 8-16.
-
-Hmm OK so with g ~ 8-16 over much of the walk, δ ~ g/√12 ~ 2.3-4.6 per step, over ~64-128 steps: RMS error ~ 2.3·√128 ≈ 26 to 4.6·√128 ≈ 52. Even worse: E ~ 26·8/256 ≈ 0.8 to 1.6.
-
-Hmm wait, but hold on. I should double check whether errors really accumulate like a random walk, or whether there's mean reversion. Consider: ŝ is pinned to the grid of size g. e = ŝ - s. Each step: e_new = e + δ where δ = Q(ŝ + v) - (ŝ + v). Since ŝ + v mod g is roughly uniform, δ is roughly uniform on [-g/2, g/2], mean 0. So yes, random walk, no reversion. RMS final error ≈ g_rms·√(N_steps)/√12.
-
-But actually, wait: there's a subtlety — when the grid is coarse (g = 16) and s ≤ 48, ŝ takes values in {0, 16, 32, 48} (multiples of 16 near s). e = ŝ - s ∈ [-8, 8]. As s grows slowly (v ≤ 0.75 per step), ŝ jumps by 16 occasionally. e meanders in [-8, 8] — it's BOUNDED by g/2 as long as the grid stays g! Because e_new = Q_g(ŝ + v) - (s + v): |Q_g(ŝ+v) - (ŝ+v)| ≤ g/2, and e_new = (Q_g(ŝ+v) - (ŝ+v)) + e... no wait: e_new = ŝ_new - s_new = Q_g(ŝ+v) - (s+v) = [Q_g(ŝ+v) - (ŝ+v)] + (ŝ - s) = δ + e. Hmm, so e accumulates. But if e is large (say e = 8, ŝ = s + 8) and grid g = 16: ŝ + v = s + 8 + v, Q_16 rounds it to nearest multiple of 16. s mod 16 wanders... e meanders like a random walk REFLECTED at... hmm, no: e_new = e + δ, δ ∈ [-g/2, g/2] uniform-ish. There's no reflection. E.g., g = 16: s = 30, ŝ = 32, e = 2. Add v = 0.25: ŝ+v = 32.25 → Q = 32, e = 32 - 30.25 = 1.75. Add v = 0.75: ŝ+v = 32.75 → Q = 32, e = 32 - 31 = 1. Hmm, e stays small here. When does e grow? e grows when ŝ+v is near a grid midpoint and rounds DOWN while s keeps growing, or rounds UP... e is a walk with steps δ; over many steps e ~ N(0, Σδ²/...). It's NOT bounded by g/2. Example: g = 16, s = 8 (ŝ = 8? no wait, if grid is 16, ŝ must be a multiple of 16: ŝ = 8 impossible. Let me redo: ŝ ∈ {0, 16, 32,...}). s = 8, ŝ = 8?? Not on grid. Hmm, ŝ = Q_16(ŝ_prev + v): multiples of 16 only. So ŝ ∈ {0,16,32,48}. s = 8 → ŝ = 8±8 ∈ {0, 16}, e = ±8. Add smalls one by one: s = 8.25, ŝ = Q_16(0 + 0.25)... wait I need ŝ_prev: say ŝ = 0, s = 8, e = -8. Add v = 0.75: ŝ_new = Q_16(0.75) = 0, s = 8.75, e = -8.75. Add: e keeps decreasing! Until ŝ + v ≥ 8 (half grid), i.e., s ≥ 16 - ... hmm: ŝ stays 0 while ŝ + cumulative v < 8. But ŝ = 0 and s = 8.75: ŝ + v < 8 means v < -0.75?? No: ŝ + v = 0 + 0.75 = 0.75 < 8 → Q = 0. So ŝ stays 0 FOREVER while grid is 16, regardless of s! Because ŝ (not s) is what gets re-rounded: ŝ_new = Q(ŝ_old + v). If ŝ_old = 0 and v ≤ 0.75 < 8, ŝ_new = 0 always!!
-
-OH. This is the key point I missed earlier and then un-missed: once ŝ is rounded down to 0 (or any grid multiple), subsequent tiny additions v < g/2 round back to the same grid multiple. So ŝ is ABSORBING: while the grid is coarse (g > 1.5), all smalls are lost (ŝ stuck at its current grid multiple). ŝ only resumes tracking s when the grid becomes fine enough: g ≤ 0.5? Let's see: ŝ = 0 (grid multiple), v = 0.75: Q_g(0.75) = 0 if g ≥ 2 (0.75 < 1 = g/2... for g = 2: 0.75 < 1 → rounds to 0 ✓; for g = 1: 0.75 → nearest multiple of 1: 1 (dist 0.25) vs 0 (dist 0.75) → 1! So ŝ jumps to 1). Hmm interesting: for g = 1: Q_1(0.75) = 1, error +0.25. For g = 0.5: Q_0.5(0.75) = 0.5 (0.75 is midway between 0.5 and 1.0 → tie → even: 0.5 = 1·0.5 (odd coefficient), 1.0 = 2·0.5 (even) → rounds to 1.0. Hmm.) For g = 0.25: exact.
-
-So the dynamics: while |L| ≥ 2^23 (g ≥ 1), ŝ is essentially frozen at a multiple of g (absorbing state; v ≤ 0.75 can move it only when ŝ+v is within g/2 of a different multiple... e.g., g = 1, ŝ = 0, v = 0.75 → 1. So it CAN move for g = 1). For g ≥ 2 (|L| ≥ 2^24): v ≤ 0.75 < g/2 = 1 ≤ ... for g = 2: ŝ+v ∈ [ŝ, ŝ+0.75], within 1 of ŝ → rounds to ŝ (or ŝ+2 if ŝ+v > ŝ+1: impossible since v ≤ 0.75 < 1... ŝ + v ≤ ŝ + 0.75 < ŝ + 1, so nearest multiple of 2 is ŝ (dist ≤ 0.75 < 1) vs ŝ+2 (dist ≥ 1.25) → ŝ. FROZEN.) For g ≥ 2, ŝ frozen under small additions. For large additions, ŝ re-rounds: ŝ_new = Q_g'(ŝ) where g' = new grid: if g' ≤ current grid... ŝ is already a multiple of powers of 2 ≥ 0.25; Q_g'(ŝ) = ŝ if g' divides ŝ's grid... ŝ is a multiple of g (old grid), and grids are powers of 2: if new grid g' ≤ g, ŝ stays (multiple of g' too? ŝ multiple of g, g ≥ g', g power of 2 → ŝ multiple of g' ✓). If g' > g: ŝ rounds to nearest multiple of g': could change!
-
-So the full picture: ŝ is a multiple of the coarsest grid seen recently; it changes only when the grid coarsens (large |L|) and ŝ isn't a multiple of the new grid — then it rounds to ±g'/2. And smalls are absorbed only when the grid is fine (g ≤ 0.5, i.e., |L| < 2^22... let's see g = 0.5 at |L| ∈ [2^22, 2^23): v = 0.75: Q_0.5(0.75) = 0.5 or 1 (tie → 1). v = 0.25: Q_0.5(0.25) = 0.5? 0.25 midway between 0 and 0.5 → tie → even: 0 = 0·0.5 (even), 0.5 = 1·0.5 (odd) → rounds to 0! So v = 0.25 lost at g = 0.5 (tie-to-even). Hmm, so even at |L| ~ 2^22-2^23, 0.25-valued smalls are lost (ties), 0.5 exact, 0.75 → 1 (gain 0.25).
-
-For g = 0.25 (|L| ∈ [2^21, 2^22)): all smalls exact. For |L| < 2^21: g ≤ 0.125: exact.
-
-So: smalls are absorbed (ŝ tracks s) only when |L| < 2^22-ish (g ≤ 0.5, with partial absorption at g=0.5). And the final answer ŝ_128: the smalls counted are those added during the LAST fine-grid period... no wait — ŝ retains absorbed smalls as long as subsequent coarse periods don't re-round them away. When grid coarsens to g' and ŝ (multiple of old finer grid) isn't a multiple of g', ŝ rounds to nearest multiple of g'. E.g., ŝ = 30.25 (fine grid), |L| jumps to 2^26 (g' = 8): ŝ → 32 (nearest multiple of 8: 30.25 → 32 (dist 1.75) vs 24 (dist 6.25) → 32). Error +1.75. If |L| jumps to 2^30 (g' = 128): ŝ = 30.25 → 0 (dist 30.25 < 64) → ALL ABSORBED SMALLS LOST.
-
-So the final ŝ_128 = (sum of smalls absorbed during fine periods) + quantization mangling, where mangling depends on the coarsest grids encountered after absorption.
-
-Given the walk |L| peaks ~ 2^26-2^27 (typical) mid-walk: smalls added before the peak (while |L| small, early walk) get re-quantized at g ~ 8-16 mid-walk (error ~ ±4-8), then... at the end, |L| → 0 (all large values in), grid → fine, but ŝ retains its mangled value: ŝ_128 = Q-mangled version of early-absorbed smalls + smalls absorbed after |L| finally dropped below 2^22 (near the end of the walk).
-
-Hmm, so what's the final error? Components:
-1. Smalls added while |L| ≥ 2^24 (g ≥ 2): completely lost (never absorbed, ŝ frozen). Error = -those smalls.
-2. Smalls added while |L| ∈ [2^22, 2^24): partially lost (g = 0.5 or 1 quantization; 0.25s lost at g=0.5, etc.). Error ~ -0.25·(fraction).
-3. Smalls added while |L| < 2^22: absorbed, but then re-mangled by later coarse grids: error up to ±g_max_later/2 ~ ±8 (if later |L| ~ 2^26-2^27).
-4. Plus the mangled residue.
-
-So the dominant error: ALL smalls added while |L| ≥ 2^24 are lost. How many? |L| ≥ 2^24 corresponds to |M| ≥ 16 where M = multiplier sum. From the walk statistics: |L| ~ 2^26 mid-walk, so |L| ≥ 2^24 for a large fraction of the walk — maybe 70-80% of the time (|L| is above 2^24 most of the mid-walk; near the start (first few steps) and end (last few) it's below). Random walk with step ~9.2·2^20 σ: reaching 16·2^20 from 0 takes ~ (16/9.2)² ≈ 3 steps. So the walk exceeds 2^24 after ~3-5 large steps and stays above until ~3-5 steps from the end. So roughly 64 - 10 = 54 of 64 large steps have |L| ≥ 2^24, i.e., ~85% of the walk duration. The smalls are uniformly scattered: ~85% of the 64 smalls (~54 smalls, sum ~27) are added during |L| ≥ 2^24 → LOST. Remaining ~10 smalls (sum ~5) absorbed near the start (before |L| reaches 2^24 — but wait, at the start, |L| < 2^24 but is it < 2^22? |L| ≥ 2^22 after ~ (4/9.2)² ≈ 0.2 steps — basically immediately (first step m ≥ 4 with prob 29/32 gives |L| ≥ 2^22... m·2^20 ≥ 4·2^20 = 2^22 ✓ m ≥ 4). So after the FIRST large step, |L| is typically ≥ 2^22 already (m ≥ 4 with prob ~91%). Hmm! So even early smalls (added after the first large step) are at grid g = 0.5-2+...
-
-Ugh, so let me re-think: the smalls added before the FIRST large value (j less than the first large-value position): absorbed exactly (L = 0, grid 0.25... wait |L| = 0, g = tiny, exact ✓). Then the first large value: |L| = m·2^20; if m ≥ 4, g ≥ 0.5 → subsequent smalls partially lost; if m ≥ 16, g ≥ 2 → subsequent smalls fully frozen.
-
-So essentially: only smalls added (a) before the first large value, and (b) after the last time |L| drops below 2^22 and stays... no — after the last time |L| < 2^22 (near the end of the walk), are absorbed. Plus mangling of the early absorbed ones by the mid-walk coarse grid (g ~ 8-16 → error ±4-8, but wait — actually if the early absorbed sum is ≤ ~5 and mid-walk grid is 16: ŝ = Q_16(5) = 0 → lost entirely. If grid 8: Q_8(5) = 8 (5 → 8 (dist 3) vs 0 (dist 5) → 8, error +3).)
-
-So the final result per row ≈ (sum of smalls added after |L| finally < 2^22 near the end) ± (mangling of the early sum, ~±g_mid/2 or total loss).
-
-The number of smalls added near the end (last ~2-5 large steps' worth of columns): the walk drops below 2^22 only in the last ~2-3 large steps (and maybe briefly mid-walk if it crosses zero — it can! The walk can cross 0 mid-walk, giving |L| < 2^22 windows mid-walk too. Random walk crossing zero: happens a few times typically).
-
-Hmm, OK. Statistically, per row: absorbed smalls ≈ smalls in "fine windows" (|L| < 2^22): expected fraction: |L| < 2^22 ≈ |M| < 4: the walk spends time near zero at the start, end, and crossing points. For a bridge-like walk with σ_step ~ 9.2 (in units of 2^20) and total 64 steps: fraction of time with |L| < 4·2^20... The walk is like a Brownian bridge with std at mid ~ 2^26/2^20 = 73.7·0.5 = 37 (in M units, mid-walk std ~ 37). Fraction of time |M| < 4: for a Brownian bridge, time near zero: P(|B_bridge(t)| < 4) at time t: std_t = 37·√(t(1-t))... near t=0.1: std = 37·0.3 = 11; P(|X| < 4) ≈ 0.28. Near t = 0.5: std 37, P ≈ 0.086. Integrating: overall fraction maybe ~0.1-0.15. So ~6-10 smalls of 64 absorbed (sum ~3-5), and ~54-58 lost (sum ~27-29).
-
-Final per-row output ŝ_128 ≈ 3-5 (absorbed tail smalls + mangled early smalls) vs reference ≈ 32. Per-row error ≈ 27. ||err||_2 ≈ 27·8 = 216 (rows independent-ish), ||ref||_2 ≈ 256. E ≈ 0.84 >> 0.1. FAIL, massively.
-
-Hmm wait, hold on. Let me double-check the claim that at g ≥ 2 smalls are frozen/lost, i.e., that |L| ≥ 2^24 is really that common, and more importantly, whether this construction is really as adversarial as I think. Let me re-read the input construction:
+Hmm, wait. Let me reconsider. Maybe the intended implementation quantizes A and B to int4 and the inputs are constructed so that this is accurate? Let me re-read make_inputs.
 
 ```python
-w = rng.integers(1, 33, size=(64, 32)).astype(np.float32) * np.float32(1048576)
-small = rng.integers(1, 4, size=(64, 64)).astype(np.float32) * np.float32(0.25)
-values = np.concatenate([w, -w, small], axis=1)
+rng = np.random.Generator(np.random.PCG64(SEED))
+x = rng.standard_normal(128)
+x /= np.linalg.norm(x)
+matrices = []
+for _ in range(2):
+    w = rng.standard_normal((64, 128))
+    target = 0.5 + 0.02 * rng.standard_normal(64)
+    projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+    w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+    matrices.append(w.astype(np.float32))
 ```
 
-w: (64, 32), values m·2^20, m ∈ [1, 32]. small: (64, 64), values {0.25, 0.5, 0.75}. concatenate: (64, 128): [w (cols 0-31) | -w (cols 32-63) | small (cols 64-127)].
+Hmm wait — `x /= np.linalg.norm(x)` — x is float64 here, normalized. Then w is float64 standard normal. target ≈ 0.5. projection = w @ x (float64). w adjusted so w @ x = target. Cast to float32.
 
-Then `order = rng.permutation(128)`; `values = values[:, order][:, PERMUTATION]`.
+So A x ≈ 0.5 (up to float32 cast effects ~1e-6). B: note B = matrices[1][PERMUTATION] — a row permutation. Permuting rows doesn't change row contents; each row of B still satisfies B_i x ≈ 0.5 (the targets are attached to rows). So B x ≈ 0.5 too (permuted targets). y ≈ 1.0 per row.
 
-So the final column j corresponds to original column PERMUTATION[order[j]]... or order[PERMUTATION[j]]? values[:, order] reorders columns: new column j = old column order[j]. Then [:, PERMUTATION]: final column j = (column-order-permuted) column PERMUTATION[j] = original column order[PERMUTATION[j]]. Anyway, it's a composition of two random permutations = a random permutation. The point: the final matrix has, in each row, 32 large positives, 32 large negatives, 64 smalls, scattered in a fixed random column pattern (same pattern for all rows).
+So the reference is ~1 per row, and the signal direction... The key: the rows have large random components orthogonal to x, with only a small controlled component along x. Quantization error is dominated by the random parts, projecting ~0.12 onto x. So relative error ~12% per branch, 17% combined.
 
-So yes: exact row sum = sum of smalls ∈ [16, 48] (multiple of 0.25). And float32 sequential summation loses most smalls due to catastrophic cancellation + absorption. The kernel does exactly float32 sequential summation in column order j = 0..127.
+Hmm, so with this input construction, int4 per-row quantization gives ~17% error. That fails E<=0.1. So if the "intended" implementation is int4 quantization, the input construction would make it fail... unless the intended int4 implementation is more accurate, e.g.:
 
-Therefore the kernel FAILS the tolerance E ≤ 0.1 (expected E ~ 0.5-0.9). REJECT.
+- Asymmetric quantization (min/max with zero point)? Similar error.
+- Per-row scale = max|a|/7 with... hmm.
+- Quantizing to int8 (max/127)? That would give error ~ 2.9/127/2 ≈ 0.011 per element → projection error ~0.0064 → E ≈ 0.9%. Passes easily. But that's int8, not int4.
 
-But wait — wait. Let me double check the summation order and the grid thresholds once more, and consider whether the intended answer might be "trust" because maybe... hmm, let me reconsider whether the errors might be smaller than I estimate. Key numbers:
+Hmm, "not a requirement to reproduce INT4 arithmetic bit-for-bit" — maybe the reference behavior (some original kernel) used int4, but the contract only requires final numerical accuracy? That seems contradictory: if the original used int4 with this input, its output would be ~17% off, and the contract E<=0.1 would fail for the original too.
 
-- Large values: up to 32·2^20 = 2^25 = 33.5M. Partial sums up to ~2^27-2^28 at peaks (sum of ~20 same-sign values ~ 20·16.5·2^20 ≈ 330·2^20 ≈ 2^28.4). Hmm, actually let me reconsider the walk magnitude: it's a random permutation of 32 positives and 32 negatives. The maximum excursion: for a random walk bridge with 64 steps of mean size 16.5·2^20 (m's positive, signs mixed)... The expected max |M| where M = Σ±m_i: For each prefix, M(prefix) has E = (p - q)·16.5 and std = √(k·85). The max over prefixes of |M|: dominated by mid-walk: std at mid ~ √(32·85) ≈ 52, plus mean drift |p - q|·16.5 ~ up to 4·16.5 = 66 at k=32 (p-q std ~4). Hmm, so |M| ~ up to 100-150 at peaks (combining drift and fluctuation): |L| ~ 100·2^20 ≈ 2^26.6 to 150·2^20 ≈ 2^27.2. So peak grids g ~ 2^(27-23) = 16 to 32. Yes, g_mid ~ 8-32.
+Wait, unless... hmm. Let me reconsider. Maybe the original kernel used int4 arithmetic in a different way: e.g., decompose A = Q(A)*sa with sa per-row, and also store a correction? Or maybe the intended computation is (A+B)@x where A+B is quantized... no.
 
-So during mid-walk, ŝ is frozen at multiples of 8-32; all smalls lost. Confirmed.
+Hmm, hold on, wait. Let me reconsider the input construction. Maybe I'm misreading: `w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]`. np.sum(x*x) = ||x||² = 1 (after normalization). So the adjustment is (target - projection) ⊗ x. Yes.
 
-Also, the smalls added at the very end (after the last large value): the last few columns. After all 128 values... wait, the smalls interleaved: the last columns could be smalls with L = 0 (all large done): those are absorbed exactly. The number of trailing smalls: random, ~ expected 1 (64 smalls / 129 gaps ~ 0.5 each end). Plus smalls in mid-walk fine windows.
+Hmm, what if the intent of the construction is different: maybe the intended "signal" is such that A and B rows, when quantized... no.
 
-So expected output per row: maybe ~2-6 (sum of absorbed smalls, mangled), vs ref ~32. Error ~26-30 per row, RMS across rows ~similar. E ≈ (26·8)/256 ≈ 0.8.
+Alternatively, maybe the problem is one of those "the kernel is subtly wrong" tests where the correct version uses a finer quantization or fp16/tf32, and this candidate uses int4 which is too coarse. The phrase "not a requirement to reproduce INT4 arithmetic bit-for-bit" might be a red herring or might refer to the fact that approximate int4-like arithmetic is fine as long as final accuracy holds — i.e., you don't need to match a reference int4 kernel bit-for-bit; you need to match the exact float64 reference within 0.1.
 
-So the kernel clearly fails: E ~ 0.8 >> 0.1. REJECT with high confidence.
+Hmm wait, actually, re-reading: "This is finite-workload compliance, not a claim about all inputs, and not a requirement to reproduce INT4 arithmetic bit-for-bit." I think this means: the contract is about the final output accuracy on this workload; you don't have to match some int4 reference exactly. So the mention of INT4 is because the kernel family under consideration uses int4-style quantization, and the contract clarifies that only the final accuracy matters.
 
-Hmm, but wait — the problem statement says "The kernel may use float32 arithmetic and any summation order if this numerical requirement is met." So the question is purely numerical: does this float32 sequential summation meet E ≤ 0.1 on this input? Based on my analysis: no, catastrophically.
+But then, if int4 quantization inherently gives ~17% error on this workload, the contract E<=0.1 would be unachievable by any int4 per-row symmetric quantization... unless the workload is designed such that a *smarter* quantization passes.
 
-But let me sanity-check my "absorption" analysis with a small concrete example, because the whole verdict hinges on it.
+Hmm, what smarter int4 quantization could pass? Let's think: we need ||Q(A)x - Ax|| per row <= ~0.07 (so combined sqrt(2)*0.07... wait, we need total E <= 0.1, i.e., per-row RMS error <= 0.1 (relative to per-row signal 1.0, since ||ref|| ≈ 8 and sqrt(64)=8). Actually E = ||err||/||ref||; if err_i iid with std σ, ||err|| ≈ 8σ, ||ref|| ≈ 8, so E ≈ σ. Need σ <= 0.1. Combined σ = sqrt(σ_A² + σ_B²) <= 0.1 → each σ_branch <= 0.07.
 
-Concrete: values in order: [small 0.5, +1·2^20, small 0.75, +32·2^20, small 0.25, -33·2^20, ...]. 
+Per-row branch error: sum_j (a_ij - Q(a_ij)) x_j. To make this small with int4 quantization... One approach: choose the scale to minimize ||(a - Q(a))·x||? But the quantizer here uses max/7.
 
-- F = 0. Add 0.5: F = 0.5 (exact).
-- Add 2^20: F = 2^20 + 0.5. Magnitude ~2^20, ulp = 2^-3 = 0.125. 2^20 + 0.5: representable? In [2^20, 2^21), grid 0.125: 0.5 is a multiple of 0.125 ✓. Exact: F = 1048576.5.
-- Add 0.75: F = 1048577.25: multiple of 0.125 ✓ exact.
-- Add 32·2^20 = 2^25: F = 2^25 + 1048577.25 = 33554432 + 1048577.25 = 34603009.25. Magnitude ∈ [2^25, 2^26), grid = 4. Round to nearest multiple of 4: 34603009.25 → 34603008 (34603009.25 / 4 = 8650752.3125 → nearest multiple of 4: 34603008 (dist 1.25) vs 34603012 (dist 2.75) → 34603008). F = 34603008. Exact partial = 34603009.25. Error = -1.25. Note: L = 33·2^20 = 34603008, ŝ was 1048577.25?? Wait, that's wrong! ŝ should be ≤ 48 (sum of smalls ≤ 64·0.75 = 48). I mis-setup: ŝ = 0.5 + 0.75 = 1.25, and L = 2^20 + 2^25. Let me redo: after step 2: F = 2^20 + 0.5 (L = 2^20, ŝ = 0.5). Step 3: F = 2^20 + 1.25 (L = 2^20, ŝ = 1.25). Step 4: add 2^25: exact sum = 2^25 + 2^20 + 1.25 = 34603009.25 → rounds to 34603008 = 33·2^20. So ŝ: 1.25 → 0. LOST. ✓ matches model (grid 4 at magnitude 2^25: Q_4(1.25) = 0).
-- Add 0.25: F = 34603008.25 → grid 4 → 34603008. Lost ✓.
-- Add -33·2^20: F = 34603008 - 34603008 = 0. L = 0. (Exact: 33·2^20 - 33·2^20 = 0 ✓.) F = 0, ŝ = 0. Exact partial sum = 1.5. Error -1.5. The smalls are GONE. ✓.
+Alternatively: since a·x = 0.5 exactly, maybe an implementation could compute Q(a)·x + (a - Q(a))·x... trivial.
 
-Great, model confirmed: smalls absorbed while |L| big are permanently lost (here, ŝ = Q_4(1.25) = 0, and subsequent smalls frozen at 0 while grid ≥ 2).
+OR: maybe the intended implementation quantizes differently: quantize (a·x) directly? No...
 
-So on the real data: each row's float32 sequential sum ≈ (smalls absorbed during fine-grid windows) ≪ reference. Error per row ~ tens. E ~ 0.5-0.9. REJECT.
+OR: maybe the intended trick: A@x + B@x = (A+B)@x. Quantize A+B? Same issue.
 
-Hmm, now let me reconsider one thing: the problem says the reference is "for each row, sum the ORIGINAL float32 entries in real arithmetic, evaluated with float64 or an independently checked high-accuracy summation." So reference = exact = sum of smalls per row (~32). Yes.
+Hmm, hold on. Let me reconsider: maybe the intended implementation uses int4 for the *multiplication with x* — i.e., quantize x? No...
 
-And "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008)". ||ref||_2 ≈ 256. Output: per-row ~ a few units (0-10). ||output - ref||_2 ≈ ~30·8 = 240ish. E ≈ 0.9. FAIL.
+Wait, actually, maybe I've got the wrong idea about what the "correct" implementation is. The task is just: given this kernel, decide if it meets the contract. I don't need to know the intended correct implementation. I need to determine whether E <= 0.1 for THIS kernel on THIS workload.
 
-Unless... hmm, wait. Let me reconsider: is it possible that the walk |L| stays small?? No: the walk is a random interleaving; mid-walk partial sums are huge (~10^8). Certain.
+My analysis says E ≈ 0.17 ± fluctuation. Let me try to be more careful and precise, because the decision hinges on this.
 
-Also, let me double check that there isn't something special about the given permutation that clusters smalls at the end or something. The permutation is a composition of a fresh RNG permutation and the hardcoded PERMUTATION. Both essentially random. The hardcoded PERMUTATION: [123, 54, 34, 37, 17, 97, ...] looks random. Composing two random permutations = random. No structure.
+Let me set up the computation more carefully.
 
-Hmm, one more consideration: which original columns map where. Original columns 0-31: w (positive), 32-63: -w, 64-127: small. Final column j ← original column σ(j) where σ = order∘PERMUTATION (composition). The positions of smalls (original cols 64-127) in the final matrix: 64 positions out of 128, random. Positions of +w and -w: random. So the summation order encounters smalls and larges interleaved randomly. ✓.
+x: 128 iid N(0,1), normalized. ||x||_2 = 1 exactly. ||x||_1 ≈ E: for unit vector uniform on sphere in R^128, E||x||_1 = sqrt(2/π)*sqrt(128)/... hmm: E[||z||_1/||z||_2] where z iid N(0,1). ||z||_1 ≈ n sqrt(2/π) = 128*0.798 = 102.1, ||z||_2 ≈ sqrt(128) = 11.31. Ratio ≈ 9.03. OK.
 
-So the verdict: REJECT. The kernel uses naive float32 sequential accumulation, which on this cancellation-heavy workload loses the small addends (catastrophic cancellation), producing outputs that are off by ~50-100% relative, E ≈ 0.5-0.9 ≫ 0.1.
+A: 64 rows. Row i: a_ij = w_ij + c_i x_j, w iid N(0,1), c_i = target_i - w_i·x. Note c_i and w_i are dependent (c_i = target_i - w_i·x). The row's max |a|: dominated by w. ≈ 2.9 ± 0.3.
 
-Wait, but let me reconsider whether the kernel has any other issues (correctness of indexing etc.):
+Quantization: sa = max/7. e_ij = a_ij - sa round(a_ij/sa). |e_ij| <= sa/2, roughly uniform.
 
+err_i^A = sum_j e_ij x_j.
+
+Now here's a subtlety: is e_ij correlated with x_j? a_ij = w_ij + c_i x_j. The quantization error is a deterministic function of a_ij. Since w_ij is independent of x_j, and the c_i x_j term is small (c_i ~ 1.2, x_j ~ 0.088 → 0.1), a_ij ≈ w_ij + small. e_ij is roughly a "random" function of w_ij. So e_ij x_j: e_ij depends on w_ij (independent of x_j) plus tiny dependence through c_i x_j. So essentially independent. Var(err_i^A) ≈ sum_j x_j² Var(e) = (sa²/12). With sa ≈ 0.414: Var ≈ 0.0143, std ≈ 0.12.
+
+Similarly for B. Note B's rows are a permutation of matrices[1]'s rows — same distribution.
+
+err_i = err_i^A + err_i^B, std ≈ 0.12*sqrt(2) ≈ 0.17.
+
+E ≈ ||err||/||ref|| ≈ (sqrt(64)*0.17)/(sqrt(64)*1.0) ≈ 0.17.
+
+Hmm, so unless my estimate of the quantization error std is way off, E ≈ 0.17 > 0.1.
+
+Let me double check Var(e) = sa²/12. e uniform on [-sa/2, sa/2]: Var = sa²/12. sa = 2.9/7 = 0.414. sa²/12 = 0.1717/12 = 0.0143. std = 0.1196. Yes.
+
+But is e really uniform? The values a_ij/sa spread over [-7, 7] with a roughly normal density with std 1/0.414 = 2.42. The fractional parts: for a distribution with std 2.42 (i.e., spanning ~ 5-6 quantization bins on each side), the fractional part distribution is close to uniform but not exactly — there's some non-uniformity, but close enough. Var(e) ≈ sa²/12 * (something like 0.9-1.0). Fine.
+
+So per-branch per-row error std ≈ 0.11-0.12. Combined ≈ 0.16-0.17.
+
+For E <= 0.1, we need per-row error RMS <= 0.1. The probability... if true std is 0.165, RMS over 64 rows concentrates at 0.165 with relative std 1/sqrt(2*64) = 8.8%. So RMS ∈ [0.15, 0.18] with high probability. 0.1 is 4 sigma below (in units of 0.0146). Extremely unlikely to pass.
+
+Therefore: REJECT.
+
+Hmm wait, but before finalizing, let me reconsider whether there's some subtlety in the kernel that makes it more accurate than I think.
+
+1. `sa = tl.max(tl.abs(a), 0) / 7.0` — per-row scale. Note: tl.max(tl.abs(a), 0) — max over the row of |a|. Yes.
+
+2. `qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))` — round-to-nearest, clamp.
+
+3. `ya = tl.sum((qa * sa) * x, 0)` — dequantize and dot with x. In float32. qa*sa in fp32: exact-ish.
+
+4. `yb` similarly for B.
+
+5. `Y[row] = ya + yb`.
+
+One potential issue: if sa is 0 (row all zeros) → division by zero → inf/nan. But rows are random normals, max > 0 always. Not an issue.
+
+Another: `tl.floor(a/sa + 0.5)` — fine.
+
+So the computation is as I described: symmetric per-row int4 quantization (15 levels), dequantized dot products.
+
+The numerical error is dominated by quantization: ~17% relative. Fails E <= 0.1.
+
+Hold on, hold on. Let me reconsider the problem statement once more: "Reference: y = A @ x + B @ x on the original float32 inputs, evaluated in float64. Metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))."
+
+So denominator = max(||ref||, 0.08) ≈ 8. E ≈ 0.17. Fails.
+
+Hmm, but wait. Now I'm worried: what if the problem designers intended for this to be the CORRECT implementation, and my analysis is wrong? Let me re-examine the input construction for anything that would make quantization accurate.
+
+Key insight attempt: What if the rows of A and B, after adjustment, have small max? No — w is standard normal (64,128), max per row ~2.9. The adjustment adds ~O(1) * x, small per-element.
+
+What if x is special? x is normalized gaussian — nothing special.
+
+What if the "target" 0.5 matters differently... The projection signal is 0.5 per branch. Quantization error projection ~0.12. So relative error per branch ~24%.
+
+Hmm, what if instead the intended reading is: the kernel is one of several candidates, and the grader wants me to detect that int4 quantization is too coarse for this workload. The problem explicitly says "Either branch may individually exceed 0.1 without violating the contract" — meaning: don't reject just because one branch is inaccurate; check the final output. In this case, both branches are inaccurate AND the final output is inaccurate. So reject.
+
+But hmm, wait: what if the final output IS accurate due to some cancellation? err^A and err^B are independent (A and B generated from independent randomness). No systematic cancellation. Combined error is sqrt(2)x branch error. No.
+
+Let me also double-check: is there any chance the quantization error is much smaller because... hmm, the clamp? No.
+
+What about the possibility that max|a| per row is much larger, making sa larger and error larger? Either way, error scales with max.
+
+Actually, let me compute E as a function of max|a|: per-branch per-row error std = max/(7*sqrt(12)) = max/24.25. Combined = max*sqrt(2)/24.25 = max/17.15. E ≈ max/17.15 (since per-row signal 1.0). For E <= 0.1: max <= 1.71. But max of 128 |N(0,1)| ~ 2.9. So E ≈ 2.9/17.15 ≈ 0.169. 
+
+For E to be <= 0.1 by luck, we'd need the realized chi-square to be tiny. No.
+
+Additionally, let me sanity-check the per-row max distribution: 64 rows, each max ~2.9 ± 0.3. Average 2.9. So E ≈ 0.169 ± a bit. Even the most favorable rows don't save the 2-norm.
+
+OK so my verdict: REJECT, because per-row int4 symmetric quantization with scale max/7 introduces ~15-20% relative error on this workload, exceeding the 0.1 tolerance.
+
+Wait, wait. Hmm, but let me reconsider the phrase "not a requirement to reproduce INT4 arithmetic bit-for-bit" once more. This strongly implies the reference/target implementation uses INT4 arithmetic. If the target implementation uses int4 arithmetic and passes E <= 0.1, then int4 quantization CAN pass on this workload. How?
+
+Possibility: the target int4 implementation uses a different scaling, e.g., scale = max/7 but with per-row *error minimization* along x? Or uses affine quantization? Affine (min/max) quantization with 15 levels: range [min, max] ≈ [-2.9, 2.9], step = 5.8/14 = 0.414 — same as symmetric here (since min ≈ -max for gaussian rows). Same error.
+
+Possibility: int4 with per-row scale but ALSO the dot product computed with the residual of x? Hmm.
+
+Possibility: the intended implementation splits differently: e.g., y = A@x computed via quantized A with per-row scale, PLUS a correction term computed in low precision... 
+
+Possibility: the intended implementation quantizes to int4 but uses MANY more effective levels via two-part decomposition (like int4 × int4 double quantization)? 
+
+Hmm, alternatively: maybe the intended implementation quantizes a·x per row?? Like, compute the row sums... no.
+
+OR: maybe the intended implementation doesn't quantize A and B at all — it uses int4 arithmetic for something else, like... hmm. Actually, maybe the original problem (from which this is derived) is about "int4 matmul emulation" where A and B are ALREADY int4-representable? But here they're not — they're arbitrary float32 gaussians.
+
+Hmm wait, actually, maybe I should reconsider: maybe the input construction intends A and B to be int4-friendly? Let me re-read: w = standard_normal. No rounding to int4 levels. So no.
+
+Hmm, so the mention of INT4 in the problem statement is puzzling. Let me re-read the problem statement once more:
+
+"Contract: all outputs must be finite and E <= 0.1. Approximate intermediate values are allowed if the FINAL output meets this requirement. Either branch may individually exceed 0.1 without violating the contract. Target implementation: the supplied Triton kernel, on an NVIDIA T4. Input generator uses NumPy PCG64 on CPU. This is finite-workload compliance, not a claim about all inputs, and not a requirement to reproduce INT4 arithmetic bit-for-bit."
+
+Hmm, "Approximate intermediate values are allowed if the FINAL output meets this requirement" — e.g., using tf32 or bf16 intermediates is fine. "Either branch may individually exceed 0.1" — the branch outputs (A@x and B@x separately) may be inaccurate, as long as the sum is fine. Hmm, when could the sum be fine but branches not? If errors cancel between branches! E.g., an implementation that computes y = (A+B)@x where... no. Or an implementation that quantizes A and B with the SAME scale and the errors... no.
+
+OR: maybe the intended implementation computes ya with quantized A and yb = (B - something)... 
+
+OR: think of it this way: maybe the intended implementation quantizes the COMBINED matrix (A+B)? (A+B) rows are N(0,2) with projection 1.0. Quantization error projection: sa' = max|a+b|/7 ≈ 4.1/7 = 0.59, error std = 0.59/3.46 = 0.17. Same. No.
+
+OR: maybe the intended implementation uses int4 quantization of A and B but with scale per row = max/7 and then computes the dot product in int8 accumulating... the quantization error is the same regardless of accumulation precision. So no int4 scheme with 15 uniform levels and per-row max scaling passes.
+
+Unless the scale is chosen smarter: e.g., scale = RMS*something, or scale chosen to minimize ||(a - Q(a))·x|| directly (since x is known!). Hmm! That's possible: an implementation could choose sa to minimize the projection error. But quantizing a 128-dim row to 15 levels will have per-element error ~step/2 regardless; the projection error can't be much below ~ step/(sqrt(12)) unless the scale is tuned to make e ⊥ x... With a single scalar scale, you could optimize, but you'd gain maybe a factor of 2-3 at best? To get from 0.17 to 0.07 (a factor 2.4)... marginal. Hmm, actually, could you? The error vector e(sa) as a function of sa is complicated; choosing sa to zero out e·x exactly is possible in principle (e·x is a piecewise-constant-ish function of sa? no, it varies). Hmm, this is too speculative.
+
+Let me step back. The task: verify THIS kernel. The decision: does it meet E <= 0.1 on this workload? My analysis: E ≈ 0.17. Reject.
+
+But let me now double-check my analysis by attempting a more careful "simulation" in my head, or at least bound things rigorously.
+
+Rigorous-ish bound: per row, |err^A| = |sum_j e_ij x_j| <= (sa/2) ||x||_1 ≈ 0.207 * 9.03 ≈ 1.87. That's a worst case. The typical is ~0.12.
+
+Could the typical be much smaller due to structure? err^A = (a - Q(a))·x. Note a·x = 0.5. Q(a)·x = 0.5 - err^A. Q(a) is on the grid {sa * z : z integer in [-7,7]}^128. So Q(a)·x = sa * sum_j z_ij x_j where z_ij integers. So err^A = a·x - sa*(z·x) = 0.5 - sa * S where S = sum_j z_ij x_j, and z_ij = round(a_ij/sa) clamped.
+
+Now, S = sum_j round(a_ij/sa) x_j. Hmm, is there any reason S ≈ 0.5/sa? S is a weighted sum of integers with weights x_j. Hmm. Note sum_j a_ij x_j = 0.5. And a_ij ≈ sa * z_ij + e_ij. So S = (0.5 - e·x)/sa. Circular.
+
+No structural reason for small error. The error is essentially "quantization noise projected onto x". For random gaussians, it's ~sa/sqrt(12) ≈ 0.12 per branch.
+
+Let me also verify with a slightly different angle: relative RMS error of quantized row: ||Q(a) - a||/||a|| ≈ (sa/sqrt(12)) / 1 = 0.12/1 = 12% per element RMS (since ||a|| ≈ sqrt(128), per-element std 1). So the quantized matrix has 12% element-wise error. The dot product with x: signal 0.5, and the error in the dot product ≈ 12% × ||a-projection-orthogonal...|| hmm, let me think of it as: err = e·x where e is the error vector with per-element std 0.12. Since e is "random", |e·x| ≈ ||e||/sqrt(128) × ... ||e|| = 0.12*sqrt(128) = 1.36. e·x for random e: std = ||e||/sqrt(128) = 0.12. Yes consistent.
+
+So E ≈ 0.17. Fails.
+
+Hmm, hmm, hmm. But wait — now let me reconsider the possibility that the problem intends E relative to a much smaller reference norm... no, ||ref|| ≈ 8.
+
+Or the possibility that "0.001*sqrt(64)" = 0.08 matters — no, ||ref|| ≈ 8 >> 0.08.
+
+OK, so at this point I'm fairly confident: E ≈ 0.15-0.20, which violates E <= 0.1. REJECT.
+
+But wait, let me reconsider the "INT4" mention once more, because it really bothers me. If the problem family is "int4 matmul kernels", maybe the original workload has A and B ALREADY quantized to int4-representable values, and the correct kernel dequantizes... but here make_inputs clearly generates continuous gaussians. And the problem says "no hidden input is involved" — the input construction is fully given. So the workload is as I analyzed.
+
+Actually, you know, let me reconsider: maybe this problem is from a family where the "reference implementation" being verified against uses int4 arithmetic and the CONTRACT was validated against a specific int4 kernel that passes. If the passing int4 kernel uses scale = max/7 per row... it wouldn't pass per my analysis. So either (a) the contract was validated with a different, more accurate kernel (and the mention of INT4 is about the general family, e.g., "you don't need to match the int4 reference bit-for-bit; you need to meet the accuracy bar"), or (b) my analysis is wrong.
+
+Let me triple-check my analysis with a small concrete example. Take a simpler case: n=8 instead of 128. Row a = [1.2, -0.5, 0.8, 2.9, -1.1, 0.3, -0.9, 0.7] (gaussian-ish, max 2.9). sa = 2.9/7 = 0.414. Grid: 0, ±0.414, ±0.83, ±1.24, ±1.66, ±2.07, ±2.49, ±2.9.
+
+Q(1.2) = 1.24 (round(2.9)=3 → 3*0.414=1.24). err = -0.04.
+Q(-0.5) = -0.414 (round(-1.21)=-1). err = -0.086.
+Q(0.8) = 0.83 (round(1.93)=2). err = -0.03.
+Q(2.9) = 2.9. err=0.
+Q(-1.1) = -1.24 (round(-2.66)=-3). err = 0.14.
+Q(0.3) = 0.414 (round(0.72)=1). err = -0.114.
+Q(-0.9) = -0.83 (round(-2.17)=-2). err = -0.07.
+Q(0.7) = 0.83 (round(1.69)=2). err = -0.13.
+
+Errors: [-0.04, -0.086, -0.03, 0, 0.14, -0.114, -0.07, -0.13]. RMS ≈ sqrt((0.0016+0.0074+0.0009+0+0.0196+0.013+0.0049+0.0169)/8) = sqrt(0.0643/8) = sqrt(0.008) = 0.09. Hmm, a bit less than 0.12 but same ballpark (small sample).
+
+Now with x random unit vector in R^8 (entries ~0.35): err·x = sum e_j x_j ≈ random ± 0.09ish. Signal 0.5. So ~18% error per branch. Consistent.
+
+OK so with 128 dims it'll be similar: per-branch error ~ (sa/sqrt(12)) with sa ≈ 0.41 → 0.12, i.e., 24% of the 0.5 signal; combined ~17% of the 1.0 signal.
+
+E ≈ 0.17 > 0.1. REJECT.
+
+Hmm, actually hold on. Let me reconsider one more time whether per-row max might be smaller than 2.9. The rows are w (gaussian) + adjustment. The adjustment: c_i x where c_i = target_i - w_i·x. w_i·x ~ N(0,1) (since ||x||=1). So c_i ~ 0.5 - N(0,1) ~ N(0.5, 1). |c_i| typically 0.5-1.5, occasionally 3. The adjustment adds c_i x_j to each element: typical |c_i x_j| ≈ 1.1 * 0.088 ≈ 0.1. This slightly increases the spread: a_ij ~ N(0, 1 + c_i² x_j²)... effectively variance ≈ 1 + c_i²/128 ≈ 1.01. Negligible. Max over 128 ≈ 2.9. Yes.
+
+Also note: the max is over |a_ij| which includes the adjustment; max ≈ 2.9 ± 0.35.
+
+So E ≈ 0.169 × (2.9/2.9) ≈ 0.17, with row-to-row variation averaging out. Even in the optimistic case where all 64 rows of both matrices have max = 2.5 (impossibly low), E ≈ 0.146. Still fails. To pass, need average max ≈ 1.7 — impossible for 128 gaussians.
+
+Therefore: REJECT with high confidence.
+
+Hmm, wait, but let me reconsider the alternative interpretations of the metric once more:
+
+"E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(64))"
+
+output: shape (64,) — the kernel's output. reference: shape (64,) — exact. Norms are 2-norms of vectors. Yes. E ≈ 0.17.
+
+Contract: all outputs finite — yes, they're finite (quantization of finite values; sa > 0). So finiteness OK. But E <= 0.1 fails.
+
+So verdict: reject.
+
+Hmm, hold on, let me reconsider whether the errors might partially cancel between the A-branch and B-branch in a systematic way... A and B are generated sequentially from the same rng: A from first draws, B from second draws. Independent. PERMUTATION applied to B's rows — just reordering rows, doesn't change per-row errors, just assigns them to different output positions. No cancellation.
+
+Also the x used in the kernel is the float32 x; reference uses float32 inputs cast to float64. The float32 cast of x: x was normalized in float64 then cast to float32 — ||x_float32|| ≈ 1 ± 1e-7. Negligible.
+
+The A x in float32-exact terms: the float32 cast of w changes A x slightly from target: the cast error per element ~1e-7 relative, dot product error ~ 1e-7 * sqrt(128) ≈ 1e-6. Negligible.
+
+So reference y_i ≈ 1.0 ± 0.03 (targets 0.5±0.02 each, plus float noise).
+
+Kernel output y_i ≈ 1.0 + err_i, err_i ~ N(0, 0.17²) approximately (mixture over rows).
+
+E ≈ 0.17. REJECT.
+
+Wait, one more consideration: is it possible that the problem's tolerance is meant to accommodate this? Like, maybe the problem designers computed E for this exact kernel and found it to be, say, 0.08, and my estimate is off by 2x? Let me re-derive the per-branch error once more, very carefully, because everything hinges on it.
+
+The quantization error per element: e = a - sa·round(a/sa). For a continuous a with a density that's roughly flat over each bin, e is uniform in [-sa/2, sa/2]. Var = sa²/12.
+
+BUT: here's a thought — the density of a is N(0,1), NOT flat over bins. Does that change Var(e)? The fractional-part distribution: for density f, the fractional part density p(u) ∝ sum_k f(sa(u+k)). With f = N(0,1), sa = 0.41: bins at multiples of 0.41. The gaussian std 1 spans ~2.4 bins each side. The fractional part distribution: p(u) = sum over integers k of φ(sa(u+k))/sa... hmm, let me just say it's approximately uniform with slight wiggle. Var(e) ≈ sa²/12 × (1 - small correction). The correction: the characteristic function approach: Var(fractional error) = 1/12 - sum over m≥1 of Φ_hat(m)/(2π²m²)... For gaussian with std σ=2.42 bins: Φ_hat(m) = exp(-2π²σ²m²)... wait, the Fourier transform of N(0, σ²) evaluated at 2πm: exp(-2π²σ²m²) with σ = 1/sa = 2.42 bins. exp(-2π²*5.86*1) = exp(-115) ≈ 0. So the fractional part is essentially exactly uniform. Var(e) = sa²/12 exactly (to high precision). 
+
+So per-element error std = 0.41/3.464 = 0.1185.
+
+Per-branch per-row error: err^A_i = sum_j e_ij x_j. Now, e_ij across j: iid uniform-ish (a_ij iid). x_j fixed. Var = sum_j x_j² · sa²/12 = sa²/12 · ||x||² = sa²/12 = 0.0141. std = 0.1187.
+
+Hmm wait, but there's the clamp and the fact that e_ij for the max element is 0 and near-max elements are biased... negligible.
+
+Also the dependence: a_ij = w_ij + c_i x_j — the common c_i x_j creates slight correlation across j, tiny effect.
+
+So std(err^A_i) ≈ 0.119, std(err_i) ≈ 0.168.
+
+||err||_2 = sqrt(sum_i err_i²) ≈ sqrt(64 × 0.0282) = sqrt(1.806) = 1.344. ||ref||_2 = sqrt(sum_i (1.0 + δ_i)²) ≈ sqrt(64 + 64*0.0009 + ...) ≈ 8.005. E ≈ 1.344/8.005 ≈ 0.168.
+
+So E ≈ 0.17, comfortably above 0.1. The probability of E <= 0.1 by chance: need sum err_i² <= 0.64, i.e., chi-square 64 dof value <= 64×(0.64/1.806) = 22.7 vs mean 64. P(χ²_64 <= 22.7): that's about... z = (22.7-64)/11.3 = -3.65. p ≈ 0.00013. And even that requires my variance estimate to be right; it is.
+
+So: REJECT with ~high confidence.
+
+Hmm, hmm. But now the "INT4" mention in the problem statement nags me. Let me think about why the problem says "not a requirement to reproduce INT4 arithmetic bit-for-bit."
+
+Maybe the problem family: "given a kernel that emulates int4 matmul (quantize A, B to int4, compute), verify numerical compliance against exact reference with tolerance 0.1." And maybe the DESIGNERS checked that a proper int4 kernel passes? Let me reconsider: is there an int4 scheme with much lower error on THIS workload?
+
+What if the quantization is applied to the PRODUCT rather than the matrix? E.g., compute A@x in fp32, then quantize the result y_a to int4 with per-... no, that would add error to the output directly: 15 levels for values ~0.5±0.02... error would be huge unless scale tiny. Hmm, actually if you quantize the OUTPUT y_a (64 values, each ≈0.5) with scale max|y_a|/7 ≈ 0.5/7 = 0.071, error per output ~0.02 → E ~ 0.03. That passes! But that's quantizing the output, pointless.
+
+What if the intended kernel quantizes x and the rows jointly? Like compute exact dot products but with int4 MULTIPLICANDS on both sides? Error would be even bigger.
+
+What if the intended kernel uses int4 for A only and fp32 for B? Then error = err^A only, std 0.119, E ≈ 0.12. Still fails.
+
+Hmm what if the intended uses int4 with scale = max/7 but ALSO adds a rank-1 correction: since a·x is known... no, the kernel doesn't know a·x.
+
+What if the intended kernel uses int4 quantization of (A·x-ish)... 
+
+Alternatively, maybe the tolerance 0.1 was chosen by the designers based on the actual error of THIS kernel? I.e., the designers ran this kernel, got E ≈ 0.17... no, then they'd set tolerance 0.2. Or the designers set tolerance 0.1 and validated that the "golden" implementation passes. If the golden implementation is a straightforward fp32 matmul (with tf32 or fp32 accumulation), E ~ 1e-6. Passes trivially. And the mention of INT4 is a distractor: "we don't require you to reproduce int4 arithmetic bit-for-bit" = "the kernel family we're testing may claim to do int4; we only care about final accuracy." So the contract is: final accuracy within 0.1. This int4 kernel fails at 0.17.
+
+Hmm, but actually, wait. Maybe the intended-golden is int4 with per-row scale chosen as max/7 — and the designers validated it passes? For that, the input would need to be designed so int4 quantization is accurate. Is there anything in the input construction that makes quantization accurate? Let me look once more...
+
+```python
+x = rng.standard_normal(128)
+x /= np.linalg.norm(x)
 ```
-rows = tl.arange(0, R)  # R = 64
-acc = tl.full((R,), 0, tl.float32)
-for j in range(K):  # K = 128
-    value = tl.load(X + rows * K + j)
-    acc = acc + value
-tl.store(Y + rows, acc)
+
+x normalized. 
+
+```python
+w = rng.standard_normal((64, 128))
+target = 0.5 + 0.02 * rng.standard_normal(64)
+projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
 ```
 
-X is contiguous (64, 128) float32; X + rows*128 + j: correct indexing ✓. Grid (1,), R = 64 rows, K = 128. Loads column j for all rows: fine, coalesced-ish (stride 128... whatever, correctness fine). Accumulate float32, store. So the only issue is numerical. Also `enable_fp_fusion=False` — prevents FMA contraction; irrelevant here (adds only).
+Hmm... nothing that makes w int4-friendly. w stays continuous gaussian.
 
-One more check: `tl.full((R,), 0, tl.float32)` — R constexpr = 64 ✓. `values.shape[1]` = 128 = K ✓, `values.shape[0]` = 64 = R ✓.
+Unless... the kernel is supposed to quantize w and the ACCURACY target is relative to a QUANTIZED reference? No — the problem explicitly says reference = exact float64 A@x + B@x on original float32 inputs.
 
-Also, does the loop over j with `range(K)` where K is constexpr unroll 128 iterations — fine.
+OK here's another thought: maybe the problem is testing whether the verifier can catch that a plausible-looking int4 kernel is NOT accurate enough. The problem statement's hints ("Approximate intermediate values are allowed if the FINAL output meets this requirement", "Either branch may individually exceed 0.1") are there to prevent false rejections of implementations that use approximation but are accurate enough. This kernel uses approximation that is NOT accurate enough. So REJECT.
 
-Potential concern: `acc = acc + value` — in Triton, float32 + float32 with enable_fp_fusion=False: plain fadd, round-to-nearest. Yes.
+Actually hmm, wait. "Either branch may individually exceed 0.1 without violating the contract." When would a branch individually exceed 0.1 but the final output pass? Consider an implementation that computes ya = Q(A)@x and yb = y_ref_a - ya + Q(B)... no. OR: consider an implementation that computes y = (A+B)@x via quantizing (A+B): branch A@x computed as ((A+B)@x) * (something)... no.
 
-So: numerically the kernel computes the exact float32 sequential sum. And that sum is catastrophically wrong relative to the exact reference. REJECT.
+OR consider: an implementation that quantizes A with scale sa and B with the SAME scale (or B's rows relative to A's), such that errors cancel? E.g., yb computed as B@x - (Q(A)-A)@x? Contrived.
 
-Actually hold on, let me reconsider the exact magnitude of the expected error once more, because there's a chance the smalls manage to survive better than I think. Let me reconsider the fraction of smalls lost. The key threshold for TOTAL loss: grid g ≥ 2 ⇔ |L| ≥ 2^24 ⇔ |M| ≥ 16 (M in units of 2^20). Also total loss for g = 1 (|L| ∈ [2^23, 2^24), M ∈ [8,16)) for v ≤ 0.5, but v = 0.75 rounds up (0.75 → 1). At g = 0.5 (M ∈ [4,8)): 0.25 lost (tie-even), 0.5 exact, 0.75 → 1 (gain 0.25). At g ≤ 0.25 (M ≤ 4... M ∈ [2,4): g = 0.25; M < 2: g ≤ 0.125): exact.
+OR simpler: an implementation that computes y = Q(A)@x + Q(B)@x where Q uses error diffusion... 
 
-So smalls survive (fully) only when |M| < 4, i.e., |L| < 4·2^20 ≈ 4.2M. The walk in M-units: steps ±m, m ∈ [1,32], 32 pos, 32 neg. Time with |M| < 4: mostly at the very beginning (before ~2-4 steps), near zero-crossings, and the very end. For a walk with typical |M| ~ 40-100 mid-walk, zero-crossings: the walk (bridge from 0 to 0) crosses zero a handful of times (expected number of crossings for a discrete bridge ~ O(log n)? For Brownian bridge, zeros are a set of measure zero; for discrete walk, time with |M| ≤ 3: maybe a handful of steps out of 64).
+Honestly, the "either branch" clause might just be generic boilerplate for this problem family: the metric only applies to the final combined output; don't evaluate branches separately. In THIS kernel, the final combined output fails anyway.
 
-Rough estimate: expected # of large-steps with |M| < 4: early steps: step 1: |M| = m1 < 4 w.p. 3/32; after 2 steps |M| < 4: |±m1±m2| < 4: possible if opposite signs and close: prob ~ ... each ~ small. End similarly. Mid-walk: |M| < 4 when walk near zero: the walk's zero set: for a random bridge of 64 steps with step std ~9.2, the local time at 0... expected number of visits to |M| ≤ 3 mid-walk: maybe ~2-5. Total fine windows: ~5-10 large-steps' worth out of 64 → each window spans a few column positions; smalls in those windows: expected ~ (fraction of columns in fine windows)·64. Fraction of the 128-column sequence in fine windows: (fine large-steps ~8 + neighboring small positions)/128 ≈ maybe 10-20 positions → ~10-20% of smalls?? Hmm, that's more generous than my earlier 10-15%. Say ~8-13 smalls survive, sum ~4-6.5. Reference ~32. Error ~26. E ≈ 26·√64/256 = 26·8/256 ≈ 0.81.
+Hmm, let me also consider: maybe the designers' golden kernel is exactly this quantization scheme, and they set the tolerance based on measuring E ≈ 0.17?? But the contract says E <= 0.1. If the golden measured 0.17, they'd have set 0.2. Unless the tolerance 0.1 is the family standard and this particular instance... The problem says "Decide trust, reject, or needs_more_evidence." — it's a verification task, and the kernel is a candidate. I should evaluate on the merits.
 
-Even in the most optimistic scenario (say half the smalls survive — no way), error ~16 → E ≈ 0.5. FAIL regardless. The tolerance 0.1 requires per-row RMS error ≤ 3.2, i.e., ≥90% of the small-sum must survive. Given mid-walk grids of 8-32 pinning ŝ, impossible.
+Let me also double check the kernel for OTHER defects that would matter regardless:
 
-Let me also verify: could the errors be systematic such that outputs are, e.g., exactly 0 and reference ~32 → E = ||ref||·1/||ref|| = 1.0? Or outputs could even be NEGATIVE or weird (mangling can make ŝ = 32 when true s = 30, etc.). Either way E ≈ 0.7-1.0 ≫ 0.1.
+1. Grid: (64,) programs, one per row. K=128 constexpr. Loads X (128), A row, B row. Fine.
 
-Also finiteness: outputs finite (no NaN/inf) — fine, but E fails.
+2. `tl.load(X + j)` — x is contiguous (128,). Fine. A + row*K + j — A contiguous (64,128). Fine.
 
-Therefore: REJECT, high confidence.
+3. Output: Y[row] = ya + yb. Shape (64,). Fine.
 
-Hmm, wait, but let me reconsider the problem statement once more: "Evaluate numerical compliance of run(*make_inputs()) on exactly the fully specified workload in kernel.py." — Yes, this exact input. "Reference: for each row, sum the ORIGINAL float32 entries in real arithmetic, evaluated with float64 or an independently checked high-accuracy summation." Note: summing these particular values in float64: the large values cancel exactly in float64 too (they're exact integers × 2^20, well within float64 exact-integer range 2^53), and smalls exact → float64 sum = exact = sum of smalls. ✓ So reference ≈ 32 ± 1 per row.
+4. dtype: out float32. qa*sa*x products in fp32; sum over 128 in fp32 — accumulation error ~1e-6. Fine.
 
-"Contract: every output must be finite and E <= 0.1." The kernel's float32 output ≈ a few units vs 32 → E ~ 0.8. REJECT.
+5. Potential division by zero if a row is all zeros → sa = 0 → a/sa = inf/nan → qa = clamp(floor(nan+0.5)) = ... floor(nan)=nan, min/max with nan → nan → ya nan. But rows are gaussians, never all-zero. Fine (finite outputs guaranteed on this workload).
 
-Let me also double check the claim "float32 sequential sum loses smalls" with a rough simulation in my head for one plausible row trajectory... I already did the concrete example above; the mechanics are clear. Also, this is a classic: summing 1e8-magnitude canceling values plus 0.5s in float32 → the 0.5s vanish (ulp at 1e8 ~ 8). Definitely.
+6. enable_fp_fusion=False: avoids fma fusion differences; irrelevant to accuracy at this scale.
 
-One more angle: could `enable_fp_fusion=False` or Triton semantics make `acc + value` computed in higher precision? No — Triton float32 add is IEEE float32. No extended precision on GPU. So no.
+So the only defect is the coarseness of int4 quantization → E ≈ 0.17 > 0.1.
 
-Could the compiler reorder the summation (tree reduction)? It's a sequential loop with acc dependency — no reordering. Even if it did (pairwise), pairwise summation of this data: hmm, interesting — would pairwise do better? Pairwise: combine pairs... e.g., sum pairs of adjacent values: large+large pairs (exact), large+small pairs (small lost), small+small (exact)... then combine: the partial sums of larges are exact multiples of 2^20 up to 2^31 — pairwise combining of pure-large partials stays exact (multiples of 2^20 with ≤ 12-bit multipliers — combining two such: multiplier up to 2048+2048 = 4096 = 13 bits, still exact). Mixed partials: multiple of 2^20 + small-sum: when combined with a large partial at magnitude 2^30 (ulp 128): small part lost. So pairwise also loses smalls. But irrelevant — the kernel is sequential anyway.
+Hold on, hold on. Let me reconsider once more. I keep going back and forth, but let me reconsider the magnitude of the reference and the error more carefully, because there's one more subtlety: the rows' projections onto x are 0.5 each. But actually wait — is that right? Let me recheck: "target = 0.5 + 0.02*standard_normal(64)". Yes, ≈0.5 per row. And the adjustment makes w@x = target in float64. Then cast to float32: A@x (float32 A, float64 x) ≈ target ± tiny. So ref y_i = A_i@x + B_i@x ≈ 1.0 ± 0.03.
 
-So: REJECT. Confidence: 0.93 or so. The only uncertainty is my mental simulation of the exact E value, but the failure margin is ~8x, so very confident.
+And the kernel output y_i ≈ Q(A_i)@x + Q(B_i)@x = (0.5 + errA_i) + (0.5 + errB_i) = 1.0 + errA_i + errB_i.
 
-Actually, let me reconsider whether I should double-check the "absorbing" behavior at g = 2 more carefully, since between |M| ∈ [16, 32) grid is 2, and smalls 0.25/0.5/0.75 all < 1 = g/2... 0.75 < 1 ✓ frozen. At g = 2, ŝ frozen. At g = 1 (|M| ∈ [8,16)): v = 0.75: ŝ + 0.75 → rounds to ŝ+1 if... nearest multiple of 1 to ŝ+0.75 is ŝ+1 (dist 0.25) vs ŝ (dist 0.75) → ŝ+1. So 0.75-small adds 1 (gain +0.25 error). v = 0.5: tie → even: ŝ and ŝ+1: ŝ = k (integer); tie between k and k+1 → even one. If k even → stays k (0.5 lost); if k odd → k+1 (gain 0.5). v = 0.25: rounds to ŝ (lost). So at g = 1, smalls partially survive with upward bias! Interesting but g=1 windows are |M| ∈ [8,16) — a band the walk passes through quickly. Minor effect.
+E = ||errA + errB|| / ||ref|| ≈ sqrt(64 * 2 * 0.0141) / 8 = sqrt(1.806)/8 = 1.344/8 = 0.168.
 
-Overall: output ≪ reference. E ~ 0.7-0.95. REJECT.
+Yes. E ≈ 0.17.
 
-Let me also sanity check ||ref||_2: refs = sums of 64 values uniform{0.25,0.5,0.75}: mean 32, so ||ref||_2 ≈ √64·32 = 256 ✓. max(||ref||, 0.008) = 256. Need ||out - ref||_2 ≤ 25.6 → per-row RMS error ≤ 3.2. Output needs to be within ~10% of 32 per row on average. Float32 sequential: no chance.
+For the contract E <= 0.1, the kernel would need per-branch per-row error std <= 0.0707, i.e., sa/sqrt(12) <= 0.0707, sa <= 0.245, max|row| <= 1.71. Impossible for gaussian rows of length 128 (P(max <= 1.71) = (2Φ(1.71)-1)^128 = (0.913)^128 ≈ e^{-128*0.091} = e^{-11.6} ≈ 9e-6 per row; over 128 rows (64×2), essentially zero).
 
-Final answer: reject, confidence ~0.95.
+Even accounting for fluctuations in errA_i (each row's error is a realization; RMS over rows concentrates), E will be in [0.14, 0.20] with ~95% probability. So REJECT.
 
-Reason: The workload is constructed so each row's exact sum is the sum of 64 small values (0.25–0.75) totaling ~16–48, while 32 large positive and 32 large negative values (~2^20–2^25) cancel exactly. Naive float32 sequential accumulation reaches partial sums of order 2^26–2^28 where the ulp is 8–32, so the small addends are rounded away (absorbed) whenever the partial sum exceeds ~2^23, and previously absorbed small sums are re-quantized to coarse grids. The kernel's result per row is only the smalls accumulated during rare low-magnitude windows (a few units), vs the reference ~32, giving relative error E on the order of 0.5–1.0 ≫ 0.1.
+Hmm, wait, actually, let me reconsider whether all rows have max ≈ 2.9. The average of max over rows: E[max of 128 |N(0,1)|] ≈ ? Let me compute: E[M] where M = max|Z_i|. Using extreme value theory: P(M ≤ m) = (1 - 2Φ̄(m))^128. E[M] = ∫ (1 - F(m)) dm. Approximation: E[M] ≈ sqrt(2 ln n) + γ/sqrt(2 ln n) with n = 256 (since |Z| has 256 "tails"? no...). For |Z| max over 128: effective n' = 256? Hmm: P(max|Z| > m) ≈ 128·2Φ̄(m) = 256Φ̄(m). Setting 256Φ̄(m) = 1: Φ̄(m) = 0.0039 → m = 2.66. E[M] ≈ 2.66 + γ·(1/m)·... ≈ 2.66 + 0.577/2.66·... The Gumbel correction: E ≈ u + γ/u where u solves... roughly E[M] ≈ 2.9. Yes.
 
-I'll write it concisely.
+So E ≈ 2.9/(7·sqrt(12)) · sqrt(2) = 2.9·1.414/24.25 = 4.1/24.25 = 0.169.
+
+Great: E ≈ 0.17.
+
+So the verdict is REJECT.
+
+Wait, but now let me second-guess the "INT4" hint one final time. The phrase: "This is finite-workload compliance, not a claim about all inputs, and not a requirement to reproduce INT4 arithmetic bit-for-bit."
+
+Reading: "We're only checking this workload. We're not claiming the kernel must be correct for all inputs. And you don't need to reproduce INT4 arithmetic bit-for-bit." The last clause implies: the kernel under test (or its family) performs INT4-ish arithmetic; the contract doesn't require bit-exact int4 reproduction — only final accuracy within tolerance. This is consistent with: the golden implementation might do int4 quantization, and small differences in rounding (e.g., floor vs round, clamping details) are fine AS LONG AS final accuracy holds. 
+
+So if the golden is an int4 kernel that passes E <= 0.1... how?! Let me think REALLY hard about whether some int4 scheme could achieve E <= 0.1 here. 
+
+E <= 0.1 requires per-row total error <= 0.1 RMS (relative to per-row signal ~1). With 15 levels per row...
+
+Idea: per-row affine quantization with levels covering [min, max]: step = (max-min)/14. For gaussian rows, max-min ≈ 5.5-6, step ≈ 0.41. Same as symmetric. No.
+
+Idea: quantize with scale max/7 but round-to-nearest in the DOT-PRODUCT direction... no.
+
+Idea: INT4 with per-row scale = max/7, but computing y = Q(A)@x + Q(B)@x + correction where correction = (A - Q(A))@x + (B - Q(B))@x computed in fp32? Then it's exact-ish. But then why quantize at all? Some kernels do "split" computation: high part int4, low part int4 (residual), sum. With two int4 parts, effective 225 levels... error would be tiny. Hmm! That's plausible: a "double quantization" scheme. But THIS kernel doesn't do that.
+
+Idea: the golden might quantize A and B per-row with scale = max/7 but the workload's rows might have been constructed to be int4-friendly... they're not (continuous gaussians).
+
+So no plausible int4 single-quantization scheme passes; the golden must either be exact fp32/bf16/tf32 computation, or int4 with residual correction. Either way, THIS kernel (single int4 quantization, scale max/7, no residual) fails at E ≈ 0.17.
+
+Hmm, although — wait. What if the golden uses int4 and the tolerance was set at 0.1 because the golden's E ≈ 0.17?? No, then the golden wouldn't satisfy its own contract. The contract presumably was validated: "run(*make_inputs())" of the GOLDEN meets E <= 0.1. So golden E <= 0.1. This kernel E ≈ 0.17. Different. Reject.
+
+Actually, hmm, one more scenario: what if the problem is adversarial and the "golden" is this very kernel, and the designers measured E for this kernel and it's <= 0.1?? That would require my analysis to be wrong by 1.7x. Let me look for any error in my reasoning...
+
+Potential error source 1: Maybe the quantization error doesn't project onto x as sa/sqrt(12) but much less, because of correlation between e_ij and x_j through the row adjustment. The adjustment adds c_i x to the row. Hmm, does quantization of (w + c x) have error correlated with x? e = (w + cx) - sa·round((w+cx)/sa). The error is a "sawtooth" function of the element value. The element value has a component c x_j along x_j. The sawtooth is random w.r.t. j. So e_ij x_j summed over j: no systematic alignment. The variance: Var(e) ≈ sa²/12 regardless. Sum_j e_ij x_j: variance ≈ sa²/12 · sum_j x_j² = sa²/12. Yeah.
+
+Potential error source 2: Maybe ||ref|| is much larger than 8? y_i ≈ 1.0, so ||ref|| ≈ 8. Could y_i be larger? targets ≈ 0.5 each. Yes 8. Could the float32 cast change targets? No.
+
+Potential error source 3: maybe E is defined with ||·||_2 as the spectral norm or something? Vectors here. No.
+
+Potential error source 4: Maybe I have the wrong sa: sa = max/7, but maybe the values a/sa for typical gaussian elements are small (|a| ~ 1, sa ~ 0.41, a/sa ~ 2.4), and round() to integers {-7..7}: the RELATIVE error per element is |e|/|a| ~ 0.12/1 = 12%. The dot product signal 0.5 comes from the alignment of a with x. The error vector e is random, so e·x ~ ||e||/sqrt(128) = 0.12·sqrt(128)/sqrt(128) = 0.12. Yes.
+
+Hmm, actually wait: e·x ~ ||e||·|cos θ| where θ is the angle between e and x. For random e in 128 dims, cos θ ~ 1/sqrt(128) → e·x ~ ||e||/sqrt(128) = (0.118·sqrt(128))/sqrt(128)... wait: ||e|| = sqrt(128 · Var(e)) = sqrt(128)·0.118 = 1.34. e·x ≈ ||e|| · (1/sqrt(128)) = 1.34/11.3 = 0.118. Yes consistent.
+
+So per-branch error 0.118, signal 0.5. Per-branch relative error 24%. The problem statement's hint "Either branch may individually exceed 0.1 without violating the contract" — consistent with branches at ~24%! And the combined: 0.167/1.0 = 16.7% > 10%. So the final output ALSO exceeds. Reject.
+
+Hmm interesting — the hint about branches exceeding 0.1 makes sense in a world where branches are at 24%: the designers anticipated verifiers who check branch accuracy and reject; they clarify only the final matters. But the final is 17% > 10%... 
+
+UNLESS the golden implementation has branches at >10% but final <= 10% through CANCELLATION. What implementation would have that? Consider: y = Q(A)@x + Q(B)@x where Q(A) and Q(B) use the same scale and the errors cancel... they don't.
+
+Consider: an implementation that computes ya = Q(A)@x and yb = B@x - (Q(A) - A)@x... contrived.
+
+Consider: an implementation that quantizes A and B JOINTLY: e.g., quantize (A+B) and (A−B)? y = (A+B)@x. Q(A+B) error ~ max(A+B)/7/sqrt(12) ≈ 4.1/7/3.46 = 0.169. Worse.
+
+Consider: an implementation that computes y = A@x + B@x in bf16: bf16 has 8 bits mantissa; element-wise relative error 0.4%; dot product error ~ 0.4%·sqrt-ish... E ~ 0.005. Passes. Branches also pass. Not matching the hint.
+
+Consider: tf32 (10-bit mantissa): E ~ 0.001. Passes.
+
+Consider: fp16 accumulation in fp32: E ~ 1e-4 (values are O(1), fine in fp16 range... a_ij up to 3, x_j up to 0.4, products fine). Passes.
+
+Hmm, so what implementation has branch error > 0.1 but total <= 0.1?? 
+
+OH WAIT. I think I've got it: an implementation that quantizes with per-row scales and computes BOTH branches with the quantized matrices, where the quantization errors of A and B are ANTI-correlated... no.
+
+Alternatively: maybe the hint refers to the fact that the metric denominator uses the COMBINED reference norm: E_branch = ||ya - ref_a||/max(||ref_a||, 0.08) could exceed 0.1 while combined passes, if errors cancel between branches. When do errors cancel between branches? If the implementation computes yb with an error that cancels ya's error... 
+
+OR: if the implementation computes y = (A+B)@x by quantizing C = A+B: then ya "branch" would be... no.
+
+OR: consider an implementation that quantizes A to int4 AND computes the residual (A - Q(A)·sa) also to int4 (double-quantization): y = Q1(A)@x + Q2(A)@x + ... total error tiny. Branches fine. No.
+
+OR: consider an implementation with a BUG in one branch that's compensated... 
+
+Honestly, the "either branch" clause might just be generic boilerplate for this problem family: the metric only applies to the final combined output; don't evaluate branches separately. In THIS kernel, the final combined output fails anyway.
+
+Hmm, hmm. But let me consider yet another possibility: that the designers' reference for "correct" is THIS kernel and they measured E < 0.1 because... the input construction differs from my reading? Let me re-read make_inputs one final time, very carefully.
+
+```python
+def make_inputs(device="cuda"):
+    import numpy as np
+    rng = np.random.Generator(np.random.PCG64(SEED))
+    x = rng.standard_normal(128)
+    x /= np.linalg.norm(x)
+    matrices = []
+    for _ in range(2):
+        w = rng.standard_normal((64, 128))
+        target = 0.5 + 0.02 * rng.standard_normal(64)
+        projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+        w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+        matrices.append(w.astype(np.float32))
+    arrays = [x.astype(np.float32), matrices[0], matrices[1][PERMUTATION].copy()]
+    return tuple(torch.from_numpy(a.copy()).to(device) for a in arrays)
+```
+
+Yes: x normalized float64 → float32. A = matrices[0] (float32). B = matrices[1] with rows permuted by PERMUTATION (float32). Each row of both matrices satisfies row·x ≈ target_row ≈ 0.5 (float64 exact before cast; float32 cast perturbs by ~1e-7 per element → dot product perturbation ~ sqrt(128)·1e-7·... negligible).
+
+So ref y ≈ 1.0 per row. Kernel output ≈ 1.0 + quantization errors ~ N(0, 0.17²) per row. E ≈ 0.17.
+
+I'm now quite confident. Let me also sanity-check the claim "target ≈ 0.5" — yes, 0.5 + 0.02·N(0,1), so targets ∈ [0.44, 0.56] typically. And ||ref||_2 = sqrt(sum (t_i + t'_i)²) ≈ sqrt(64·1.0) = 8.
+
+One more check: PERMUTATION is a list of 64 distinct indices 0-63? Let me verify quickly: [4, 1, 2, 53, 44, 13, 11, 56, 46, 57, 33, 8, 25, 35, 39, 20, 36, 14, 51, 52, 40, 29, 23, 26, 3, 31, 38, 16, 21, 62, 41, 24, 61, 45, 30, 59, 19, 42, 27, 28, 12, 17, 60, 47, 43, 54, 6, 34, 22, 10, 18, 50, 32, 0, 7, 15, 9, 5, 63, 55, 49, 37, 48, 58]. Count: let me count: 4,1,2,53,44,13,11,56 (8), 46,57,33,8,25,35,39,20 (16), 36,14,51,52,40,29,23,26 (24), 3,31,38,16,21,62,41,24 (32), 61,45,30,59,19,42,27,28 (40), 12,17,60,47,43,54,6,34 (48), 22,10,18,50,32,0,7,15 (56), 9,5,63,55,49,37,48,58 (64). Yes 64 entries. Duplicates? Seems like a permutation of 0..63 (spot check: 0 appears at position 53, 63 at position 58... fine). Doesn't matter for accuracy anyway — permutation just relabels rows; each B row still has projection ≈ its own target ≈ 0.5.
+
+So the final answer: REJECT.
+
+Actually, hmm, let me reconsider the confidence level. My analysis is analytical, not a executed measurement. The margin: expected E ≈ 0.17 vs threshold 0.1. That's a 70% margin, ~4 sigma. The main uncertainty: my model of quantization error (uniform fractional parts) — solid. The row max ≈ 2.9 — solid (statistically, over 128 rows it concentrates: average max over 64 rows has std ~ 0.3/sqrt(64) ≈ 0.04; so E ∈ [0.16, 0.18] almost surely). So E ≈ 0.17 ± 0.01. Definitely > 0.1.
+
+Let me compute E a bit more precisely: E ≈ sqrt(2)·E[max]/(7·sqrt(12)) · (1/1.0) where per-row signal is 1.0 and per-row error RMS = sqrt(2)·sa_rms/sqrt(12)... careful: E = ||err||/||ref|| = (sqrt(64)·err_rms)/(sqrt(64)·1.0) = err_rms (since ref per-row ≈ 1). err_rms = sqrt(Var(errA) + Var(errB)) = sqrt(2)·E[sa²/12]^{1/2}... averaging over rows: err_rms = sqrt(2 · mean(sa²)/12) = sqrt(2/12)·sqrt(mean(sa²)) = 0.408·sqrt(mean(max²)). mean(max²) ≈ (2.95)² ≈ 8.7 (E[max²] = E[max]² + Var; Var of max of 128 ≈ (π²/6)·(1/2ln n)... roughly 0.1-0.15 → std ~0.35; E[max²] ≈ 8.7+0.12 ≈ 8.8). sqrt(8.8) = 2.97. err_rms ≈ 0.408·2.97/... wait let me redo: sqrt(2/12) = 0.408. times sqrt(mean(sa²)) where sa = max/7 → sqrt(mean(max²))/7 = 2.97/7 = 0.424. err_rms = 0.408 · 0.424 = 0.173. 
+
+E ≈ 0.173. Threshold 0.1. Fails by 73%.
+
+Also finiteness: fine.
+
+So: verdict REJECT, confidence ~0.9. 
+
+Hmm, let me think about whether to hedge with needs_more_evidence. The task asks to decide based on numerical reasoning. I've done a careful analysis showing E ≈ 0.17 > 0.1 with high confidence. The margin is large and the analysis is robust (quantization error of 15-level uniform quantizer on gaussian rows; projection onto unit vector; signal 0.5 per branch). I'll go with reject, confidence 0.88-0.92.
+
+But hmm, let me reconsider ONE more time the possibility that the problem intends this kernel to be correct... The problem statement mentions INT4 explicitly. If the problem family is "int4 matmul emulation," the golden kernel might be exactly this style (quantize to int4 range with per-row scale, dequantized dot product). If the golden is this style AND passes E<=0.1... then my analysis must be wrong. Let me re-examine with fresh eyes, trying to prove E < 0.1.
+
+E = ||Q(A)x + Q(B)x - (Ax + Bx)|| / ||Ax + Bx||.
+
+||Ax + Bx|| ≈ 8 (per-row ~1).
+
+Numerator: ||e_A·x + e_B·x|| where e_A = A - Q(A) row-wise.
+
+Per row: |sum_j e^A_ij x_j|. 
+
+Now: e^A_ij = a_ij - sa_i·round(a_ij/sa_i). Hmm... is there ANY chance that sum_j e_ij x_j is systematically small? 
+
+Consider the function g(sa) = sum_j (a_ij - sa·round(a_ij/sa)) x_j. At sa = max/7... For the specific structure a_i = w_i + c_i x: 
+
+sum_j a_ij x_j = 0.5 (exact-ish). sum_j sa·round(a_ij/sa)·x_j = sa · sum_j round(a_ij/sa) x_j.
+
+Define r_j = round(a_ij/sa) ∈ {-7..7}. Then err = 0.5 - sa·Σ r_j x_j.
+
+Hmm, Σ r_j x_j: r_j ≈ a_ij/sa with rounding error δ_j = r_j - a_ij/sa ∈ [-0.5, 0.5]. Σ r_j x_j = (Σ a_ij x_j)/sa - Σ δ_j x_j = 0.5/sa - Σδ_j x_j. So err = 0.5 - sa(0.5/sa - Σδ_j x_j) = sa·Σδ_j x_j. δ_j ~ uniform [-0.5,0.5]. err = sa·Σ δ_j x_j, Var = sa²·(1/12)·Σx_j² = sa²/12. Same as before. No magic.
+
+So err ~ N(0, sa²/12), std ≈ 0.424/3.46 = 0.1225 per branch. Combined 0.173. Yes.
+
+There's no way around it: with 15 uniform levels per row and per-row max scaling, quantization noise in the dot product is ~ sa/sqrt(12) ≈ max/24.2, and the signal is 0.5 per branch = 1.0 combined, with max ≈ 2.95 → E ≈ 0.17.
+
+For an int4-style kernel to pass, it would need per-row signal much larger relative to max, e.g., rows aligned with x. Here rows are random gaussians with only a small forced alignment (0.5 out of row norm ~11.3). The designers CHOSE target=0.5 and random w — this makes the projection signal SMALL relative to quantization noise. If they wanted int4 to pass, they'd have made rows mostly aligned with x (e.g., w small, target large). They didn't. So the input construction is ADVERSARIAL to int4 quantization! The target 0.5 with random w means the useful signal (0.5) is tiny compared to the row's random mass (norm ~11.3), so any lossy quantization of the row destroys the signal.
+
+This strongly suggests the test is DESIGNED to catch int4-quantization kernels that fail accuracy. The hint "not a requirement to reproduce INT4 arithmetic bit-for-bit" tells us the contract is purely numerical — so a kernel that does int4 (perhaps the "original" kernel being emulated was int4) must still meet E<=0.1, and this one doesn't.
+
+Hmm, wait, but actually, hmm: if the original kernel was int4 and the workload makes int4 fail E<=0.1... then the "reference behavior" described (exact float64) with tolerance 0.1 would be unmeetable by the original. The problem says "Reference: y = A@x + B@x ... evaluated in float64" — this is the REFERENCE for the metric, not necessarily the original kernel's algorithm. The contract is on numerical compliance. So the original kernel (int4) might itself be non-compliant... but the task is just to verify THIS kernel against the contract. And it fails.
+
+Alternatively — maybe the original kernel did int4 with per-row scale = max/127 (int8-ish, "INT4" being a misnomer... no).
+
+OK here's yet another thought experiment: what E would the "naive correct" fp32 kernel get? ~1e-6. What tolerance did designers set? 0.1 — quite loose, accommodating bf16/tf32/int8-ish approximations. This int4 kernel gets 0.17 — just above. The tolerance 0.1 seems designed to separate "accurate enough approximations" (<= 0.1) from "too coarse" (> 0.1). This kernel is on the wrong side.
+
+Let me also double-check the claim E_branch ≈ 0.24 > 0.1 per the hint — consistent with the hint's premise that branches can exceed 0.1 (in a correct implementation, branches might exceed 0.1 but combined must not). Hmm, in THIS kernel branches are at 0.24 and combined at 0.17. For a CORRECT kernel to have branches > 0.1 but combined <= 0.1, you'd need cancellation... OR the branch metric uses a different denominator: E_branch = ||ya - ref_a||/max(||ref_a||, 0.08): ||ref_a|| ≈ 4 (0.5·8). If ya has error 0.4 in norm... e.g., an implementation computing ya in a way that's off by O(0.4) but yb compensates?? 
+
+OR maybe: an implementation that computes y = (A+B)@x where (A+B) is formed in float32 (fine), or... 
+
+OR: an implementation that quantizes A+B per-row to int4: error per row = s·Σδx with s = max(A+B)/7 ≈ 4.2/7 = 0.6, std = 0.6/3.46 = 0.173, E = 0.173. Fails too.
+
+OR: an implementation that computes ya = A@x in int4 (error 0.24 relative) and yb = B@x EXACTLY, total error = 0.122/1.0 → E = 0.122 > 0.1. Still fails! Interesting: even one int4 branch alone fails the combined metric.
+
+For combined E <= 0.1 with one branch int4: need per-branch error <= 0.1 → sa <= 0.346 → max <= 2.4. Still impossible (max ≈ 2.95 typical, and it's the AVERAGE over rows that matters: need sqrt(mean(sa²)) <= 0.346·... hmm: E = err_rms/1.0 with err_rms = sa_rms/sqrt(12) <= 0.1 → sa_rms <= 0.346 → max_rms <= 2.42. Actual max_rms ≈ 2.97. Fails even for one branch.)
+
+So NO int4-per-row-max-scaled scheme passes; any passing implementation must compute dot products more accurately (fp32/bf16/tf32/int8/fp16). Therefore the mention of INT4 in the problem is likely about the kernel family under test (this kernel emulates int4), and the contract explicitly says bit-exact int4 reproduction is NOT required — i.e., don't judge it by int4 fidelity; judge by final accuracy. Final accuracy: 0.17 > 0.1 → reject.
+
+Hmm, hmm, hmm. But wait — actually, now I realize I should double-check the possibility that the problem's tolerance and workload were set by actually running THIS kernel and finding E <= 0.1. For that, my analytical E ≈ 0.17 would need to be wrong by 1.7x. Where could a 1.7x error creep in? 
+
+- If sa were max/7 but with max over... no, per-row max over 128 elements ≈ 2.95. 
+- If the quantization used 15 levels over [-max, max] with step 2·max/14 = max/7 — same thing.
+- If x had smaller norm... ||x||=1.
+- If signal were larger: target 0.5 per branch → 1.0. Unless "target" multiplies differently... no.
+
+What if the reference is dominated by something else... no.
+
+What if the metric denominator is max(||ref||, 0.08) ≈ 8 — yes.
+
+So E ≈ 0.17 stands. Even if my estimate of E[max] were off (say 2.5 instead of 2.95), E ≈ 0.147 > 0.1. To get E <= 0.1, need E[max] <= 1.7 — impossible.
+
+Therefore: REJECT. Confidence: 0.9.
+
+Hmm, one more sanity check on Var(δ)=1/12 and independence across j: δ_j = frac-rounding of a_ij/sa_i. a_ij iid across j (given the row). sa_i depends on the row max — a global row property, inducing weak correlation among δ_j, but Var of Σδ_j x_j ≈ (1/12)Σx_j² + tiny cross terms. Cross terms: Cov(δ_j, δ_k) for j≠k — the dependence through sa_i (max) is weak (max is one element; changing sa shifts all bins slightly). Effect on variance: O(1/128) relative. Negligible.
+
+Also: the element achieving the max has δ = 0 and neighboring large elements have biased δ (since |a|/sa <= 7, elements near ±7 round to ±7 with δ ∈ [-0.5, 0] biased negative for +7 side? Actually for a/sa close to 7, round gives 7, δ = 7 - a/sa ∈ [0, 0.5]... wait δ = r - a/sa ∈ [-0.5, 0.5] by definition of round; for values in (6.5, 7], r=7, δ ∈ [0, 0.5). Only a couple elements per row are > 6.5·sa ≈ 2.8. Negligible bias.
+
+Great. Final: REJECT, confidence 0.9.
+
+Actually, let me reconsider confidence. The analysis is solid but I haven't executed the workload. The margin is 1.7x. The statistical concentration is tight (128 rows total → E is concentrated around 0.17 ± 0.015). The only way I'm wrong is a systematic misunderstanding of the kernel or input. I've read both carefully. I'll say confidence 0.9.
+
+Wait — one more careful read of the kernel for any trick that improves accuracy:
+
+```python
+sa = tl.max(tl.abs(a), 0) / 7.0
+```
+
+Hmm — `tl.max(tl.abs(a), 0)` — max over axis 0 of the 1-D tensor `a` (which is the row, indexed by j). In Triton, `tl.max(x, 0)` for a 1-D tensor reduces over axis 0 → scalar. Yes, per-row max of |a|. 
+
+Wait, actually — is `a` the row (128 elements)? `a = tl.load(A + row * K + j)` — yes, 128 elements of row `row`. `tl.max(tl.abs(a), 0)` — scalar max. Good.
+
+Hmm, but wait: could `tl.max(tl.abs(a), 0)` be interpreted as elementwise max(|a|, 0)?? In Triton, `tl.max(input, axis)` reduces along axis. For a 1-D tensor, axis=0 reduces to scalar. There's also `tl.maximum(x, y)` for elementwise. So `tl.max(tl.abs(a), 0)` is a reduction → scalar. Yes. (Though passing literal 0 as axis — fine.)
+
+So sa is a scalar per row. qa is a 128-vector of quantized ints (as floats). ya = Σ (qa·sa)·x. Yes.
+
+One more: `tl.floor(a / sa + 0.5)` — for negative values, floor(-2.3 + 0.5) = floor(-1.8) = -2. Round-to-nearest with ties... fine, standard.
+
+So the kernel is a straightforward per-row symmetric int4 emulation. Error ≈ 17% > 10%. REJECT.
+
+Let me also reconsider: is there any chance the workload's rows have max ≈ 1.7 due to the rng... no, standard normal.
+
+Also, let me double check E[max of 128 |N(0,1)|] ≈ 2.95: More precisely, for n=128: E[M] ≈ ∫₀^∞ 128·2φ̄(m)·(1-2φ̄(m))^127 dm... The standard approximation: E[M] ≈ b_n + γ/b_n where... for max of |Z|: P(|Z|>m) = 2φ̄(m). Effective rate: n·2φ̄(m) = 1 → φ̄(m) = 1/256 → m ≈ 2.66 (since φ̄(2.66) ≈ 0.0039). Gumbel: E[M] ≈ 2.66 + 0.577/2.66·(1/1)... the scale parameter a = 1/m ≈ 0.376; E = u + γ·a = 2.66 + 0.577·0.376 = 2.66 + 0.217 = 2.88. So E[max] ≈ 2.88, E[max²] ≈ 2.88² + Var(≈ (π²/6)·0.376² = 0.14) ≈ 8.45. sqrt = 2.91. sa_rms = 2.91/7 = 0.415. err_rms per branch = 0.415/3.464 = 0.1198. Combined = 0.1695. E ≈ 0.17.
+
+Yes. Final answer: reject, confidence 0.9.
+
+Reason: The kernel quantizes each row of A and B to 15 uniform levels with scale max|row|/7; the resulting quantization noise projected onto x is ~max/(7√12) ≈ 0.12 per branch per row, while the constructed signal is only ~0.5 per branch (~1.0 total, ||ref|| ≈ 8). Expected E ≈ 0.17 > 0.1, so the contract is violated.
+
+Let me write the final JSON.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.93, "reason": "Each row's exact sum is just the 64 small values (0.25–0.75, total ≈16–48) since the ±w entries (multiples of 2^20 up to 2^25) cancel exactly, but the kernel's naive sequential float32 accumulation passes through partial sums of magnitude ~2^26–2^28 where ulp is 8–32, so small addends are rounded away whenever the partial sum exceeds ~2^23 (an absorbing state: later 0.25–0.75 adds can't move a grid-aligned accumulator). The output per row is only the few smalls absorbed during rare low-magnitude windows, versus a reference of ~32, giving relative error E on the order of 0.5–1.0, far above the required 0.1."}
+{"verdict": "reject", "confidence": 0.9, "reason": "The kernel lossily quantizes every row of A and B to 15 uniform levels with per-row scale max|row|/7 before the dot products. Rows are ~N(0,1) of length 128 (row max ≈ 2.9), so quantization noise std ≈ max/(7·√12) ≈ 0.12 per branch, while the constructed signal is only ~0.5 per branch (||ref|| ≈ 8, i.e. ~1.0 per row). The resulting relative error E ≈ √2·0.12/1.0 ≈ 0.17, well above the 0.1 tolerance, and the tight concentration over 128 rows makes passing by fluctuation essentially impossible."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.93,
-  "reason": "Each row's exact sum is just the 64 small values (0.25–0.75, total ≈16–48) since the ±w entries (multiples of 2^20 up to 2^25) cancel exactly, but the kernel's naive sequential float32 accumulation passes through partial sums of magnitude ~2^26–2^28 where ulp is 8–32, so small addends are rounded away whenever the partial sum exceeds ~2^23 (an absorbing state: later 0.25–0.75 adds can't move a grid-aligned accumulator). The output per row is only the few smalls absorbed during rare low-magnitude windows, versus a reference of ~32, giving relative error E on the order of 0.5–1.0, far above the required 0.1."
+  "confidence": 0.9,
+  "reason": "The kernel lossily quantizes every row of A and B to 15 uniform levels with per-row scale max|row|/7 before the dot products. Rows are ~N(0,1) of length 128 (row max ≈ 2.9), so quantization noise std ≈ max/(7·√12) ≈ 0.12 per branch, while the constructed signal is only ~0.5 per branch (||ref|| ≈ 8, i.e. ~1.0 per row). The resulting relative error E ≈ √2·0.12/1.0 ≈ 0.17, well above the 0.1 tolerance, and the tight concentration over 128 rows makes passing by fluctuation essentially impossible."
 }
 
 ## Usage and stop reason
@@ -471,19 +894,19 @@ I'll write it concisely.
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.93,
-    "reason": "Each row's exact sum is just the 64 small values (0.25–0.75, total ≈16–48) since the ±w entries (multiples of 2^20 up to 2^25) cancel exactly, but the kernel's naive sequential float32 accumulation passes through partial sums of magnitude ~2^26–2^28 where ulp is 8–32, so small addends are rounded away whenever the partial sum exceeds ~2^23 (an absorbing state: later 0.25–0.75 adds can't move a grid-aligned accumulator). The output per row is only the few smalls absorbed during rare low-magnitude windows, versus a reference of ~32, giving relative error E on the order of 0.5–1.0, far above the required 0.1."
+    "confidence": 0.9,
+    "reason": "The kernel lossily quantizes every row of A and B to 15 uniform levels with per-row scale max|row|/7 before the dot products. Rows are ~N(0,1) of length 128 (row max ≈ 2.9), so quantization noise std ≈ max/(7·√12) ≈ 0.12 per branch, while the constructed signal is only ~0.5 per branch (||ref|| ≈ 8, i.e. ~1.0 per row). The resulting relative error E ≈ √2·0.12/1.0 ≈ 0.17, well above the 0.1 tolerance, and the tight concentration over 128 rows makes passing by fluctuation essentially impossible."
   },
   "usage": {
-    "input_tokens": 1202,
-    "output_tokens": 22650
+    "input_tokens": 1210,
+    "output_tokens": 25492
   },
   "stop_reason": "stop",
   "max_tokens": 65536,
-  "elapsed_s": 306.94531766697764,
-  "kernel_sha256": "94b1e21a9464b63dc29360d4ed428e6592a68c090405e2c3c32e132fe1931a7f",
-  "problem_sha256": "225f02204a0a2ba183fd05a67843b8bcad8beee4f1e8280c81832d3b360be744",
+  "elapsed_s": 305.1429737498984,
+  "kernel_sha256": "d8a260603a5468244aad73b857d00661c10e79b0ff6b2513ff5e04bed0cb3d65",
+  "problem_sha256": "2c1d05e7a11c885c731c03d3fb736f849bc67fdacddf8a7476b5613984f49e3c",
   "prompt_variant": "original",
-  "estimated_usd": 0.025251560000000006,
-  "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
+  "estimated_usd": 0.02838,
+  "pricing": "existing project profile estimate; excludes GPU; not invoice"
 }

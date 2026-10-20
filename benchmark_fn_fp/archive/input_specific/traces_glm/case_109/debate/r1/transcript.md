@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_q`
-- Turns: 11
-- Tool events: 18
+- Entry: `case_k`
+- Turns: 10
+- Tool events: 17
 - Claims: 2
 - Description updates: 2
-- LLM time: 84.89s across 10 calls | tokens: in=221086 out=5392 total=226478
+- LLM time: 101.367s across 9 calls | tokens: in=203638 out=7004 total=210642
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.95
+- Confidence: 0.97
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_q",
+    "entry": "case_k",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 
-### Turn 2 - `describer` (14.951686148999997s, in=4988 out=910)
+### Turn 2 - `describer` (14.568825425000004s, in=4970 out=988)
 
 Message:
 
 ```text
-I have full context already; recording the structured description model for this quantized nearest-neighbor routing case.
+The context is complete: a 16×16 SPD system with eigenvalues from 0.03125 to 1.75, solved by a Richardson iteration in fp32 Triton. I'll record the description model now.
 ```
 
 Tool calls:
@@ -75,36 +75,33 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
-      "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
-      "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
-      "Alternative inputs are out of scope; only this generated workload decides the verdict.",
-      "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
-    ],
-    "kernel_model": [
-      "Triton k
-  ...[truncated 3236 chars]
+      "Only the deterministic float32 inputs from make_inputs() (matrix 16x16, rhs 16) are in scope; alternative inputs are out of scope.",
+      "Reference is the exact float64 solution x of matrix @ x = rhs, computed from the original float32 values, not a finite iteration.",
+      "Output must be a finite (16,) vector with relative L2 error ||out-x||_2 / max(||x||_2, 0.004) <= 0.08; approximate solvers are allowed.",
+      "Target device: NVIDIA T4; generator (Hadamard-based orthogonal basis, eigenvalues 0.03125..1.75, seed 701010, unit-norm rhs) is public and deterministic.",
+      "Key mathematical context: Richardson iteration x_{k+1} = x_k + (b - A x_k) has per-mode convergence factor (1 - lambda); smallest eigenvalue 0.03125 gives factor 0.96875, so 64 steps reduce th
+  ...[truncated 2783 chars]
   Output summary:
   {
     "contract_model": [
-      "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
-      "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
-      "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
-      "Alternative inputs are out of scope; only this generated workload decides the verdict.",
-      "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
+      "Only the deterministic float32 inputs from make_inputs() (matrix 16x16, rhs 16) are in scope; alternative inputs are out of scope.",
+      "Reference is the exact float64 solution x of matrix @ x = rhs, computed from the original float32 values, not a finite iteration.",
+      "Output must be a finite (16,) vector with relative L2 error ||out-x||_2 / max(||x||_2, 0.004) <= 0.08; approximate solvers are allowed.",
+      "Target device: NVIDIA T4; generator (Hadamard-based orthogonal basis, eigenvalues 0.03125..1.75, seed 701010, unit-norm rhs) is public and deterministic.",
+      "Key mathematical context: Richardson iteration x_{k+1} = x_k + (b - A x_k) has per-mode convergence factor (1 - lambda); smallest eigenvalue 0.03125 gives factor 0.96875, so 64 steps reduce that error component by only ~0.96875^64 \u2248 0.13, i.e. ~87% of the slowest-mode error remains."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel _route_kernel: one program, rows = tl.arange(0,16); per dimension j in static_range(32) it quantizes both query[j] and all candidates to a 1/8 grid (floor(x*8+0.5)*0.125) and accumulates float32 squared deltas.",
-      "Selection: min over quantized distances, tie broken to smallest row index via tl.where(distances==min, row, INT_MAX) then min \u2014 implements the co
-  ...[truncated 2970 chars]
+      "Triton kernel _solve_kernel loads the full 16x16 matrix and rhs as float32, initializes state to zeros, and runs STEPS=64 Richardson iterations state += rhs - A@state, storing fp32 state (kernel.py lines 8-17, 22-23).",
+      "run() launches a sing
+  ...[truncated 2483 chars]
 
-### Turn 3 - `skeptic` (8.897310895000004s, in=12399 out=507)
+### Turn 3 - `skeptic` (17.657481266000005s, in=12572 out=1186)
 
 Message:
 
 ```text
-I'll record the two highest-risk, directly testable hypotheses for this fixed-seed near-tie workload.
+The math here is suspicious: with the smallest eigenvalue 0.03125, 64 Richardson steps leave ~13% of that mode's error, and since the mode weights of x scale as 1/λ, the slowest mode dominates the error budget. A quick estimate suggests relative error near ~0.10–0.11, potentially above the 0.08 threshold — this is the decisive claim to test.
 ```
 
 Tool calls:
@@ -112,16 +109,13 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
+    "rationale": "Per-mode Richardson error after k steps is (b_i/\u03bb_i)(1-\u03bb_i)^k. With Hadamard-distributed unit rhs (|b_i|\u22481/4), the \u03bb=0.03125 mode contributes error \u2248 0.25*32*0.96875^64 \u2248 1.05, while ||x||_2 \u2248 0.25*sqrt(\u03a3 1/\u03bb_i\u00b2) \u2248 9.3 (dominated by the same small-\u03bb modes). Estimated relative error \u2248 0.11, above the 0.08 bound \u2014 borderline and must be measured numerically.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
-      }
-    ],
-    "statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distanc
-  ...[truncated 191 chars]
+        "summary": "Output must satisfy relative L2 error ||output - x||_2 / max(||x||_2, 0.004) <= 0.08 vs the exact fp64 solution; only the make_inputs() workload is in scope, so the fixed spectrum (smallest eigenvalue 0.03125) and fixed unit rhs define the decisive ca
+  ...[truncated 310 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -130,28 +124,28 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
+    "rationale": "enable_fp_fusion=False disables FMA contraction; each tl.sum accumulates in fp32 with rounding, and 64 iterations compound this. Small-\u03bb mode components of x are large (~8 magnitude), so fp32 relative precision ~1e-7 is unlikely to matter, but rounding could add a systematic bias worth measuring separately from truncation error.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
+        "summary": "The contract requires finite output with relative L2 error <= 0.08 vs an fp64 exact reference for the specified workload; kernel arithmetic is entirely fp32 (kernel.py lines 11-16), so rounding error is a second in-scope contribution to the same error metric."
       }
     ],
-    "statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, pro
-  ...[truncated 92 chars]
+    "statement": "Float32 arithmetic in the 64-step Triton iteration accum
+  ...[truncated 194 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (7.278356251999995s, in=13771 out=586)
+### Turn 4 - `skeptic` (9.22088471s, in=14334 out=686)
 
 Message:
 
 ```text
-The two claim attempts failed because `scope_rationale` was missing. I'll re-send both with that field filled in.
+Both prior claim attempts were rejected for missing `scope_rationale`; I'll re-send them with the required field.
 ```
 
 Tool calls:
@@ -159,65 +153,64 @@ Tool calls:
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
+    "rationale": "Per-mode Richardson error after k steps is (b_i/\u03bb_i)(1-\u03bb_i)^k. With Hadamard-distributed unit rhs (|b_i|\u22481/4), the \u03bb=0.03125 mode contributes error \u2248 0.25*32*0.96875^64 \u2248 1.05, while ||x||_2 \u2248 9.3 (dominated by small-\u03bb modes). Estimated relative error \u2248 0.11, above the 0.08 bound \u2014 borderline and must be measured numerically.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
+        "summary": "Output must satisfy relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) <= 0.08 vs the exact fp64 solution; only the make_inputs() workload is in scope, so the fixed spectrum (smallest eigenvalue 0.03125) and fixed unit rhs define the decisive case."
       }
     ],
-    "scope_rationale": "The contract (problem.txt) fixes this exact seeded workload and defines the reference winn
-  ...[truncated 480 chars]
+    "scope_rationale": "The 
+  ...[truncated 559 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
+    "rationale": "Per-mode Richardson error after k steps is (b_i/\u03bb_i)(1-\u03bb_i)^k. With Hadamard-distributed unit rhs (|b_i|\u22481/4), the \u03bb=0.03125 mode contributes error \u2248 0.25*32*0.96875^64 \u2248 1.05, while ||x||_2 \u2248 9.3 (dominated by small-\u03bb modes). Estimated relative error \u2248 0.11, above the 0.08 bound \u2014 borderline and must be measured numerically.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
+        "summary": "Output must satisfy relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) <= 0.08 vs the exact fp64 solution; only the make_inputs() workload is in scope, so the fixed spectrum (smallest eigenvalue 0.03125) and fixed unit rhs define the decisive case."
       }
     ],
-    "scope_rationale": "The contract (problem.txt) fixes this exact seeded workload and defines the reference winner by exact float64 distances; if the quantized route selects a different winner whose embedding exceeds 0.1 relative L2, the contract is violated on the only in-scope input.",
-    "statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embeddin
-  ...[truncated 114 chars]
+    "scope_rationale": "The contract (problem.txt) requires run(*make_inputs()) to achieve relative L2 error <= 0.08 against the exact fp64 solution for this single fixed workload; slow-mode Richardson truncation on this exact input is precisely the condition that could violate that bound.",
+    "statement": "run(*make_inputs()) produces a relative L2 error exceeding 0.08 against the exact fp64 solution, because 
+  ...[truncated 193 chars]
 - `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
+    "rationale": "enable_fp_fusion=False disables FMA contraction; each tl.sum accumulates in fp32 with rounding, and 64 iterations compound this. Small-\u03bb mode components of x are large (~8 magnitude), so fp32 rounding is unlikely to matter alone, but it could push a borderline truncation-error case over 0.08.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
+        "summary": "The contract requires finite output with relative L2 error <= 0.08 vs an fp64 exact reference for the specified workload; kernel arithmetic is entirely fp32 (kernel.py lines 11-16), so rounding error is a second in-scope contribution to the same error metric."
       }
     ],
-    "scope_rationale": "problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner chang
-  ...[truncated 364 chars]
+    "scope_rationale": "The contract measures error against an fp64 exact reference with a 0.08 bound on the so
+  ...[truncated 394 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
+    "rationale": "enable_fp_fusion=False disables FMA contraction; each tl.sum accumulates in fp32 with rounding, and 64 iterations compound this. Small-\u03bb mode components of x are large (~8 magnitude), so fp32 rounding is unlikely to matter alone, but it could push a borderline truncation-error case over 0.08.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
+        "summary": "The contract requires finite output with relative L2 error <= 0.08 vs an fp64 exact reference for the specified workload; kernel arithmetic is entirely fp32 (kernel.py lines 11-16), so rounding error is a second in-scope contribution to the same error metric."
       }
     ],
-    "scope_rationale": "problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner changes the output on the in-scope input and is testable against the stated reference.",
-    "statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.",
-    "status": "open"
-  }
+    "scope_rationale": "The contract measures error against an fp64 exact reference with a 0.08 bound on the sole in-scope input; kernel.py's entirely-fp32 iteration is a second in-scope error contribution to that same metric.",
+    "statement": "Float32 arithmetic in the 64-step Triton iteration accumulates rounding error on top of iteration truncation, potentially pushing a borderline case over the 0.08 relative error bound even if an ideal fp64 64-step Richardson iteration would just barely 
+  ...[truncated 28 chars]
 
-### Turn 5 - `describer` (8.531299977000003s, in=14812 out=619)
+### Turn 5 - `describer` (16.395337752999993s, in=15881 out=1303)
 
 Message:
 
 ```text
-The description model is already recorded and current. I'll add one focused refinement that sharpens what the experiment needs to measure, since the open claims c1/c2 directly mirror my risk map.
+The description model is already in place, and the two open claims (c1 truncation, c2 fp32 rounding) lack evidence. I'll add a targeted update guiding evidence collection: because the matrix is exactly Q·diag(λ)·Q^T with a Hadamard Q, the iteration's modal decomposition is analytically exact, so a CPU-side fp64/fp32 simulation of the 64-step loop is decisive evidence without needing the GPU.
 ```
 
 Tool calls:
@@ -225,34 +218,33 @@ Tool calls:
 - `record_description_update -> t10 ok`
   Args:
   {
+    "impact_on_claims": [
+      "c1 (truncation error) can be settled decisively by an exact per-mode or CPU fp64 64-step iteration simulation; error contribution of mode i is exactly (b_i/\u03bb_i)(1-\u03bb_i)^64 in the eigenbasis, so no GPU probe is strictly required.",
+      "c2 (fp32 rounding) can be settled by simulating the same 64-step loop in float32 on CPU as a proxy for the Triton kernel; enable_fp_fusion=False makes each step two independently rounded ops, and Triton tl.sum tree-reduction order may differ from torch, so the GPU probe is the strongest evidence but the CPU fp32 loop bounds the effect.",
+      "The relevant denominator for both claims is ||x||_2 (\u22487-9), since the 0.004 floor is inactive: eigenvalue bounds give ||x||_2 >= 1/1.75."
+    ],
     "kernel_model": [
-      "Refinement for experiment design: exact float64 squared distances are ~(radii)^2 \u2248 1.0 with spread only ~\u00b10.004 across candidates (radii 1\u00b10.002); quantized 1/8-grid distances can differ from these by up to ~0.125, i.e. ~30x the true spread, making a winner flip very plausible.",
-      "embeddings are iid N(0,1) 8-vectors, so two independent rows differ in relative L2 by ~sqrt(2)\u22481.41 in expectation; a wrong winner will almost surely fail the 0.1 relative-L2 tolerance, so the winner identity comparison effectively decides the verdict.",
-      "The experimenter can decide c1/c2 in one CPU-only computation: reproduce make_inputs_numpy (seed 840104), compute exact float64 winner, compute the quantized float32 route winner (mirroring kernel lines 11-2
-  ...[truncated 1144 chars]
+      "The ei
+  ...[truncated 3115 chars]
   Output summary:
   {
     "contract_model": [],
-    "impact_on_claims": [],
+    "impact_on_claims": [
+      "c1 (truncation error) can be settled decisively by an exact per-mode or CPU fp64 64-step iteration simulation; error contribution of mode i is exactly (b_i/\u03bb_i)(1-\u03bb_i)^64 in the eigenbasis, so no GPU probe is strictly required.",
+      "c2 (fp32 rounding) can be settled by simulating the same 64-step loop in float32 on CPU as a proxy for the Triton kernel; enable_fp_fusion=False makes each step two independently rounded ops, and Triton tl.sum tree-reduction order may differ from torch, so the GPU probe is the strongest evidence but the CPU fp32 loop bounds the effect.",
+      "The relevant denominator for both claims is ||x||_2 (\u22487-9), since the 0.004 floor is inactive: eigenvalue bounds give ||x||_2 >= 1/1.75."
+    ],
     "kernel_model": [
-      "Refinement for experiment design: exact float64 squared distances are ~(radii)^2 \u2248 1.0 with spread only ~\u00b10.004 across candidates (radii 1\u00b10.002); quantized 1/8-grid distances can differ from these by up to ~0.125, i.e. ~30x the true spread, making a winner flip very plausible.",
-      "embeddings are iid N(0,1) 8-vectors, so two independent rows differ in relative L2 by ~sqrt(2)\u22481.41 in expectation; a wrong winner will almost surely fail the 0.1 relative-L2 tolerance, so the winner identity comparison effectively decides the verdict.",
-      "The experimenter can decide c1/c2 in one CPU-only computation: reproduce make_inputs_numpy (seed 840104), compute exact float64 winner, compute the quantized float32 route winner (mirroring kernel lines 11-20), and compare indices plus relative L2 of the two embedding rows."
-    ],
-    "open_questions": [
-      "Whether the quantized route and exact route pick the same index for seed 840104 \u2014 needs the experimenter's numeric check; source inspection alone cannot decide."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Decisive probe for c1/c2: comput
-  ...[truncated 879 chars]
+      "The eigendecomposition A = Q diag(\u03bb) Q^T with Hadamard Q (entries \u00b10.25, orthogonal) is exact up to fp32 storage of A; Q^T b = b_modal is computable on CPU deterministically, so per-mode error analysis (b_i/\u03bb_i)(1-\u03bb_i)^64 needs no GPU.",
+      "Because Q is a Hadamard matrix, |b_modal_i| are exact linear combinations of the fp32 rhs entries with coefficients \u0
+  ...[truncated 2803 chars]
 
-### Turn 6 - `skeptic` (5.003481917000002s, in=20420 out=228)
+### Turn 6 - `skeptic` (7.281492822000004s, in=24332 out=372)
 
 Message:
 
 ```text
-The two decisive in-scope hypotheses (quantization-induced winner flip and quantized-space tie misrouting) are already recorded as c1 and c2; the fixed single-workload contract leaves no additional testable surfaces worth attacking, and I should not run experiments myself.
+Both decisive claims (c1: Richardson truncation on the λ=0.03125 mode vs the 0.08 bound; c2: fp32 rounding on top) are already recorded as in_scope and cover the full error budget of this kernel on the sole in-scope workload. The remaining details (output fully overwritten, contiguous inputs, power-of-two N) show no further attack surface. I'll note that no additional claims are needed.
 ```
 
 Tool calls:
@@ -260,7 +252,7 @@ Tool calls:
 - `record_no_new_claims -> t11 ok`
   Args:
   {
-    "reason": "The contract restricts scope to the single seeded make_inputs workload; the only material correctness question \u2014 whether the quantized 1/8-grid route picks the same winner as the exact float64 reference \u2014 is fully covered by existing claims c1 and c2. The gather is unquantized and the tie rule is faithfully implemented in quantized space, so no additional distinct, testable failure mode exists; the claims now need the experimenter's numeric probe rather than more hypotheses.",
+    "reason": "The kernel's only in-scope failure mode is exceeding the 0.08 relative L2 bound on the single fixed workload; both error contributions (Richardson truncation on the smallest-eigenvalue mode, c1, and fp32 iteration rounding, c2) are already recorded as in-scope claims awaiting numerical probes. Source review of kernel.py shows no other in-scope risk: output is fully overwritten by tl.store, inputs from make_inputs are contiguous, N=16 satisfies tl.arange power-of-two requirement, and the largest eigenvalue 1.75 keeps the iteration stable.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -269,7 +261,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The contract restricts scope to the single seeded make_inputs workload; the only material correctness question \u2014 whether the quantized 1/8-grid route picks the same winner as the exact float64 reference \u2014 is fully covered by existing claims c1 and c2. The gather is unquantized and the tie rule is faithfully implemented in quantized space, so no additional distinct, testable failure mode exists; the claims now need the experimenter's numeric probe rather than more hypotheses.",
+    "reason": "The kernel's only in-scope failure mode is exceeding the 0.08 relative L2 bound on the single fixed workload; both error contributions (Richardson truncation on the smallest-eigenvalue mode, c1, and fp32 iteration rounding, c2) are already recorded as in-scope claims awaiting numerical probes. Source review of kernel.py shows no other in-scope risk: output is fully overwritten by tl.store, inputs from make_inputs are contiguous, N=16 satisfies tl.arange power-of-two requirement, and the largest eigenvalue 1.75 keeps the iteration stable.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -278,12 +270,12 @@ Tool calls:
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (12.40886148300001s, in=21485 out=968)
+### Turn 7 - `experimenter` (15.589430137000008s, in=25502 out=1199)
 
 Message:
 
 ```text
-I'll run two independent probes: c1 executes the real kernel on GPU against the exact float64 reference on the fixed seeded workload; c2 analyzes quantized-distance ties and smallest-index resolution vs the exact winner on the same inputs.
+I'll launch two independent probes together: c1 runs the actual Triton kernel on the in-scope workload and measures relative L2 error vs the fp64 exact solve; c2 simulates the 64-step loop in fp32 vs fp64 to isolate the rounding contribution.
 ```
 
 Tool calls:
@@ -292,8 +284,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nfrom kernel import run, make_inputs\n\nquery, candidates, embeddings = make_inputs()\nout = run(query, candidates, embeddings)\n\n# exact float64 reference\nq = query.to(torch.float64).numpy()\nc = candidates.to(torch.float64).numpy()\nd = ((c - q) ** 2).sum(axis=1)\nref_idx = int(np.argmin(d))  # argmin returns first (smallest) index on ties\nref_out = embeddings[ref_idx].numpy().astype(np.float64)\nrel = np.linalg.norm(out.numpy().astype(np.float64) - ref_out) / max(np.linalg.norm(ref_out), 1e-12)\n\nprint(json.dumps({\n    \"metric\": \"kernel winner vs exact float64 winner on fixed seed-840104 workload\",\n    \"kernel_output\": out.tolist(),\n    \"reference_out
-  ...[truncated 459 chars]
+    "code": "import sys, json, numpy as np, torch\nsys.path.insert(0, \"/root/numerical_cases/case_k\")\nimport kernel\n\nmatrix, rhs = kernel.make_inputs(\"cuda\")\nout = kernel.run(matrix, rhs)\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nA = matrix.detach().cpu().numpy().astype(np.float64)\nb = rhs.detach().cpu().numpy().astype(np.float64)\nx = np.linalg.solve(A, b)\n\nerr = np.linalg.norm(out_np - x) / max(np.linalg.norm(x), 0.001*np.sqrt(16))\n# modal decomposition for diagnosis\nQ = np.array([[1.0]], dtype=np.float64)\nwhile len(Q) < 16:\n    Q = np.block([[Q, Q], [Q, -Q]])\nQ /= 4.0\nlam = np.array([0.03125,0.0625,0.125,0.25,0.375,0.5,0.625,0.75,\n                0.875,1.0,1.125,1.25,1.375,1.5,1.625,1.75])\nbm = Q.T @ b\nxm = bm / lam\nerrm = Q.T @ 
+  ...[truncated 746 chars]
   Output summary:
   {
     "artifacts": [
@@ -301,38 +293,36 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t12_probe.py",
-        "sha256": "6ad426478b0d919ead0d6f6aa49cc0bf7b7fe7d8c24592b1cc21bb940551f753"
+        "sha256": "ed213fdb347ab5dc1a153ff5dcde28841d18beacdd787ff20c1861d8eaa7f4c4"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t12_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "f71cd4963ceec57a1f7a8f4d17d393ffd2d3ec8b99ebf315b5ef47e902bb3092"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t12_stderr.txt",
-        "sha256": "46487c07879e4dd4d94a96d6a9445957c6991a10cec6bd79aaecc1e00d8358a2"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t12_json_result.json",
+        "sha256": "f0944ba117b5b8b0aed6e2b9e7651f58d45e5fa72f5358a065efbe3080ccc927"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
-    "duration_s": 5.731198,
-    "event_id": "t12",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python pro
-  ...[truncated 2195 chars]
+    "claim_statement": "run(*make_inputs()) produces a relative L2 error exceeding 0.08 against the exact fp64 solution, because 64 Richardson iterations leave ~13% of the smallest-eigenvalue (\u03bb=0.03125) mode's solution componen
+  ...[truncated 4115 chars]
 - `run_claim_probe -> t13 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "import numpy as np, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nfrom kernel import make_inputs_numpy\n\nquery, candidates, embeddings = make_inputs_numpy()\n\n# exact float64 route\nq64 = query.astype(np.float64)\nd_exact = ((candidates.astype(np.float64) - q64) ** 2).sum(axis=1)\nref_idx = int(np.argmin(d_exact))\n\n# quantized float32 route mirroring kernel lines 11-20\ndef quant(x):\n    return np.floor(x.astype(np.float32) * np.float32(8.0) + np.float32(0.5)).astype(np.float32) * np.float32(0.125)\nq_q = quant(query)\nc_q = quant(candidates)\ndist = np.zeros(16, dtype=np.float32)\nfor i in range(16):\n    acc = np.float32(0.0)\n    for j in range(32):\n        delta = np.float32(c_q[i, j] - q_q[j])\n        acc = np.float32(acc + np
-  ...[truncated 1056 chars]
+    "code": "import sys, json, numpy as np, torch\nsys.path.insert(0, \"/root/numerical_cases/case_k\")\nimport kernel\n\nA32, b32 = kernel.make_inputs_numpy()\nA = A32.astype(np.float64); b = b32.astype(np.float64)\nx = np.linalg.solve(A, b)\n\n# fp64 64-step Richardson (pure truncation)\ns64 = np.zeros(16)\nfor _ in range(64):\n    s64 = s64 + (b - A @ s64)\n# fp32 64-step Richardson (truncation + rounding, mimicking kernel ops)\ns32 = np.zeros(16, dtype=np.float32)\nA32m, b32v = A32, b32\nfor _ in range(64):\n    prod = (A32m * s32[None, :]).astype(np.float32)\n    acc = prod.sum(axis=1, dtype=np.float32)  # fp32 accumulation\n    resid = (b32v - acc).astype(np.float32)\n    s32 = (s32 + resid).astype(np.float32)\n\nden = max(np.linalg.norm(x), 0.001*np.sqrt(16))\ne6
+  ...[truncated 824 chars]
   Output summary:
   {
     "artifacts": [
@@ -340,13 +330,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t13_probe.py",
-        "sha256": "2ee06555732e01d04dd1fc30613b3d27c2e2b0f54e49ef716dc7a43eb00429aa"
+        "sha256": "d154c896bad719cbd7fab9368c49be4c6f92ea5e3f9f2b035a7cba9bb0e772e5"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t13_stdout.txt",
-        "sha256": "bba7de39deeb77dbde2ce4c951aa96c7f404b8a0cb845ce1fb5048ac27b639ea"
+        "sha256": "5a16c0d6d0e721ea2d83650df2ae888f34bc8279f7cf7ec511bb8c11ab85cb9b"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -358,19 +348,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t13_json_result.json",
-        "sha256": "0d0c6cfca8d45e23f51aec1a74e2ebfaf925fd453376798217585e80f426f911"
+        "sha256": "26a9a1787cd5f5a5b9723086df131d5a8ecf42141c6e1ed5dbe926c4ad0b38bc"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even tho
-  ...[truncated 5765 chars]
+    "claim_statement": "Float32 arithmetic in the 64-step Triton iteration accumulates rounding error on top of iteration truncation, potentially pushing a borderline case over the 0.08 relative error bound even if an ideal fp64 64-s
+  ...[truncated 4071 chars]
 
-### Turn 8 - `experimenter` (10.717039612999997s, in=26578 out=662)
+### Turn 8 - `experimenter` (8.386956287000004s, in=30669 out=651)
 
 Message:
 
 ```text
-The c2 probe shows both routes pick index 6 with no quantized tie — that rebuts c2. The c1 GPU probe hit a .numpy() on CUDA tensor error, so I'll finalize c2 as rebutted and relaunch a fixed c1 probe in the same turn.
+Both probes completed. The actual kernel output has relative L2 error 0.0236 (well under 0.08), and fp32 rounding contributes essentially nothing (~1e-7 state difference). I'll finalize both claims as rebutted.
 ```
 
 Tool calls:
@@ -379,18 +369,41 @@ Tool calls:
   Args:
   {
     "data": {
-      "exact64_ref_index": 6,
-      "n_tied_at_min": 1,
-      "quantized_min_distance": 0.953125,
-      "quantized_winner_index": 6,
-      "tie_changes_index_vs_exact": false,
-      "tied_indices": [
-        6
-      ]
+      "b_modal_min_lambda": -0.02014345972565934,
+      "err_modal_min_lambda": 0.08449560962617228,
+      "finite": true,
+      "norm_x": 3.930916535805517,
+      "passes_contract": true,
+      "relative_l2_error": 0.023636854556236472,
+      "tolerance": 0.08,
+      "x_modal_min_lambda": -0.6445907112210989
+    },
+    "event_id": "t12",
+    "status": "rebutted",
+    "summary": "GPU run of run(*make_inputs()) gives relative L2 error 0.0236 vs the fp64 exact solve, far below the 0.08 tolerance. The skeptic's uniform-weight assumption failed: for seed 701010 the slowest-mode (\u03bb=0.03125) modal weight is only b_modal=-0.0201 (x_modal=-0.645), not ~0.25, so truncation error in that mode (0.0845) is small relative to ||x||_2=3.93. Output is finite, shape (16,). Claim of error exceeding 0.08 is rebut
+  ...[truncated 33 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "rebutted",
+    "evidence_id": "c1.e1",
+    "summary": "GPU run of run(*make_inputs()) gives relative L2 error 0.0236 vs the fp64 exact solve, far below the 0.08 tolerance. The skeptic's uniform-weight assumption failed: for seed 701010 the slowest-mode (\u03bb=0.03125) modal weight is only b_modal=-0.0201 (x_modal=-0.645), not ~0.25, so truncation error in that mode (0.0845) is small relative to ||x||_2=3.93. Output is finite, shape (16,). Claim of error exceeding 0.08 is rebutted.",
+    "supports": "rebutted",
+    "tool_event_id": "t12"
+  }
+- `finalize_probe_evidence -> t15 ok`
+  Args:
+  {
+    "data": {
+      "max_abs_diff_fp32_vs_fp64_states": 1.403139904265771e-07,
+      "relerr_fp32_iteration": 0.023636824130865694,
+      "relerr_fp64_iteration": 0.02363684706908509,
+      "rounding_increment": -2.293821939683416e-08,
+      "tolerance": 0.08
     },
     "event_id": "t13",
     "status": "rebutted",
-    "summary": "On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 \u2014 no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.",
+    "summary": "CPU fp32 vs fp64 simulation of the 64-step Richardson loop shows fp32 rounding is negligible: fp64-iteration relerr 0.02364 vs fp32-iteration relerr 0.02364 (increment -2.3e-8, max state difference 1.4e-7). The GPU kernel itself (t12) measured 0.0236, matching the simulations, confirming rounding does not push the result anywhere near the 0.08 bound. Claim rebutted.",
     "supports": "rebutted"
   }
   Output summary:
@@ -398,98 +411,25 @@ Tool calls:
     "claim_id": "c2",
     "claim_status": "rebutted",
     "evidence_id": "c2.e1",
-    "summary": "On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 \u2014 no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.",
+    "summary": "CPU fp32 vs fp64 simulation of the 64-step Richardson loop shows fp32 rounding is negligible: fp64-iteration relerr 0.02364 vs fp32-iteration relerr 0.02364 (increment -2.3e-8, max state difference 1.4e-7). The GPU kernel itself (t12) measured 0.0236, matching the simulations, confirming rounding does not push the result anywhere near the 0.08 bound. Claim rebutted.",
     "supports": "rebutted",
     "tool_event_id": "t13"
   }
-- `run_claim_probe -> t15 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_q\")\nfrom kernel import run, make_inputs\n\nquery, candidates, embeddings = make_inputs()\nout = run(query, candidates, embeddings)\n\n# exact float64 reference (host copies)\nq = query.cpu().to(torch.float64).numpy()\nc = candidates.cpu().to(torch.float64).numpy()\ne = embeddings.cpu().numpy().astype(np.float64)\nd = ((c - q) ** 2).sum(axis=1)\nref_idx = int(np.argmin(d))\nref_out = e[ref_idx]\nout_np = out.cpu().numpy().astype(np.float64)\nrel = float(np.linalg.norm(out_np - ref_out) / max(np.linalg.norm(ref_out), 1e-12))\n\n# also identify which embedding row the kernel actually returned\nrow_errs = [float(np.linalg.norm(out_np - e[i])) for i in range(16)]\nkernel_idx 
-  ...[truncated 549 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t15_probe.py",
-        "sha256": "6e4cb12bf9205c504273da261026d7cf64291b3da7b7083094957624403577da"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t15_stdout.txt",
-        "sha256": "2be742e7301faa8295a58261c4ca873cf3c9ec407de5f5cdc32356ea2dc77488"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t15_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t15_json_result.json",
-        "sha256": "38016bf6aa416f5841e89e7af4ef8a8f8e72a24c2bdc703771a51de8a40690ec"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from e
-  ...[truncated 4594 chars]
 
-### Turn 9 - `experimenter` (4.750628974999998s, in=33868 out=259)
+### Turn 9 - `skeptic` (5.018401441999998s, in=37668 out=223)
 
 Message:
 
 ```text
-The fixed c1 GPU probe succeeded: the kernel returned embedding row 6, which matches the exact float64 reference winner (index 6), with relative L2 0.0 — well within the 0.1 tolerance. This rebuts c1's winner-flip hypothesis. All open claims will then be resolved.
+Both in-scope claims (c1 truncation, c2 fp32 rounding) are decisively rebutted by the actual GPU run, which measured a relative L2 error of 0.0236 against the exact fp64 solution — well within the 0.08 tolerance. Output is finite and correctly shaped. No new in-scope risk surfaces in the evidence.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t16 ok`
+- `record_no_new_claims -> t16 ok`
   Args:
   {
-    "data": {
-      "kernel_returned_row_index": 6,
-      "passes_contract": true,
-      "ref_exact64_index": 6,
-      "relative_l2": 0.0,
-      "tolerance": 0.1,
-      "winner_match": true
-    },
-    "event_id": "t15",
-    "status": "rebutted",
-    "summary": "On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.",
-    "supports": "rebutted"
-  }
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "rebutted",
-    "evidence_id": "c1.e1",
-    "summary": "On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.",
-    "supports": "rebutted",
-    "tool_event_id": "t15"
-  }
-
-### Turn 10 - `skeptic` (5.104751644999993s, in=37613 out=272)
-
-Message:
-
-```text
-Both in-scope claims were decisively tested: the quantized route and the exact float64 reference both select candidate 6, and the kernel's GPU output matches the reference embedding row exactly (relative L2 = 0.0). No new evidence exposes any further failure mode, so I'm closing out with no new claims.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t17 ok`
-  Args:
-  {
-    "reason": "Final review: the fixed single-workload contract leaves only the winner-selection question, which c1 (quantization-induced winner flip) and c2 (quantized-space tie misrouting) fully covered. Both were tested on the actual in-scope seed-840104 workload: c2's CPU analysis showed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no tie), matching the exact float64 winner, and c1's GPU probe confirmed the kernel's real output equals the reference embedding row 6 exactly (relative L2 = 0.0, well within the 0.1 tolerance). The gather is unquantized and the tie rule is faithfully implemented, so no additional material, testable, in-scope failure mode exists.",
+    "reason": "Final review: the sole in-scope failure mode (relative L2 error > 0.08 on the fixed make_inputs workload) was directly tested on GPU. The kernel achieves relerr 0.0236 vs the exact fp64 solve with finite output and shape (16,), and fp32 rounding contributes only ~1e-7 state difference. Both recorded claims c1 and c2 are rebutted by direct runtime evidence; no new material, testable, in-scope problem is exposed.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -498,149 +438,154 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the fixed single-workload contract leaves only the winner-selection question, which c1 (quantization-induced winner flip) and c2 (quantized-space tie misrouting) fully covered. Both were tested on the actual in-scope seed-840104 workload: c2's CPU analysis showed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no tie), matching the exact float64 winner, and c1's GPU probe confirmed the kernel's real output equals the reference embedding row 6 exactly (relative L2 = 0.0, well within the 0.1 tolerance). The gather is unquantized and the tie rule is faithfully implemented, so no additional material, testable, in-scope failure mode exists.",
+    "reason": "Final review: the sole in-scope failure mode (relative L2 error > 0.08 on the fixed make_inputs workload) was directly tested on GPU. The kernel achieves relerr 0.0236 vs the exact fp64 solve with finite output and shape (16,), and fp32 rounding contributes only ~1e-7 state difference. Both recorded claims c1 and c2 are rebutted by direct runtime evidence; no new material, testable, in-scope problem is exposed.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 16,
-    "turn": 10
+    "reviewed_tool_event_count": 15,
+    "turn": 9
   }
 
-### Turn 11 - `judge` (7.246436587999995s, in=35152 out=381)
+### Turn 10 - `judge` (7.248156953999995s, in=37710 out=396)
 
 Message:
 
 ```text
-Both in-scope failure hypotheses were decisively tested on the fixed seed-840104 workload and rebutted: the kernel's quantized route picks the same winner (index 6) as the exact float64 reference, with relative L2 0.0 against a 0.1 tolerance. No open claims remain and the Skeptic signed off with no further concerns. I'll record the trust verdict.
+The sole in-scope failure mode was directly tested: the GPU run achieved relative L2 error 0.0236 against the exact fp64 solve, well within the 0.08 contract bound, with finite output and correct shape. Both error-budget claims (c1 truncation, c2 rounding) were decisively rebutted, and the Skeptic reviewed the latest evidence with no new claims. Recording a trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t18 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The 
-  ...[truncated 412 chars]
+    "reason": "The contract (problem.txt) requires run(*make_inputs()) to produce a finite (16,) vector with relative L2 error <= 0.08 vs the exact fp64 solve for this single fixed workload. Direct GPU probe (t12) measured relative L2 error 0.0236 (denominator ||x||_2=3.93; floor inactive), finite output, shape (16,) \u2014 decisively passing. Claim c1 (Richardson truncation on the smallest-eigenvalue mode exceeding the bound) was rebutted: the seed-701010 rhs has only modal weight b=-0.0201 on the \u03bb=0.03125 mode, so the 13% unconverged fraction yields a small error contribution. Claim c2 (fp32 rounding pushing the result over the bound) was rebutted: fp32 vs fp64 simulation of the 64-step loop differ by only ~1e-7 i
+  ...[truncated 286 chars]
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The problem text explicitly documents the quantized approximate route as intended, so the coarse-grid approximation is contractually acceptable; on this workload it selects the correct row and the unquantized gather reproduces the reference embedding exactly. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence. The kernel meets the numerical contract.",
-    "verdict
-  ...[truncated 12 chars]
+    "reason": "The contract (problem.txt) requires run(*make_inputs()) to produce a finite (16,) vector with relative L2 error <= 0.08 vs the exact fp64 solve for this single fixed workload. Direct GPU probe (t12) measured relative L2 error 0.0236 (denominator ||x||_2=3.93; floor inactive), finite output, shape (16,) \u2014 decisively passing. Claim c1 (Richardson truncation on the smallest-eigenvalue mode exceeding the bound) was rebutted: the seed-701010 rhs has only modal weight b=-0.0201 on the \u03bb=0.03125 mode, so the 13% unconverged fraction yields a small error contribution. Claim c2 (fp32 rounding pushing the result over the bound) was rebutted: fp32 vs fp64 simulation of the 64-step loop differ by only ~1e-7 in state, and the kernel result matches the simulation. The contract explicitly permits an approximate solver, so the remaining 2.4% truncation error is acceptable per the 0.08 tolerance clause. Skeptic signed off with no new claims after reviewing the evidence.",
+    "verdict": "trust"
+  }
 
 ## Description Model
 
 {
   "contract_model": [
-    "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
-    "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
-    "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
-    "Alternative inputs are out of scope; only this generated workload decides the verdict.",
-    "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
+    "Only the deterministic float32 inputs from make_inputs() (matrix 16x16, rhs 16) are in scope; alternative inputs are out of scope.",
+    "Reference is the exact float64 solution x of matrix @ x = rhs, computed from the original float32 values, not a finite iteration.",
+    "Output must be a finite (16,) vector with relative L2 error ||out-x||_2 / max(||x||_2, 0.004) <= 0.08; approximate solvers are allowed.",
+    "Target device: NVIDIA T4; generator (Hadamard-based orthogonal basis, eigenvalues 0.03125..1.75, seed 701010, unit-norm rhs) is public and deterministic.",
+    "Key mathematical context: Richardson iteration x_{k+1} = x_k + (b - A x_k) has per-mode convergence factor (1 - lambda); smallest eigenvalue 0.03125 gives factor 0.96875, so 64 steps reduce that error component by only ~0.96875^64 \u2248 0.13, i.e. ~87% of the slowest-mode error remains."
   ],
   "kernel_model": [
-    "Triton kernel _route_kernel: one program, rows = tl.arange(0,16); per dimension j in static_range(32) it quantizes both query[j] and all candidates to a 1/8 grid (floor(x*8+0.5)*0.125) and accumulates float32 squared deltas.",
-    "Selection: min over quantized distances, tie broken to smallest row index via tl.where(distances==min, row, INT_MAX) then min \u2014 implements the contract's tie rule.",
-    "Gathers embeddings[winner*8 + 0..7] without quantization and stores to an 8-element float32 output; run() launches grid (1,) with N=16, D=32, E=8 hardcoded, matching shapes in make_inputs.",
-    "Distance accumulation is sequential over 32 dims in float32 with enable_fp_fusion=False; quantization error per coordinate is up to 1/16, so per-coordinate squared error up to ~0.0039 and D=32 accumulates up to ~0.125 possible drift vs the exact float64 distances.",
-    "make_inputs generates candidates on a unit-ish sphere around the query (normalized offsets, radii 1\u00b10.002), so exact float64 distances are near-equal (~1024 across candidates) \u2014 the workload is deliberately near-tie, making the winner highly sensitive to quantization.",
-    "Refinement for experiment design: exact float6
-...[truncated 3243 chars]
+    "Triton kernel _solve_kernel loads the full 16x16 matrix and rhs as float32, initializes state to zeros, and runs STEPS=64 Richardson iterations state += rhs - A@state, storing fp32 state (kernel.py lines 8-17, 22-23).",
+    "run() launches a single program with N=16, STEPS=64, num_warps=4, enable_fp_fusion=False, and returns a preallocated float32 (16,) output.",
+    "make_inputs_numpy() constructs A = Q diag(lambda) Q^T with a scaled Hadamard Q (orthogonal after /4) and the listed eigenvalues, then a unit-norm fp32 rhs from PCG64 seed 701010.",
+    "All arithmetic inside the kernel is float32; the loop is unrolled statically (STEPS is constexpr).",
+    "The eigendecomposition A = Q diag(\u03bb) Q^T with Hadamard Q (entries \u00b10.25, orthogonal) is exact up to fp32 storage of A; Q^T b = b_modal is computable on CPU deterministically, so per-mode error analysis (b_i/\u03bb_i)(1-\u03bb_i)^64 needs no GPU.",
+    "Because Q is a Hadamard matrix, |b_modal_i| are exact linear combinations of the fp32 rhs entries with coefficients \u00b10.25; they are NOT neces
+...[truncated 3992 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Description of case_q: fixed-seed nearest-candidate routing task where the kernel uses 1/8-grid quantized float32 distances while the reference uses exact float64 distances; verdict hinges on whether both routes pick the same (or close-enough) embedding row for this single generated workload.
-- `du2` tasks=`initial`: Refinement of case_q description: the near-tie geometry (radii 1±0.002, true distance spread ~0.004 vs quantization drift ~0.125) makes a winner flip likely, and iid N(0,1) embeddings mean any wrong row fails the 0.1 relative-L2 tolerance; the verdict reduces to comparing the quantized-route winner index against the exact float64 winner index on the fixed seed-840104 workload.
+- `du1` tasks=`initial`: case_k: 16x16 SPD system (Hadamard eigenvectors, eigenvalues 0.03125-1.75, unit-norm rhs, seed 701010) solved by 64 steps of fp32 Richardson iteration in a Triton kernel; contract allows relative L2 error <= 0.08 vs the exact fp64 solution.
+- `du2` tasks=`initial`: Evidence-routing update for case_k: the Hadamard eigendecomposition makes the 64-step Richardson error analytically exact per mode, so CPU fp64/fp32 simulations of the fixed seeded input are decisive evidence for claims c1 (truncation) and c2 (fp32 rounding); the rhs projection Q^T rhs for seed 701010 determines whether the estimated ~0.11 relative error exceeds the 0.08 bound.
 
 ## Claims
 
 ### c1 - `rebutted`
 
-Statement: On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.
+Statement: run(*make_inputs()) produces a relative L2 error exceeding 0.08 against the exact fp64 solution, because 64 Richardson iterations leave ~13% of the smallest-eigenvalue (λ=0.03125) mode's solution component unconverged, and that mode carries the largest share of ||x||_2.
 
 Scope: `in_scope`
 
-Scope rationale: The contract (problem.txt) fixes this exact seeded workload and defines the reference winner by exact float64 distances; if the quantized route selects a different winner whose embedding exceeds 0.1 relative L2, the contract is violated on the only in-scope input.
+Scope rationale: The contract (problem.txt) requires run(*make_inputs()) to achieve relative L2 error <= 0.08 against the exact fp64 solution for this single fixed workload; slow-mode Richardson truncation on this exact input is precisely the condition that could violate that bound.
 
 Scope evidence:
-- `problem.txt`: Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload.
+- `problem.txt`: Output must satisfy relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) <= 0.08 vs the exact fp64 solution; only the make_inputs() workload is in scope, so the fixed spectrum (smallest eigenvalue 0.03125) and fixed unit rhs define the decisive case.
 
-Rationale: make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 — orders of magnitude larger than the true distance spread, so the ranking can flip.
+Rationale: Per-mode Richardson error after k steps is (b_i/λ_i)(1-λ_i)^k. With Hadamard-distributed unit rhs (|b_i|≈1/4), the λ=0.03125 mode contributes error ≈ 0.25*32*0.96875^64 ≈ 1.05, while ||x||_2 ≈ 9.3 (dominated by small-λ modes). Estimated relative error ≈ 0.11, above the 0.08 bound — borderline and must be measured numerically.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t15: On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: GPU run of run(*make_inputs()) gives relative L2 error 0.0236 vs the fp64 exact solve, far below the 0.08 tolerance. The skeptic's uniform-weight assumption failed: for seed 701010 the slowest-mode (λ=0.03125) modal weight is only b_modal=-0.0201 (x_modal=-0.645), not ~0.25, so truncation error in that mode (0.0845) is small relative to ||x||_2=3.93. Output is finite, shape (16,). Claim of error exceeding 0.08 is rebutted.
 
 ### c2 - `rebutted`
 
-Statement: A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.
+Statement: Float32 arithmetic in the 64-step Triton iteration accumulates rounding error on top of iteration truncation, potentially pushing a borderline case over the 0.08 relative error bound even if an ideal fp64 64-step Richardson iteration would just barely pass.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner changes the output on the in-scope input and is testable against the stated reference.
+Scope rationale: The contract measures error against an fp64 exact reference with a 0.08 bound on the sole in-scope input; kernel.py's entirely-fp32 iteration is a second in-scope error contribution to that same metric.
 
 Scope evidence:
-- `problem.txt`: The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner.
+- `problem.txt`: The contract requires finite output with relative L2 error <= 0.08 vs an fp64 exact reference for the specified workload; kernel arithmetic is entirely fp32 (kernel.py lines 11-16), so rounding error is a second in-scope contribution to the same error metric.
 
-Rationale: Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only ±0.002 makes exact ties unlikely but quantized ties plausible.
+Rationale: enable_fp_fusion=False disables FMA contraction; each tl.sum accumulates in fp32 with rounding, and 64 iterations compound this. Small-λ mode components of x are large (~8 magnitude), so fp32 rounding is unlikely to matter alone, but it could push a borderline truncation-error case over 0.08.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 — no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: CPU fp32 vs fp64 simulation of the 64-step Richardson loop shows fp32 rounding is negligible: fp64-iteration relerr 0.02364 vs fp32-iteration relerr 0.02364 (increment -2.3e-8, max state difference 1.4e-7). The GPU kernel itself (t12) measured 0.0236, matching the simulations, confirming rounding does not push the result anywhere near the 0.08 bound. Claim rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Reference: exact float64 squared Euclidean distances over original float32 query/candidates (16x32), no quantization.",
-    "Select smallest-distance index, ties broken to smallest index; output is embeddings[winner, :] (float32, shape (8,)).",
-    "Fixed workload only (make_inputs with PCG64 seed 840104); success metric is relative L2 error <= 0.1 vs reference embedding \u2014 a wrong winner can still pass only if its embedding is within 10% relative norm of the reference's.",
-    "Alternative inputs are out of scope; only this generated workload decides the verdict.",
-    "The problem text explicitly acknowledges the kernel's approximate route: floor(x*8+0.5)/8 quantization then float32 distances with the same tie rule."
+    "Only the deterministic float32 inputs from make_inputs() (matrix 16x16, rhs 16) are in scope; alternative inputs are out of scope.",
+    "Reference is the exact float64 solution x of matrix @ x = rhs, computed from the original float32 values, not a finite iteration.",
+    "Output must be a finite (16,) vector with relative L2 error ||out-x||_2 / max(||x||_2, 0.004) <= 0.08; approximate solvers are allowed.",
+    "Target device: NVIDIA T4; generator (Hadamard-based orthogonal basis, eigenvalues 0.03125..1.75, seed 701010, unit-norm rhs) is public and deterministic.",
+    "Key mathematical context: Richardson iteration x_{k+1} = x_k + (b - A x_k) has per-mode convergence factor (1 - lambda); smallest eigenvalue 0.03125 gives factor 0.96875, so 64 steps reduce that error component by only ~0.96875^64 \u2248 0.13, i.e. ~87% of the slowest-mode error remains."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel _route_kernel: one program, rows = tl.arange(0,16); per dimension j in static_range(32) it quantizes both query[j] and all candidates to a 1/8 grid (floor(x*8+0.5)*0.125) and accumulates float32 squared deltas.",
-    "Selection: min over quantized distances, tie broken to smallest row index via tl.where(distances==min, row, INT_MAX) then min \u2014 implements the contract's tie rule.",
-    "Gathers embeddings[winner*8 + 0..7] without quantization and stores to an 8-element float32 output; run() launches grid (1,) with N=16, D=32, E=8 hardcoded, matching shapes in make_inputs.",
-    "Distance accumulation is sequential over 32 dims in float32 with enable_fp_fusion=False; quantization error per coordinate is up to 1/16, so per-coordinate squared error up to ~0.0039 and D=32 accumulates up to ~0.125 possible drift vs the exact float64 distances.",
-    "make_inputs generates candidates on a unit-ish sphere around the query (normalized offsets, radii 1\u00b10.002), so exact float64 distances are near-equal (~1024 across candidates) \u2014 the workload is deliberately near-tie, making the winner highly sensitive to quantization."
+    "Triton kernel _solve_kernel loads the full 16x16 matrix and rhs as float32, initializes state to zeros, and runs STEPS=64 Richardson iterations state += rhs - A@state, storing fp32 state (kernel.py lines 8-17, 22-23).",
+    "run() launches a single program with N=16, STEPS=64, num_warps=4, enable_fp_fusion=False, and returns a preallocated float32 (16,) output.",
+    "make_inputs_numpy() constructs A = Q diag(lambda) Q^T with a scaled Hadamard Q (orthogonal after /4) and the listed eigenvalues, then a unit-norm fp32 rhs from PCG64 seed 701010.",
+    "All arithmetic inside the kernel is float32; the loop is unrolled statically (STEPS is constexpr)."
   ],
   "open_questions": [
-...[truncated 2170 chars]
+    "Does the fp32 iteration's accumulated rounding plus slow-mode truncation stay within 0.08 relative error? Needs a runtime probe or exact fp32/fp64 simulation of the 64-step iteration.",
+    "What is ||x||_2 exactly for this rhs (does the 0.004 floor in the denominator matter)?"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Truncation after 64 Richards
+...[truncated 1683 chars]
 
 ### t6 - record_claim - error
 
@@ -660,16 +605,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "make_inputs places all candidates at radius ~1.002 around the query, so exact float64 squared distances are near-identical (~1.0, spread only ~0.004), while per-coordinate quantization error up to 1/16 gives squared-error drift up to ~0.125 \u2014 orders of magnitude larger than the true distance spread, so the ranking can flip.",
+  "rationale": "Per-mode Richardson error after k steps is (b_i/\u03bb_i)(1-\u03bb_i)^k. With Hadamard-distributed unit rhs (|b_i|\u22481/4), the \u03bb=0.03125 mode contributes error \u2248 0.25*32*0.96875^64 \u2248 1.05, while ||x||_2 \u2248 9.3 (dominated by small-\u03bb modes). Estimated relative error \u2248 0.11, above the 0.08 bound \u2014 borderline and must be measured numerically.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Only make_inputs() supplies the inputs in scope; the contract requires the reference winner via exact float64 distances and defines pass/fail as relative L2 of the returned embedding <= 0.1 for this fixed generated workload."
+      "summary": "Output must satisfy relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) <= 0.08 vs the exact fp64 solution; only the make_inputs() workload is in scope, so the fixed spectrum (smallest eigenvalue 0.03125) and fixed unit rhs define the decisive case."
     }
   ],
-  "scope_rationale": "The contract (problem.txt) fixes this exact seeded workload and defines the reference winner by exact float64 distances; if the quantized route selects a different winner whose embedding exceeds 0.1 relative L2, the contract is violated on the only in-scope input.",
-  "statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
+  "scope_rationale": "The contract (problem.txt) requires run(*make_inputs()) to achieve relative L2 error <= 0.08 against the exact fp64 solution for this single fixed workload; slow-mode Richardson truncation on this exact input is precisely the condition that could violate that bound.",
+  "statement": "run(*make_inputs()) produces a relative L2 error exceeding 0.08 against the exact fp64 solution, because 64 Richardson iterations leave ~13% of the smallest-eigenvalue (\u03bb=0.03125) mode's solution component unconverged, and that mode carries the largest share of ||x||_2.",
   "status": "open"
 }
 
@@ -677,16 +622,16 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "Quantizing 32 near-tie coordinates to a coarse 1/8 grid plausibly collapses multiple candidates to the same accumulated float32 distance; the workload's radii spread of only \u00b10.002 makes exact ties unlikely but quantized ties plausible.",
+  "rationale": "enable_fp_fusion=False disables FMA contraction; each tl.sum accumulates in fp32 with rounding, and 64 iterations compound this. Small-\u03bb mode components of x are large (~8 magnitude), so fp32 rounding is unlikely to matter alone, but it could push a borderline truncation-error case over 0.08.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The contract specifies selection by smallest exact float64 d[i] with ties broken to smallest index; the kernel applies the same tie rule but in quantized space, so a quantized tie can route to a row that is not the exact-distance winner."
+      "summary": "The contract requires finite output with relative L2 error <= 0.08 vs an fp64 exact reference for the specified workload; kernel arithmetic is entirely fp32 (kernel.py lines 11-16), so rounding error is a second in-scope contribution to the same error metric."
     }
   ],
-  "scope_rationale": "problem.txt specifies the winner selection and tie rule on this fixed workload; a quantized-space tie resolved to an index that is not the exact-distance winner changes the output on the in-scope input and is testable against the stated reference.",
-  "statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.",
+  "scope_rationale": "The contract measures error against an fp64 exact reference with a 0.08 bound on the sole in-scope input; kernel.py's entirely-fp32 iteration is a second in-scope error contribution to that same metric.",
+  "statement": "Float32 arithmetic in the 64-step Triton iteration accumulates rounding error on top of iteration truncation, potentially pushing a borderline case over the 0.08 relative error bound even if an ideal fp64 64-step Richardson iteration would just barely pass.",
   "status": "open"
 }
 
@@ -694,29 +639,27 @@ Evidence:
 
 {
   "contract_model": [],
-  "impact_on_claims": [],
+  "impact_on_claims": [
+    "c1 (truncation error) can be settled decisively by an exact per-mode or CPU fp64 64-step iteration simulation; error contribution of mode i is exactly (b_i/\u03bb_i)(1-\u03bb_i)^64 in the eigenbasis, so no GPU probe is strictly required.",
+    "c2 (fp32 rounding) can be settled by simulating the same 64-step loop in float32 on CPU as a proxy for the Triton kernel; enable_fp_fusion=False makes each step two independently rounded ops, and Triton tl.sum tree-reduction order may differ from torch, so the GPU probe is the strongest evidence but the CPU fp32 loop bounds the effect.",
+    "The relevant denominator for both claims is ||x||_2 (\u22487-9), since the 0.004 floor is inactive: eigenvalue bounds give ||x||_2 >= 1/1.75."
+  ],
   "kernel_model": [
-    "Refinement for experiment design: exact float64 squared distances are ~(radii)^2 \u2248 1.0 with spread only ~\u00b10.004 across candidates (radii 1\u00b10.002); quantized 1/8-grid distances can differ from these by up to ~0.125, i.e. ~30x the true spread, making a winner flip very plausible.",
-    "embeddings are iid N(0,1) 8-vectors, so two independent rows differ in relative L2 by ~sqrt(2)\u22481.41 in expectation; a wrong winner will almost surely fail the 0.1 relative-L2 tolerance, so the winner identity comparison effectively decides the verdict.",
-    "The experimenter can decide c1/c2 in one CPU-only computation: reproduce make_inputs_numpy (seed 840104), compute exact float64 winner, compute the quantized float32 route winner (mirroring kernel lines 11-20), and compare indices plus relative L2 of the two embedding rows."
+    "The eigendecomposition A = Q diag(\u03bb) Q^T with Hadamard Q (entries \u00b10.25, orthogonal) is exact up to fp32 storage of A; Q^T b = b_modal is computable on CPU deterministically, so per-mode error analysis (b_i/\u03bb_i)(1-\u03bb_i)^64 needs no GPU.",
+    "Because Q is a Hadamard matrix, |b_modal_i| are exact linear combinations of the fp32 rhs entries with coefficients \u00b10.25; they are NOT necessarily uniform (~0.25 each) \u2014 the specific seed 701010 rhs must be projected to get the actual weights, which decides claim c1.",
+    "Kernel computes state += rhs - A state; per-step this is Richardson with unit step size, error mode i multiplied by exactly (1-\u03bb_i) in exact arithmetic; 0.03125 -> factor 0.96875, 0.96875^64 \u2248 0.129.",
+    "enable_fp_fusion=False means residual and state update are separately rounded fp32 ops (no FMA contraction); tl.sum over 16 terms is a fp32 reduction whose order is compiler-determined but deterministic."
   ],
   "open_questions": [
-    "Whether the quantized route and exact route pick the same index for seed 840104 \u2014 needs the experimenter's numeric check; source inspection alone cannot decide."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Decisive probe for c1/c2: compute both winner indices on the fixed seeded workload; a mismatch plus relative-L2 of the two embedding rows > 0.1 confirms the contract violation (expected, given iid N(0,1) embeddings).",
-    "If both routes pick the same winner, the kernel's output is embeddings[winner,:] exactly, since the gather is unquantized \u2014 then the kernel trivially passes, so the entire verdict reduces to the winner comparison."
-  ],
-  "scope_notes": [],
-  "summary": "Refinement of case_q description: the near-tie geometry (radii 1\u00b10.002, true distance spread ~0.004 vs quantization drift ~0.125) makes a winner flip likely, and iid N(0,1) embeddings mean any wrong row fails the 0.1 relative-L2 tolerance; the verdict reduces to comparing the quantized-route winner index against the exact float64 winner inde
-...[truncated 79 chars]
+    "Actual modal weights b_modal = Q^T rhs (fp32 rhs, fp64 projection) for seed 701010 \u2014 this single vector decides c1's estimated ~0.11 vs the 0.08 bound.",
+    "Whether the CPU
+...[truncated 2003 chars]
 
 ### t11 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "The contract restricts scope to the single seeded make_inputs workload; the only material correctness question \u2014 whether the quantized 1/8-grid route picks the same winner as the exact float64 reference \u2014 is fully covered by existing claims c1 and c2. The gather is unquantized and the tie rule is faithfully implemented in quantized space, so no additional distinct, testable failure mode exists; the claims now need the experimenter's numeric probe rather than more hypotheses.",
+  "reason": "The kernel's only in-scope failure mode is exceeding the 0.08 relative L2 bound on the single fixed workload; both error contributions (Richardson truncation on the smallest-eigenvalue mode, c1, and fp32 iteration rounding, c2) are already recorded as in-scope claims awaiting numerical probes. Source review of kernel.py shows no other in-scope risk: output is fully overwritten by tl.store, inputs from make_inputs are contiguous, N=16 satisfies tl.arange power-of-two requirement, and the largest eigenvalue 1.75 keeps the iteration stable.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -733,24 +676,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t12_probe.py",
-      "sha256": "6ad426478b0d919ead0d6f6aa49cc0bf7b7fe7d8c24592b1cc21bb940551f753"
+      "sha256": "ed213fdb347ab5dc1a153ff5dcde28841d18beacdd787ff20c1861d8eaa7f4c4"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t12_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "f71cd4963ceec57a1f7a8f4d17d393ffd2d3ec8b99ebf315b5ef47e902bb3092"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t12_stderr.txt",
-      "sha256": "46487c07879e4dd4d94a96d6a9445957c6991a10cec6bd79aaecc1e00d8358a2"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t12_json_result.json",
+      "sha256": "f0944ba117b5b8b0aed6e2b9e7651f58d45e5fa72f5358a065efbe3080ccc927"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
-  "duration_s": 5.731198,
+  "claim_statement": "run(*make_inputs()) produces a relative L2 error exceeding 0.08 against the exact fp64 solution, because 64 Richardson iterations leave ~13% of the smallest-eigenvalue (\u03bb=0.03125) mode's solution component unconverged, and that mode carries the largest share of ||x||_2.",
+  "duration_s": 5.535813,
   "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
@@ -760,25 +709,18 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t12_probe.py",
-          "sha256": "6ad426478b0d919ead0d6f6aa49cc0bf7b7fe7d8c24592b1cc21bb940551f753"
+          "sha256": "ed213fdb347ab5dc1a153ff5dcde28841d18beacdd787ff20c1861d8eaa7f4c4"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t12_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "f71cd4963ceec57a1f7a8f4d17d393ffd2d3ec8b99ebf315b5ef47e902bb3092"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t12_stderr.txt",
-          "sha256": "46487c07879e4dd4d94a96d6a9445957c6991a10cec6bd79aaecc1e00d8358a2"
-        }
-      ],
-      "duration_s": 5.731198,
-      "exit_code": 1,
-      "expected_signal": "winner index
-...[truncated 1395 chars]
+          "kind": "stderr"
+...[truncated 3315 chars]
 
 ### t13 - run_claim_probe - ok
 
@@ -788,13 +730,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t13_probe.py",
-      "sha256": "2ee06555732e01d04dd1fc30613b3d27c2e2b0f54e49ef716dc7a43eb00429aa"
+      "sha256": "d154c896bad719cbd7fab9368c49be4c6f92ea5e3f9f2b035a7cba9bb0e772e5"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t13_stdout.txt",
-      "sha256": "bba7de39deeb77dbde2ce4c951aa96c7f404b8a0cb845ce1fb5048ac27b639ea"
+      "sha256": "5a16c0d6d0e721ea2d83650df2ae888f34bc8279f7cf7ec511bb8c11ab85cb9b"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -806,12 +748,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t13_json_result.json",
-      "sha256": "0d0c6cfca8d45e23f51aec1a74e2ebfaf925fd453376798217585e80f426f911"
+      "sha256": "26a9a1787cd5f5a5b9723086df131d5a8ecf42141c6e1ed5dbe926c4ad0b38bc"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "A quantized-space tie (two or more candidates with identical quantized float32 distance) may be resolved to a smallest index that differs from the exact float64 winner, producing a wrong embedding row even though the kernel's tie rule is faithfully implemented.",
-  "duration_s": 2.850307,
+  "claim_statement": "Float32 arithmetic in the 64-step Triton iteration accumulates rounding error on top of iteration truncation, potentially pushing a borderline case over the 0.08 relative error bound even if an ideal fp64 64-step Richardson iteration would just barely pass.",
+  "duration_s": 3.852265,
   "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
@@ -821,130 +763,76 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t13_probe.py",
-          "sha256": "2ee06555732e01d04dd1fc30613b3d27c2e2b0f54e49ef716dc7a43eb00429aa"
+          "sha256": "d154c896bad719cbd7fab9368c49be4c6f92ea5e3f9f2b035a7cba9bb0e772e5"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t13_stdout.txt",
-          "sha256": "bba7de39deeb77dbde2ce4c951aa96c7f404b8a0cb845ce1fb5048ac27b639ea"
+          "sha256": "5a16c0d6d0e721ea2d83650df2ae888f34bc8279f7cf7ec511bb8c11ab85cb9b"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "p
-...[truncated 4965 chars]
+          "path"
+...[truncated 3271 chars]
 
 ### t14 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "On the fixed seed-840104 workload, the quantized float32 route's minimum distance 0.953125 is uniquely attained by candidate 6 \u2014 no quantized-space tie exists (n_tied_at_min=1), and the quantized winner (6) equals the exact float64 reference winner (6), so the tie-misrouting hypothesis does not occur on the in-scope input.",
-  "supports": "rebutted",
-  "tool_event_id": "t13"
-}
-
-### t15 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t15_probe.py",
-      "sha256": "6e4cb12bf9205c504273da261026d7cf64291b3da7b7083094957624403577da"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t15_stdout.txt",
-      "sha256": "2be742e7301faa8295a58261c4ca873cf3c9ec407de5f5cdc32356ea2dc77488"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t15_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t15_json_result.json",
-      "sha256": "38016bf6aa416f5841e89e7af4ef8a8f8e72a24c2bdc703771a51de8a40690ec"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "On the fixed make_inputs workload (seed 840104), the kernel's 1/8-grid quantized float32 distances select a different winner index than the exact float64 reference route, so the output embedding differs from embeddings[reference_index, :] and may exceed the 0.1 relative L2 tolerance.",
-  "duration_s": 4.755473,
-  "event_id": "t15",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t15_probe.py",
-          "sha256": "6e4cb12bf9205c504273da261026d7cf64291b3da7b7083094957624403577da"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t15_stdout.txt",
-          "sha256": "2be742e7301faa8295a58261c4ca873cf3c9ec407de5f5cdc32356ea2dc77488"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind":
-...[truncated 3794 chars]
-
-### t16 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed seed-840104 workload, the kernel's actual GPU output matched the exact float64 reference embedding row exactly (kernel row index 6 = reference index 6, relative L2 = 0.0, tolerance 0.1, passes_contract true). The quantized route picks the same winner as the exact float64 route, so c1's winner-flip hypothesis does not occur on the in-scope input.",
+  "summary": "GPU run of run(*make_inputs()) gives relative L2 error 0.0236 vs the fp64 exact solve, far below the 0.08 tolerance. The skeptic's uniform-weight assumption failed: for seed 701010 the slowest-mode (\u03bb=0.03125) modal weight is only b_modal=-0.0201 (x_modal=-0.645), not ~0.25, so truncation error in that mode (0.0845) is small relative to ||x||_2=3.93. Output is finite, shape (16,). Claim of error exceeding 0.08 is rebutted.",
   "supports": "rebutted",
-  "tool_event_id": "t15"
+  "tool_event_id": "t12"
 }
 
-### t17 - record_no_new_claims - ok
+### t15 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "rebutted",
+  "evidence_id": "c2.e1",
+  "summary": "CPU fp32 vs fp64 simulation of the 64-step Richardson loop shows fp32 rounding is negligible: fp64-iteration relerr 0.02364 vs fp32-iteration relerr 0.02364 (increment -2.3e-8, max state difference 1.4e-7). The GPU kernel itself (t12) measured 0.0236, matching the simulations, confirming rounding does not push the result anywhere near the 0.08 bound. Claim rebutted.",
+  "supports": "rebutted",
+  "tool_event_id": "t13"
+}
+
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the fixed single-workload contract leaves only the winner-selection question, which c1 (quantization-induced winner flip) and c2 (quantized-space tie misrouting) fully covered. Both were tested on the actual in-scope seed-840104 workload: c2's CPU analysis showed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no tie), matching the exact float64 winner, and c1's GPU probe confirmed the kernel's real output equals the reference embedding row 6 exactly (relative L2 = 0.0, well within the 0.1 tolerance). The gather is unquantized and the tie rule is faithfully implemented, so no additional material, testable, in-scope failure mode exists.",
+  "reason": "Final review: the sole in-scope failure mode (relative L2 error > 0.08 on the fixed make_inputs workload) was directly tested on GPU. The kernel achieves relerr 0.0236 vs the exact fp64 solve with finite output and shape (16,), and fp32 rounding contributes only ~1e-7 state difference. Both recorded claims c1 and c2 are rebutted by direct runtime evidence; no new material, testable, in-scope problem is exposed.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 16,
-  "turn": 10
+  "reviewed_tool_event_count": 15,
+  "turn": 9
 }
 
-### t18 - record_verdict - ok
+### t17 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The problem text explicitly documents the quantized approximate route as intended, so the coarse-grid approximation is contractually acceptable; on this workload it selects the correct row and the unquantized gather reproduces the reference embedding exactly. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence. The kernel meets the numerical contract.",
+  "reason": "The contract (problem.txt) requires run(*make_inputs()) to produce a finite (16,) vector with relative L2 error <= 0.08 vs the exact fp64 solve for this single fixed workload. Direct GPU probe (t12) measured relative L2 error 0.0236 (denominator ||x||_2=3.93; floor inactive), finite output, shape (16,) \u2014 decisively passing. Claim c1 (Richardson truncation on the smallest-eigenvalue mode exceeding the bound) was rebutted: the seed-701010 rhs has only modal weight b=-0.0201 on the \u03bb=0.03125 mode, so the 13% unconverged fraction yields a small error contribution. Claim c2 (fp32 rounding pushing the result over the bound) was rebutted: fp32 vs fp64 simulation of the 64-step loop differ by only ~1e-7 in state, and the kernel result matches the simulation. The contract explicitly permits an approximate solver, so the remaining 2.4% truncation error is acceptable per the 0.08 tolerance clause. Skeptic signed off with no new claims after reviewing the evidence.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-24T00:59:53Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-24T00:12:49Z",
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt) scopes the verdict entirely to the fixed make_inputs (seed 840104) workload and defines pass as relative L2 <= 0.1 against the exact float64 reference embedding row. Both material in-scope hypotheses \u2014 quantization-induced winner flip (c1) and quantized-space tie misrouting (c2) \u2014 were tested with runtime probes on exactly that workload. The GPU probe (t15) showed the kernel returned embedding row 6, identical to the exact float64 reference winner (index 6), with relative L2 = 0.0, far inside the 0.1 tolerance; the CPU analysis (t13) confirmed the quantized minimum distance 0.953125 is uniquely attained by candidate 6 (no quantized tie) and matches the exact winner. The problem text explicitly documents the quantized approximate route as intended, so the coarse-grid approximation is contractually acceptable; on this workload it selects the correct row and the unquantized gather reproduces the reference embedding exactly. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence. The kernel meets the numerical contract.",
+  "reason": "The contract (problem.txt) requires run(*make_inputs()) to produce a finite (16,) vector with relative L2 error <= 0.08 vs the exact fp64 solve for this single fixed workload. Direct GPU probe (t12) measured relative L2 error 0.0236 (denominator ||x||_2=3.93; floor inactive), finite output, shape (16,) \u2014 decisively passing. Claim c1 (Richardson truncation on the smallest-eigenvalue mode exceeding the bound) was rebutted: the seed-701010 rhs has only modal weight b=-0.0201 on the \u03bb=0.03125 mode, so the 13% unconverged fraction yields a small error contribution. Claim c2 (fp32 rounding pushing the result over the bound) was rebutted: fp32 vs fp64 simulation of the 64-step loop differ by only ~1e-7 in state, and the kernel result matches the simulation. The contract explicitly permits an approximate solver, so the remaining 2.4% truncation error is acceptable per the 0.08 tolerance clause. Skeptic signed off with no new claims after reviewing the evidence.",
   "verdict": "trust"
 }

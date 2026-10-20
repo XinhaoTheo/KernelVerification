@@ -47,9 +47,9 @@ FAMILIES = {"state_pair": ("case_33", "case_34"),
             "affine_scan_pair": ("case_85", "case_86"),
             "winograd_pair": ("case_87", "case_88"),
             "realfft_pair": ("case_89", "case_90"),
-            "exp2_pair": ("case_163", "case_164"),
-            "log1p_pair": ("case_165", "case_166"),
-            "aes_pair": ("case_167", "case_168")}
+            "exp2_pair": ("case_91", "case_92"),
+            "log1p_pair": ("case_93", "case_94"),
+            "aes_pair": ("case_95", "case_96")}
 app = modal.App("kv-real-kernel-qualification")
 image = (modal.Image.debian_slim(python_version="3.11")
          .pip_install("torch==2.8.0", "triton==3.4.0", "numpy==1.26.4",

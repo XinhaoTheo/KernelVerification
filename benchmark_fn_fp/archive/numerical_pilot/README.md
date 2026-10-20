@@ -1,6 +1,6 @@
 # Numerical-compliance pilot（已归档）
 
-本组是已停止扩展和重跑的早期探索：24题（case_139–case_162）及72条GLM运行均归档在本目录，不计入当前90题的覆盖或评分。公开题、原始响应、构造代码和冻结答案保留用于追溯；历史报告的数字不改。当前实验入口见 [benchmark指南](../../README.md)。
+本组是已停止扩展和重跑的早期探索：24题（case_145–case_168）及72条GLM运行均归档在本目录，不计入当前96题的覆盖或评分。公开题、原始响应、构造代码和冻结答案保留用于追溯；历史报告的数字不改。当前实验入口见 [benchmark指南](../../README.md)。
 
 This pilot tests whether source-only judgment can determine actual numerical
 error on a fully specified finite workload. It does not establish that debate
@@ -47,7 +47,7 @@ families. Numeric generation parameters can still be informative shortcuts.
 The candidate search is driven by measured error, never LLM answers. All
 candidate measurements remain available, including unsuccessful candidates.
 
-Current global IDs are `case_139`–`case_162` (previously `case_82`–`case_105`); see the [case index](../../CASE_INDEX.md).
+Current global IDs are `case_145`–`case_168`; see the [case index](../../CASE_INDEX.md).
 
 ## Preserved files and historical execution
 
@@ -59,7 +59,7 @@ Current global IDs are `case_139`–`case_162` (previously `case_82`–`case_105
 * `run_single.py`: historical Opus source-only evaluation.
 * `results_single.json`: preserved historical Opus responses, usage and scores.
 * [REPORT.md](REPORT.md): original Opus source-only results and explanations.
-* [traces_glm/](traces_glm/): all 72 archived GLM attempts, cases139–162 × single-call/solo/debate.
+* [traces_glm/](traces_glm/): all 72 archived GLM attempts, cases145–168 × single-call/solo/debate.
 
 The scripts are preserved as historical provenance, not current execution entry points.
 Do not rebuild these frozen cases or submit new pilot calls.

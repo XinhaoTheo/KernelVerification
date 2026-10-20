@@ -1,18 +1,18 @@
-Compute a normalized orthogonal projection for a fixed public workload.
+Implement LayerNorm without an affine transform for this fixed workload.
 
-Only the two float32 vectors u and b returned by make_inputs() are in scope.
-Each has shape (32,). The mathematical reference on these actual stored inputs is
-  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]
-  residual[j] = b[j] - alpha*u[j]
-  reference = residual / ||residual||_2.
-Use at least float64 accuracy for the reference. Algebraically equivalent
-recentring is allowed to avoid numerical cancellation in the reference itself.
-The residual on this workload is nonzero.
+The only input in scope is the float32 vector x returned by make_inputs() in
+kernel.py. Its shape is (128,), and its complete contents and element order are
+specified by that public deterministic generator.
 
-The output must be a finite vector of shape (32,), and
-  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.
+The reference uses the original float32 input values, evaluated in float64:
+  mean = sum_i x[i] / 128
+  variance = sum_i (x[i] - mean)**2 / 128
+  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)
+Use population variance, with no degrees-of-freedom correction.
 
-Decide whether this kernel satisfies that contract for the fixed generated
-workload. Arbitrary alternative vectors are outside the scope. The kernel uses
-float32 arithmetic, sequential accumulations and separately rounded products
-and sums; its launch disables FP multiply/add fusion.
+The output must be one finite vector with shape (128,). Its relative L2 error is
+  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).
+The numerical contract requires this error to be <= 0.02.
+
+Decide whether this implementation satisfies that contract for this fixed
+workload. Arbitrary alternative tensors are outside this question's scope.

@@ -1,87 +1,86 @@
 [
   {
-    "created_at": "2026-09-24T01:08:10Z",
+    "created_at": "2026-09-24T01:05:40Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-24T01:08:40Z",
+        "created_at": "2026-09-24T01:05:55Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
-              "path": "probes/t8_probe.py",
-              "sha256": "0e8b37ffd69e80a5162d43ff7a86f7116afb1f38ee7c7bf79a057296f68e362b"
+              "path": "probes/t7_probe.py",
+              "sha256": "3f74eb478cb97260728562b870f8bf9ffd5ab9a264e24c639f5f14dac96b185c"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
-              "path": "probes/t8_stdout.txt",
-              "sha256": "68c5ff82418089675e4250998f6b78a66a74a515e52fd2d61d091e87aa27cd2d"
+              "path": "probes/t7_stdout.txt",
+              "sha256": "9ad9a12e7e660e4272d27776163d2578a437310a19579d99b1dc1a1ada911b8c"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
-              "path": "probes/t8_stderr.txt",
+              "path": "probes/t7_stderr.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
-              "path": "probes/t8_json_result.json",
-              "sha256": "9cae02b46d0f6650f3648822b8eb19decc6df5bb995da4261828a3bebc531635"
+              "path": "probes/t7_json_result.json",
+              "sha256": "79dd837693660ee54441819db82f435525ec5bb0cb6574a74e2538b87819142f"
             }
           ],
           "dtype": "torch.float32",
-          "duration_s": 5.104728,
+          "duration_s": 8.16974,
           "exit_code": 0,
-          "expected_signal": "rel_l2 <= 0.15",
+          "expected_signal": "rel_l2_error <= 0.01",
           "finite": true,
           "json_parse_error": null,
           "json_result": {
             "dtype": "torch.float32",
             "finite": true,
-            "metric": "relative L2 error vs float64 16-mode reference",
+            "max_abs_err": 0.0005855331971066635,
+            "metric": "relative L2 error vs float64 reference (contract bound 0.01)",
             "pass": true,
-            "ref_norm": 8.566189857158276,
-            "rel_l2": 0.07170935573821625,
+            "rel_l2_error": 0.0015436494833812023,
+            "residual_norm": 6.621097760007478e-05,
             "shape": [
-              64
-            ],
-            "tol": 0.15
+              32
+            ]
           },
-          "pass": true,
-          "ref_norm": 8.566189857158276,
-          "rel_l2": 0.07170935573821625,
+          "max_abs_err": 0.0005855331971066635,
+          "rel_l2_error": 0.0015436494833812023,
+          "residual_norm": 6.621097760007478e-05,
           "shape": [
-            64
+            32
           ],
           "stderr": "",
-          "stdout": "{\"metric\": \"relative L2 error vs float64 16-mode reference\", \"shape\": [64], \"dtype\": \"torch.float32\", \"finite\": true, \"rel_l2\": 0.07170935573821625, \"tol\": 0.15, \"pass\": true, \"ref_norm\": 8.566189857158276}\n",
+          "stdout": "{\"metric\": \"relative L2 error vs float64 reference (contract bound 0.01)\", \"shape\": [32], \"finite\": true, \"rel_l2_error\": 0.0015436494833812023, \"pass\": true, \"max_abs_err\": 0.0005855331971066635, \"residual_norm\": 6.621097760007478e-05, \"dtype\": \"torch.float32\"}\n",
           "timed_out": false,
-          "timeout_s": 60,
-          "tol": 0.15
+          "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "6-mode truncated reconstruction on the fixed make_inputs() workload: relative L2 error 0.0717 vs float64 16-mode reference (tol 0.15), output finite float32 shape (64,).",
+        "summary": "Kernel output on the fixed make_inputs() workload is finite, shape (32,), with relative L2 error 0.00154 vs a float64 reference \u2014 well within the contract bound of 0.01.",
         "supports": "confirmed",
-        "tool_event_id": "t8"
+        "tool_event_id": "t7"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "The kernel sums only k=1..6 while the reference uses all 16 modes; the contract permits this approximation only if relative L2 error <= 0.15 on the supplied inputs.",
+    "rationale": "The kernel computes alpha and the residual in float32; with b \u2248 1.125u + tiny noise, cancellation in residual could amplify error, but normalization should keep relative error small. Need runtime measurement against a float64 reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed workload from make_inputs(); output must be a finite float32 (64,) vector."
+        "summary": "Output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 on the fixed make_inputs() workload, reference computed in at least float64."
       }
     ],
-    "scope_rationale": "Decides the contract's required numerical tolerance and output format for the fixed make_inputs() workload.",
-    "statement": "The kernel's 6-mode truncated reconstruction has relative L2 error <= 0.15 against the float64 16-mode reference for the make_inputs() workload, and output is a finite float32 (64,) vector.",
+    "scope_rationale": "problem.txt requires the kernel's output on the fixed make_inputs() workload to be a finite (32,) vector within relative L2 error 0.01 of a float64 reference.",
+    "statement": "The kernel's float32 output satisfies the contract's relative L2 error bound (<= 0.01) versus a float64 reference on the fixed make_inputs() workload, and is finite with shape (32,).",
     "status": "confirmed",
-    "updated_at": "2026-09-24T01:08:40Z"
+    "updated_at": "2026-09-24T01:05:55Z"
   }
 ]

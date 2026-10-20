@@ -273,7 +273,7 @@ def render(report):
     fixes = sum(row["debate_corrects_solo_wrong_verdict"] for row in comparisons)
     reverse = sum(row["solo_corrects_debate_wrong_verdict"] for row in comparisons)
     lines = [f"生成时间：{report['generated_at']}", "",
-        "初始组 case_95–case_100；后续两组采用各自约定的实验协议。"
+        "初始组 case_101–case_106；后续两组采用各自约定的实验协议。"
         "协议与固定复验窗口见本页说明。", "",
         compact_results(report["rows"]),
         f"固定窗口复验门槛： **{'通过' if gate['passed'] else '未达到'}**; "

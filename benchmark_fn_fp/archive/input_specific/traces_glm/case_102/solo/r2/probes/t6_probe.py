@@ -1,22 +1,19 @@
+import numpy as np, torch, json, sys
+sys.path.insert(0, "/root/numerical_cases/case_d")
+import kernel
 
-import sys, json
-sys.path.insert(0, "/root/numerical_cases/case_j")
-import torch, numpy as np
-from kernel import make_inputs, run
+logits_np, values_np = kernel.make_inputs_numpy()
+logits = torch.from_numpy(logits_np).cuda()
+values = torch.from_numpy(values_np).cuda()
+out = kernel.run(logits, values).cpu().numpy().astype(np.float64)
 
-x = make_inputs()[0]
-out = run(x)
+l = logits_np.astype(np.float64)
+v = values_np.astype(np.float64)
+w = np.exp(l - l.max())
+p = w / w.sum()
+ref = p @ v
 
-xf = x.to(torch.float64)
-mean = xf.sum() / 128
-var = ((xf - mean) ** 2).sum() / 128
-ref = (xf - mean) / np.sqrt(var + 1e-5)
-
-num = (out.to(torch.float64) - ref).norm().item()
-den = max(ref.norm().item(), 0.001 * np.sqrt(128))
-err = num / den
-res = {"shape": list(out.shape), "dtype": str(out.dtype), "finite": bool(torch.isfinite(out).all().item()),
-       "rel_l2_error": err, "bound": 0.02, "passes": bool(err <= 0.02),
-       "max_abs_err": (out.to(torch.float64) - ref).abs().max().item(),
-       "max_rel_err": ((out.to(torch.float64) - ref).abs() / ref.abs().clamp(min=1e-12)).max().item()}
-print(json.dumps(res))
+denom = max(np.linalg.norm(ref), 0.001*np.sqrt(16))
+err = np.linalg.norm(out - ref) / denom
+print(json.dumps({"rel_l2": float(err), "tol": 0.02, "finite": bool(np.all(np.isfinite(out))),
+                  "ref_norm": float(np.linalg.norm(ref)), "out_norm": float(np.linalg.norm(out))}))

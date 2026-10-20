@@ -44,10 +44,10 @@ COHORTS = {"pilot": tuple(f"case_{i:02d}" for i in range(33, 39)),
            "affine_scan": ("case_85", "case_86"),
            "winograd": ("case_87", "case_88"),
            "realfft": ("case_89", "case_90"),
-           "exp2": ("case_163", "case_164"),
-           "log1p": ("case_165", "case_166"),
-           "aes": ("case_167", "case_168"),
-           "oct20": tuple(f"case_{i}" for i in range(163, 169))}
+           "exp2": ("case_91", "case_92"),
+           "log1p": ("case_93", "case_94"),
+           "aes": ("case_95", "case_96"),
+           "oct20": tuple(f"case_{i}" for i in range(91, 97))}
 SCOPED_TOOL_CASES = frozenset(case for cohort, cases in COHORTS.items()
                              if cohort != "pilot" for case in cases)
 CASES = COHORTS["pilot"]
@@ -322,7 +322,7 @@ def render(report):
         rate = f"{count['audited_correct'] / count['attempts']:.1%}" if count["attempts"] else "—"
         lines.append(f"| {arm} | {count['audited_correct']} / {count['attempts']} | {rate} |")
     if report["cohort"] == "pilot":
-        lines += ["", "108/109 的四次 r1 工具尝试在 Modal 启动阶段失败，尚未调用模型；"
+        lines += ["", "35/36 的四次 r1 工具尝试在 Modal 启动阶段失败，尚未调用模型；"
                   "其 API 调用数和费用均确认是 0，因此保留故障记录、另用 r2 执行，"
                   "不作为四次模型答错。下列这些 r1 的 API/runtime 缺项来自进程未启动。", ""]
     batches = sorted({row["batch"] for row in rows})
@@ -342,7 +342,7 @@ def render(report):
                        f"当前固定标签为 {label['ground_truth']}。{correction['reason']} "
                        "原源码、合同与所有模型 traces 均保持原样；初始资格结果作为历史记录保留。"]
     lines += ["", "完整记录不等于所有 probe 都合法或构成充分证据；另见下方人工证据审计。", "",
-              f"样本量仅 {len(cases)} 例。" + ("其中 110–111 是补审后新增的修复实现；" if report["cohort"] == "pilot" else "") +
+              f"样本量仅 {len(cases)} 例。" + ("其中 37–38 是补审后新增的修复实现；" if report["cohort"] == "pilot" else "") +
               "单次胜负不能证明普遍工具收益或 debate 优势。", "", end]
     return "\n".join(lines)
 
