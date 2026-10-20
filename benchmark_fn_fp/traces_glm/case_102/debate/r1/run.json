@@ -1,0 +1,1509 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_102",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise real cube root with a polynomial seed and Newton correction.\n\nOriginal synthetic Triton implementation, not an upstream bug reproduction.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _cbrt_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    safe = tl.where(magnitude == 0.0, 1.0, magnitude)\n    encoding = safe.to(tl.uint32, bitcast=True)\n    exponent = ((encoding >> 23) & 255).to(tl.int32) - 127\n    mantissa = ((encoding & 0x007fffff) | 0x3f800000).to(tl.float32, bitcast=True)\n    quotient = (exponent + 24) // 3 - 8\n    remainder = exponent - 3 * quotient\n    estimate = -0.06 * mantissa + 0.439\n    estimate = estimate * mantissa + 0.622\n    estimate = (2.0 * estimate + tl.div_rn(mantissa, estimate * estimate)) * (1.0 / 3.0)\n    remainder_scale = tl.where(remainder == 0, 1.0,\n                              tl.where(remainder == 1, 1.2599210498948732, 1.5874010519681994))\n    scale = ((quotient + 127).to(tl.uint32) << 23).to(tl.float32, bitcast=True)\n    value = (estimate * remainder_scale) * scale\n    value = tl.where(x < 0.0, -value, value)\n    value = tl.where(magnitude == 0.0, x, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool((torch.isfinite(x)).all().item()),\n            \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating the real cube root of x.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _cbrt_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the real cube root using the FP64 power library.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return torch.sign(value) * torch.pow(torch.abs(value), 1.0 / 3.0)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples only; all finite FP16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (128.0 * torch.rand((size,), generator=generator) - 64.0).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the real cube root elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = cbrt(x[i]), the unique real number whose cube equals x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value is legal. This includes both signed zeros, all positive and negative subnormals, and both finite endpoints -65504 and 65504. NaN and infinity are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every nonzero input must satisfy:\n\n  abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i])).\n\nFor a zero input, the output must be zero; either sign is accepted. The absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular initial estimate, Newton iteration count, range reduction or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() computes sign(x)*abs(x)**(1/3) with the FP64 library power and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_102",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-20T15:33:16Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T15:33:50Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "326a716395063df3b718e0f557c4321eca019e7f58c69d30f0fcbe3b57343d00"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "42ae90b5d403673dce84069bad14491db30a68af7a00ab17b6434d9a83b69921"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "2cbfca0b97d7d9a70906e3786c3c84efbe9a988fde5b6e1010dc21a989f68ec9"
+              }
+            ],
+            "duration_s": 5.330412,
+            "exit_code": 0,
+            "expected_signal": "max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_rel": NaN,
+              "n_inputs": 63488,
+              "num_bad": 16664,
+              "tolerance": 1e-06,
+              "worst_rel": [
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06
+              ],
+              "worst_x": [
+                27.359375,
+                218.875,
+                1751.0,
+                14008.0,
+                -27.359375
+              ]
+            },
+            "n_finite_inputs": 63488,
+            "num_exceeding_1e-6": 16664,
+            "stderr": "",
+            "stdout": "total patterns 65536 finite 63488\nn = 63488\nmax_rel nan num_bad 16664 tol 1e-06\nworst x: [27.359375, 218.875, 1751.0, 14008.0, -27.359375]\nworst rel: [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]\n{\"max_rel\": NaN, \"tolerance\": 1e-06, \"num_bad\": 16664, \"n_inputs\": 63488, \"worst_x\": [27.359375, 218.875, 1751.0, 14008.0, -27.359375], \"worst_rel\": [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "tolerance": 1e-06,
+            "worst_rel_err": 1.5753978958978954e-06,
+            "worst_x": [
+              27.359375,
+              218.875,
+              1751.0,
+              14008.0,
+              -27.359375
+            ]
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values: 16664 inputs violate the 1e-6 relative tolerance. Worst-case relative error is 1.575e-6, e.g. at x=27.359375, 218.875, 1751.0, 14008.0 (and their negatives). NaN in max_rel is a 0/0 artifact from zero inputs; NaN > 1e-6 is false so num_bad counts only genuine violations. Exhaustive domain-wide evidence: kernel fails the contract.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "The quadratic seed (-0.06m+0.439)*m+0.622 approximates m^(1/3) with worst-case relative error likely around 1e-3 near m=1 or m=2 (at m=1 the seed evaluates to 1.001, ~1e-3 off; at m=2 it gives (-0.12+0.439)*2+0.622 = 1.36 vs cbrt(2)=1.2599, ~8e-2 off). One Newton step for cbrt reduces relative error roughly quadratically (to ~e^2 scale), so a seed error of 8e-2 at m=2 leaves a residual near ~1e-3 - far above 1e-6 - and even 1e-3 seed error leaves ~3e-7, borderline. Additionally the reconstruction multiplies by FP32-rounded 2^(1/3)/2^(2/3) constants, adding a few ulps of error that can push borderline cases over.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every nonzero input must satisfy abs(actual - cbrt(x)) <= 1e-6 * abs(cbrt(x)) and 'Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain', with a single verdict over all finite FP16 values - so worst-case mantissa accuracy is the decisive contract requirement."
+        }
+      ],
+      "scope_rationale": "The contract demands <=1e-6 relative error for every nonzero finite FP16 input (including all mantissas in [1,2) and endpoints +-65504), so any input whose single-Newton-step result exceeds this tolerance is a direct contract violation.",
+      "statement": "For some legal finite FP16 input (e.g. mantissa near 1.0 or 2.0, or the endpoints +-65504), the kernel's single Newton correction after the quadratic seed produces a relative error greater than 1e-6 against the FP64 cbrt reference.",
+      "status": "confirmed",
+      "updated_at": "2026-10-20T15:33:50Z"
+    },
+    {
+      "created_at": "2026-10-20T15:33:16Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T15:33:50Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "49e2e9fd9542f32c3a2219e6e22ed210741eb2fac61bbe6e04bd7248759be42e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "8cb144864fbc7513dd815822c708dd0697fa97e2ef20cf48b13719e6a0f1cffd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "5c5cbade314bf47becffdadb3ec71b8384601c402249143dabfbd9c6f1b4931c"
+              }
+            ],
+            "bit_exact_matches": 1048576,
+            "div_rn_bit_exact_vs_correct_rounding": true,
+            "duration_s": 4.377401,
+            "exit_code": 0,
+            "expected_signal": "tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands",
+            "json_parse_error": null,
+            "json_result": {
+              "bit_exact_matches": 1048576,
+              "div_rn_correctly_rounded": true,
+              "max_abs_dev": 0.0,
+              "max_rel_dev_from_correct_rounding": 0.0,
+              "mismatches": 0,
+              "n": 1048576
+            },
+            "mismatches": 0,
+            "n_tested": 1048576,
+            "stderr": "",
+            "stdout": "{\"n\": 1048576, \"bit_exact_matches\": 1048576, \"mismatches\": 0, \"max_rel_dev_from_correct_rounding\": 0.0, \"max_abs_dev\": 0.0, \"div_rn_correctly_rounded\": true}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "tl.div_rn in this configuration (BLOCK=256, num_warps=4, enable_fp_fusion=False, T4/Triton env) produced bit-exact correctly-rounded FP32 division on all 1048576 tested operand pairs in the kernel's operand range ([1,2) x [~1,~1.44]); zero mismatches, zero deviation. The observed c1 tolerance failures stem from the single-Newton-step algorithm, not from division lowering.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The Newton step uses tl.div_rn(mantissa, estimate*estimate); if Triton 3.4.0 on T4 lowers this to fast/approximate division (e.g. approx reciprocal plus refinement with error > 1 ulp), the resulting estimate error compounds with seed error and the extra multiplies, plausibly exceeding the 1e-6 tolerance on inputs that would otherwise pass.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The contract requires the fixed 1e-6 relative tolerance for every nonzero input over the whole legal domain; intermediate rounding is not part of the target, so any lowering of div_rn that degrades final accuracy below tolerance is a violation."
+        }
+      ],
+      "scope_rationale": "Contract accuracy holds regardless of intermediate rounding choices, so any non-correctly-rounded division lowering that pushes final outputs beyond 1e-6 relative error violates the fixed tolerance requirement.",
+      "statement": "tl.div_rn in this kernel configuration (T4, Triton 3.4.0, enable_fp_fusion=False, num_warps=4) may not be correctly rounded FP32 division, degrading the Newton step enough to break the 1e-6 relative tolerance for at least one legal input.",
+      "status": "rebutted",
+      "updated_at": "2026-10-20T15:33:50Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Elementwise real cube root of FP16 input [N] (1<=N<=131072), contiguous strided 1-D CUDA tensor, ordinary execution mode; all finite FP16 values legal including signed zeros, subnormals, and endpoints \u00b165504; NaN/Inf excluded.",
+      "Output: fresh finite FP32 tensor [N] on x.device; nonzero inputs must satisfy relative tolerance <= 1e-6 * abs(cbrt(x)); zeros must map to exactly zero (either sign).",
+      "Target defined in real arithmetic on the exact stored input value; algorithm details (seed, iterations, range reduction) are irrelevant \u2014 only the fixed tolerance over the entire legal domain matters.",
+      "Single correctness verdict over the whole domain; reference is sign(x)*abs(x)**(1/3) in FP64.",
+      "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Triton kernel processes BLOCK=256 lanes with tail masking (index < N), loads FP16 as FP32, takes abs, and substitutes 1.0 for zero magnitude to keep the bit-decomposition branch well-defined.",
+      "Range reduction via FP32 bit tricks: exponent = (bits>>23 & 255)-127, mantissa in [1,2); quotient = (exponent+24)//3 - 8 groups exponents in triples, remainder in {0,1,2} (all exponents of FP16 values in FP32 are >= -24, so exponent+24 >= 0 and // is unambiguous even under C truncation semantics).",
+      "Seed: degree-2 polynomial fit of mantissa^(1/3) (-0.06m+0.439)*m+0.622, followed by exactly ONE Newton correction step (2*e + div_rn(m, e^2))/3 using round-to-nearest division.",
+      "Reconstruction: value = estimate * remainder_scale (1, 2^(1/3), 2^(2/3)) * 2^quotient via bitcast; sign applied with tl.where(x<0, -value, value); zeros restored to x (preserving -0.0).",
+      "run() validates inputs (finite FP16, contiguous, etc.), allocates FP32 output, launches with enable_fp_fusion=False to keep rounding deterministic."
+    ],
+    "open_questions": [
+      "Does the single Newton step actually achieve <=1e-6 relative error on the worst mantissa across all three remainder classes, on the target hardware? This determines the whole verdict and needs runtime or high-precision numeric evidence.",
+      "Is tl.div_rn correctly rounded on T4/Triton 3.4.0 in this kernel configuration?",
+      "Does Triton's `//` on int32 (potentially negative operands elsewhere, though not here) match the assumed semantics? exponent+24 is provably >= 0 for all legal inputs, so likely moot.",
+      "Does the (quotient+127)<<23 bitcast ever encode an invalid/zero FP32 for the extreme exponent classes (very large/small FP16 values)?"
+    ],
+    "risk_map": [
+      "Accuracy: only ONE Newton iteration after a quadratic-fit seed. Seed error near mantissa endpoints (m\u21921 or 2) may be ~1e-3\u20131e-2; Newton for cbrt reduces error roughly to ~e^2/(1+e)-scale, so seed error of ~1e-3 leaves ~1e-6 residual \u2014 borderline against the strict 1e-6 relative tolerance; seed error of 1e-2 would leave ~1e-4 and clearly fail. Worst-case over m in [1,2) and all three remainder classes is the key bug surface.",
+      "The error analysis is per-mantissa and remainder-dependent; failures may concentrate at specific x values (boundary mantissas, remainder=1/2 classes, tiny subnormals, max magnitude 65504), not in the random [-64,64) default distribution of make_inputs \u2014 benign random probes are weak evidence.",
+      "Quadratic seed fit may extrapolate poorly at m near 1.0 or 2.0 where the fit polynomial's relative error is largest.",
+      "Sign handling of -0.0: x < 0.0 is false for -0.0, but the final tl.where(magnitude==0, x, value) restores the original signed zero \u2014 appears correct but worth runtime confirmation.",
+      "FP16 subnormals become normal FP32 after .to(tl.float32) (min FP16 subnormal 5.96e-8 >> FP32 normal min), so the bit decomposition path covers them; no special subnormal handling needed.",
+      "tl.div_rn requires round-to-nearest division; if lowered differently on T4/Triton 3.4.0 the Newton step degrades.",
+      "Potential integer floor-division semantics: quotient uses `//` on exponent+24 (always >= 0 for FP16-in-FP32 exponents >= -24), so truncation-vs-floor ambiguity is likely harmless here \u2014 worth confirming the exponent bound."
+    ],
+    "scope_notes": [
+      "In scope: every finite FP16 value including subnormals, both zeros, and endpoints; N up to 131072; storage offsets in contiguous views are legal.\", \"Out of scope: NaN/Inf inputs, non-contiguous/non-1D tensors, autograd, inference-mode tensors, subclass tensors.\", \"Tolerance is fixed 1e-6 relative for nonzero, exact zero for zeros; verdict is single, domain-wide, not per-distribution.\"]"
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Elementwise real cube root of FP16 input [N] (1<=N<=131072), contiguous strided 1-D CUDA tensor, ordinary execution mode; all finite FP16 values legal including signed zeros, subnormals, and endpoints \u00b165504; NaN/Inf excluded.",
+        "Output: fresh finite FP32 tensor [N] on x.device; nonzero inputs must satisfy relative tolerance <= 1e-6 * abs(cbrt(x)); zeros must map to exactly zero (either sign).",
+        "Target defined in real arithmetic on the exact stored input value; algorithm details (seed, iterations, range reduction) are irrelevant \u2014 only the fixed tolerance over the entire legal domain matters.",
+        "Single correctness verdict over the whole domain; reference is sign(x)*abs(x)**(1/3) in FP64.",
+        "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-20T15:32:57Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel processes BLOCK=256 lanes with tail masking (index < N), loads FP16 as FP32, takes abs, and substitutes 1.0 for zero magnitude to keep the bit-decomposition branch well-defined.",
+        "Range reduction via FP32 bit tricks: exponent = (bits>>23 & 255)-127, mantissa in [1,2); quotient = (exponent+24)//3 - 8 groups exponents in triples, remainder in {0,1,2} (all exponents of FP16 values in FP32 are >= -24, so exponent+24 >= 0 and // is unambiguous even under C truncation semantics).",
+        "Seed: degree-2 polynomial fit of mantissa^(1/3) (-0.06m+0.439)*m+0.622, followed by exactly ONE Newton correction step (2*e + div_rn(m, e^2))/3 using round-to-nearest division.",
+        "Reconstruction: value = estimate * remainder_scale (1, 2^(1/3), 2^(2/3)) * 2^quotient via bitcast; sign applied with tl.where(x<0, -value, value); zeros restored to x (preserving -0.0).",
+        "run() validates inputs (finite FP16, contiguous, etc.), allocates FP32 output, launches with enable_fp_fusion=False to keep rounding deterministic."
+      ],
+      "open_questions": [
+        "Does the single Newton step actually achieve <=1e-6 relative error on the worst mantissa across all three remainder classes, on the target hardware? This determines the whole verdict and needs runtime or high-precision numeric evidence.",
+        "Is tl.div_rn correctly rounded on T4/Triton 3.4.0 in this kernel configuration?",
+        "Does Triton's `//` on int32 (potentially negative operands elsewhere, though not here) match the assumed semantics? exponent+24 is provably >= 0 for all legal inputs, so likely moot.",
+        "Does the (quotient+127)<<23 bitcast ever encode an invalid/zero FP32 for the extreme exponent classes (very large/small FP16 values)?"
+      ],
+      "risk_map": [
+        "Accuracy: only ONE Newton iteration after a quadratic-fit seed. Seed error near mantissa endpoints (m\u21921 or 2) may be ~1e-3\u20131e-2; Newton for cbrt reduces error roughly to ~e^2/(1+e)-scale, so seed error of ~1e-3 leaves ~1e-6 residual \u2014 borderline against the strict 1e-6 relative tolerance; seed error of 1e-2 would leave ~1e-4 and clearly fail. Worst-case over m in [1,2) and all three remainder classes is the key bug surface.",
+        "The error analysis is per-mantissa and remainder-dependent; failures may concentrate at specific x values (boundary mantissas, remainder=1/2 classes, tiny subnormals, max magnitude 65504), not in the random [-64,64) default distribution of make_inputs \u2014 benign random probes are weak evidence.",
+        "Quadratic seed fit may extrapolate poorly at m near 1.0 or 2.0 where the fit polynomial's relative error is largest.",
+        "Sign handling of -0.0: x < 0.0 is false for -0.0, but the final tl.where(magnitude==0, x, value) restores the original signed zero \u2014 appears correct but worth runtime confirmation.",
+        "FP16 subnormals become normal FP32 after .to(tl.float32) (min FP16 subnormal 5.96e-8 >> FP32 normal min), so the bit decomposition path covers them; no special subnormal handling needed.",
+        "tl.div_rn requires round-to-nearest division; if lowered differently on T4/Triton 3.4.0 the Newton step degrades.",
+        "Potential integer floor-division semantics: quotient uses `//` on exponent+24 (always >= 0 for FP16-in-FP32 exponents >= -24), so truncation-vs-floor ambiguity is likely harmless here \u2014 worth confirming the exponent bound."
+      ],
+      "scope_notes": [
+        "In scope: every finite FP16 value including subnormals, both zeros, and endpoints; N up to 131072; storage offsets in contiguous views are legal.\", \"Out of scope: NaN/Inf inputs, non-contiguous/non-1D tensors, autograd, inference-mode tensors, subclass tensors.\", \"Tolerance is fixed 1e-6 relative for nonzero, exact zero for zeros; verdict is single, domain-wide, not per-distribution.\"]"
+      ],
+      "summary": "Described case_102: FP16->FP32 cbrt Triton kernel using exponent/mantissa bit decomposition, a quadratic polynomial seed, and a single Newton correction; contract requires 1e-6 relative accuracy over all finite FP16 values.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_102",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_102"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_102"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_102"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_102",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 20.048375029000002,
+      "role": "describer",
+      "round": 2,
+      "text": "I have the full kernel and contract already loaded, so I'll analyze the algorithm structure and record the description model directly.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Elementwise real cube root of FP16 input [N] (1<=N<=131072), contiguous strided 1-D CUDA tensor, ordinary execution mode; all finite FP16 values legal including signed zeros, subnormals, and endpoints \u00b165504; NaN/Inf excluded.",
+              "Output: fresh finite FP32 tensor [N] on x.device; nonzero inputs must satisfy relative tolerance <= 1e-6 * abs(cbrt(x)); zeros must map to exactly zero (either sign).",
+              "Target defined in real arithmetic on the exact stored input value; algorithm details (seed, iterations, range reduction) are irrelevant \u2014 only the fixed tolerance over the entire legal domain matters.",
+              "Single correctness verdict over the whole domain; reference is sign(x)*abs(x)**(1/3) in FP64.",
+              "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton kernel processes BLOCK=256 lanes with tail masking (index < N), loads FP16 as FP32, takes abs, and substitutes 1.0 for zero magnitude to keep the bit-decomposition branch well-defined.",
+              "Range reduction via FP32 bit tricks: exponent = (bits>>23 & 255)-127, mantissa in [1,2); quotient = (exponent+24)//3 - 8 groups exponents in triples, remainder in {0,1,2} (all exponents of FP16 values in FP32 are >= -24, so exponent+24 >= 0 and // is unambiguous even under C truncation semantics).",
+              "Seed: degree-2 polynomial fit of mantissa^(1/3) (-0.06m+0.439)*m+0.622, followed by exactly ONE Newton correction step (2*e + div_rn(m, e^2))/3 using round-to-nearest division.",
+              "Reconstruction: value = estimate * remainder_scale (1, 2^(1/3), 2^(2/3)) * 2^quotient via bitcast; sign applied with tl.where(x<0, -value, value); zeros restored to x (preserving -0.0).",
+              "run() validates inputs (finite FP16, contiguous, etc.), allocates FP32 output, launches with enable_fp_fusion=False to keep rounding deterministic."
+            ],
+            "open_questions": [
+              "Does the single Newton step actually achieve <=1e-6 relative error on the worst mantissa across all three remainder classes, on the target hardware? This determines the whole verdict and needs runtime or high-precision numeric evidence.",
+              "Is tl.div_rn correctly rounded on T4/Triton 3.4.0 in this kernel configuration?",
+              "Does Triton's `//` on int32 (potentially negative operands elsewhere, though not here) match the assumed semantics? exponent+24 is provably >= 0 for all legal inputs, so likely moot.",
+              "Does the (quotient+127)<<23 bitcast ever encode an invalid/zero FP32 for the extreme exponent classes (very large/small FP16 values)?"
+            ],
+            "risk_map": [
+              "Accuracy: only ONE Newton iteration after a quadratic-fit seed. Seed error near mantissa endpoints (m\u21921 or 2) may be ~1e-3\u20131e-2; Newton for cbrt reduces error roughly to ~e^2/(1+e)-scale, so seed error of ~1e-3 leaves ~1e-6 residual \u2014 borderline against the strict 1e-6 relative tolerance; seed error of 1e-2 would leave ~1e-4 and clearly fail. Worst-case over m in [1,2) and all three remainder classes is the key bug surface.",
+              "The error analysis is per-mantissa and remainder-dependent; failures may concentrate at specific x values (boundary mantissas, remainder=1/2 classes, tiny subnormals, max magnitude 65504), not in the random [-64,64) default distribution of make_inputs \u2014 benign random probes are weak evidence.",
+              "Quadratic seed fit may extrapolate poorly at m near 1.0 or 2.0 where the fit polynomial's relative error is largest.",
+              "Sign handling of -0.0: x < 0.0 is false for -0.0, but the final tl.where(magnitude==0, x, value) restores the original signed zero \u2014 appears correct but worth runtime confirmation.",
+              "FP16 subnormals become normal FP32 after .to(tl.float32) (min FP16 subnormal 5.96e-8 >> FP32 normal min), so the bit decomposition path covers them; no special subnormal handling needed.",
+              "tl.div_rn requires round-to-nearest division; if lowered differently on T4/Triton 3.4.0 the Newton step degrades.",
+              "Potential integer floor-division semantics: quotient uses `//` on exponent+24 (always >= 0 for FP16-in-FP32 exponents >= -24), so truncation-vs-floor ambiguity is likely harmless here \u2014 worth confirming the exponent bound."
+            ],
+            "scope_notes": "In scope: every finite FP16 value including subnormals, both zeros, and endpoints; N up to 131072; storage offsets in contiguous views are legal.\", \"Out of scope: NaN/Inf inputs, non-contiguous/non-1D tensors, autograd, inference-mode tensors, subclass tensors.\", \"Tolerance is fixed 1e-6 relative for nonzero, exact zero for zeros; verdict is single, domain-wide, not per-distribution.\"]",
+            "summary": "Described case_102: FP16->FP32 cbrt Triton kernel using exponent/mantissa bit decomposition, a quadratic polynomial seed, and a single Newton correction; contract requires 1e-6 relative accuracy over all finite FP16 values."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 20.048,
+        "input_tokens": 6724,
+        "output_tokens": 2002
+      }
+    },
+    {
+      "duration_s": 18.779436686000004,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The description model is solid. The key risk surface is clear: a single Newton step after a quadratic seed against a strict 1e-6 domain-wide tolerance, plus dependence on `tl.div_rn` being correctly rounded. I'll record those as concrete, testable claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The quadratic seed (-0.06m+0.439)*m+0.622 approximates m^(1/3) with worst-case relative error likely around 1e-3 near m=1 or m=2 (at m=1 the seed evaluates to 1.001, ~1e-3 off; at m=2 it gives (-0.12+0.439)*2+0.622 = 1.36 vs cbrt(2)=1.2599, ~8e-2 off). One Newton step for cbrt reduces relative error roughly quadratically (to ~e^2 scale), so a seed error of 8e-2 at m=2 leaves a residual near ~1e-3 - far above 1e-6 - and even 1e-3 seed error leaves ~3e-7, borderline. Additionally the reconstruction multiplies by FP32-rounded 2^(1/3)/2^(2/3) constants, adding a few ulps of error that can push borderline cases over.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every nonzero input must satisfy abs(actual - cbrt(x)) <= 1e-6 * abs(cbrt(x)) and 'Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain', with a single verdict over all finite FP16 values - so worst-case mantissa accuracy is the decisive contract requirement."
+              }
+            ],
+            "scope_rationale": "The contract demands <=1e-6 relative error for every nonzero finite FP16 input (including all mantissas in [1,2) and endpoints +-65504), so any input whose single-Newton-step result exceeds this tolerance is a direct contract violation.",
+            "statement": "For some legal finite FP16 input (e.g. mantissa near 1.0 or 2.0, or the endpoints +-65504), the kernel's single Newton correction after the quadratic seed produces a relative error greater than 1e-6 against the FP64 cbrt reference."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The Newton step uses tl.div_rn(mantissa, estimate*estimate); if Triton 3.4.0 on T4 lowers this to fast/approximate division (e.g. approx reciprocal plus refinement with error > 1 ulp), the resulting estimate error compounds with seed error and the extra multiplies, plausibly exceeding the 1e-6 tolerance on inputs that would otherwise pass.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The contract requires the fixed 1e-6 relative tolerance for every nonzero input over the whole legal domain; intermediate rounding is not part of the target, so any lowering of div_rn that degrades final accuracy below tolerance is a violation."
+              }
+            ],
+            "scope_rationale": "Contract accuracy holds regardless of intermediate rounding choices, so any non-correctly-rounded division lowering that pushes final outputs beyond 1e-6 relative error violates the fixed tolerance requirement.",
+            "statement": "tl.div_rn in this kernel configuration (T4, Triton 3.4.0, enable_fp_fusion=False, num_warps=4) may not be correctly rounded FP32 division, degrading the Newton step enough to break the 1e-6 relative tolerance for at least one legal input."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.779,
+        "input_tokens": 16357,
+        "output_tokens": 1426
+      }
+    },
+    {
+      "duration_s": 16.884356768000004,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run two runtime probes: c1 does an exhaustive sweep of all finite FP16 values against the FP64 reference (decisive for the domain-wide 1e-6 tolerance), and c2 directly tests whether `tl.div_rn` produces correctly-rounded FP32 division on this environment.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, numpy as np, json, sys, glob\nsys.path.insert(0, glob.glob('/root/cases/case_102')[0] if glob.glob('/root/cases/case_102') else '/root/cases/case_102')\nimport kernel as K\n\ndev = 'cuda'\n# Exhaustive sweep of ALL finite FP16 bit patterns in chunks <=131072\nbits = np.arange(0x0000, 0x10000, dtype=np.uint16)\nvals = torch.from_numpy(bits.view(np.float16).copy())\nfinite = torch.isfinite(vals)\nfv = vals[finite].to(dev)\nprint(\"total patterns\", bits.size, \"finite\", int(finite.sum().item()))\n\nn = fv.numel()\nprint(\"n =\", n)  # should be ~64512-65504 depending\nchunks = [fv[i:i+131072] for i in range(0, n, 131072)]\nout_parts = [K.run(c) for c in chunks]\nout = torch.cat(out_parts)\nref = K.reference(fv).to(dev)  # FP64\nrel = ((out.to(torch.float64) - ref).abs() / ref.abs())\nmax_rel = rel.max().item()\nbad = (rel > 1e-6)\nprint(\"max_rel\", max_rel, \"num_bad\", int(bad.sum().item()), \"tol\", 1e-6)\nidx = torch.argsort(rel, descending=True)[:5]\nprint(\"worst x:\", [float(fv[i]) for i in idx.tolist()])\nprint(\"worst rel:\", [float(rel[i]) for i in idx.tolist()])\nprint(json.dumps({\"max_rel\": max_rel, \"tolerance\": 1e-6, \"num_bad\": int(bad.sum().item()), \"n_inputs\": n,\n                  \"worst_x\": [float(fv[i]) for i in idx.tolist()], \"worst_rel\": [float(rel[i]) for i in idx.tolist()]}))",
+            "expected_signal": "max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, triton, triton.language as tl, numpy as np, json\n\n@triton.jit\ndef div_kernel(A, B, O, N: tl.constexpr, BLOCK: tl.constexpr):\n    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    m = i < N\n    a = tl.load(A + i, mask=m, other=1.0)\n    b = tl.load(B + i, mask=m, other=1.0)\n    tl.store(O + i, tl.div_rn(a, b), mask=m)\n\n# mantissa-like values in [1,2) crossed with estimate^2-like values\ng = torch.Generator().manual_seed(1)\na = torch.rand(1 << 20, generator=g) + 1.0     # [1,2)\ne = torch.rand(1 << 20, generator=g) * 0.1 + 1.0\nb = (e * e).to(torch.float32)\na = a.to(torch.float32)\na, b = a.cuda(), b.cuda()\nout = torch.empty_like(a)\nN = a.numel()\ndiv_kernel[(triton.cdiv(N, 256),)](a, b, out, N=N, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n# correctly-rounded FP32 division reference (numpy division is round-to-nearest)\nref = (a.cpu().double() / b.cpu().double()).to(torch.float32).cuda()\nexact = (out == ref)\nmismatch = (~exact).sum().item()\nrel = ((out.double() - ref.double()).abs() / ref.double().abs())\nprint(json.dumps({\"n\": N, \"bit_exact_matches\": int(exact.sum().item()), \"mismatches\": int(mismatch),\n                 \"max_rel_dev_from_correct_rounding\": float(rel.max().item()),\n                 \"max_abs_dev\": float((out-ref).abs().max().item()),\n                 \"div_rn_correctly_rounded\": mismatch == 0}))",
+            "expected_signal": "tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.884,
+        "input_tokens": 20125,
+        "output_tokens": 1308
+      }
+    },
+    {
+      "duration_s": 7.779951079,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes completed. The exhaustive sweep found 16664 inputs exceeding the 1e-6 tolerance (max_rel NaN is just a 0/0 artifact from zero inputs; NaN doesn't count as bad). The div_rn probe was bit-exact across 1M cases. Finalizing both.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "n_finite_inputs": 63488,
+              "num_exceeding_1e-6": 16664,
+              "tolerance": 1e-06,
+              "worst_rel_err": 1.5753978958978954e-06,
+              "worst_x": [
+                27.359375,
+                218.875,
+                1751.0,
+                14008.0,
+                -27.359375
+              ]
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Exhaustive sweep of all 63488 finite FP16 values: 16664 inputs violate the 1e-6 relative tolerance. Worst-case relative error is 1.575e-6, e.g. at x=27.359375, 218.875, 1751.0, 14008.0 (and their negatives). NaN in max_rel is a 0/0 artifact from zero inputs; NaN > 1e-6 is false so num_bad counts only genuine violations. Exhaustive domain-wide evidence: kernel fails the contract.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "bit_exact_matches": 1048576,
+              "div_rn_bit_exact_vs_correct_rounding": true,
+              "mismatches": 0,
+              "n_tested": 1048576
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "tl.div_rn in this configuration (BLOCK=256, num_warps=4, enable_fp_fusion=False, T4/Triton env) produced bit-exact correctly-rounded FP32 division on all 1048576 tested operand pairs in the kernel's operand range ([1,2) x [~1,~1.44]); zero mismatches, zero deviation. The observed c1 tolerance failures stem from the single-Newton-step algorithm, not from division lowering.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.78,
+        "input_tokens": 26030,
+        "output_tokens": 610
+      }
+    },
+    {
+      "duration_s": 4.947630743000005,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The exhaustive sweep already confirms an in-scope contract violation (16664 legal finite FP16 inputs exceed the 1e-6 relative tolerance, worst-case 1.575e-6), and the div_rn hypothesis was cleanly rebutted. Nothing in the new evidence exposes a material problem not covered by existing claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: c1 is confirmed with exhaustive domain-wide runtime evidence (all 63488 finite FP16 values; 16664 exceed the 1e-6 relative tolerance, worst-case 1.575e-6), and c2 (div_rn lowering) is decisively rebutted. No new material, testable, in-scope problem is uncovered by the latest evidence.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.948,
+        "input_tokens": 33836,
+        "output_tokens": 197
+      }
+    },
+    {
+      "duration_s": 5.448774513000004,
+      "role": "judge",
+      "round": 7,
+      "text": "The evidence is decisive: claim c1 is confirmed in-scope with an exhaustive sweep of the entire legal domain (all 63488 finite FP16 values), showing 16664 violations of the contract's fixed 1e-6 relative tolerance, worst-case 1.575e-6. The div_rn alternative hypothesis (c2) was rebutted. The problem.txt explicitly requires this tolerance \"throughout the entire legal domain,\" so these failures are direct contract violations. The Skeptic has signed off with no new claims, and no open claims remain. I'm recording the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 is confirmed and in-scope with exhaustive domain-wide runtime evidence: a probe over all 63488 finite FP16 values (the exact contract domain, including signed zeros, subnormals, and endpoints \u00b165504) found 16664 inputs whose kernel output exceeds the contract's fixed 1e-6 relative tolerance versus the FP64 cbrt reference, with worst-case relative error 1.575e-6 (e.g. x = 27.359375, 218.875, 1751.0, 14008.0, and negatives). problem.txt explicitly requires \"abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i]))\" for every nonzero input \"throughout the entire legal domain,\" and declares a single verdict over the whole domain, so the algorithm's single Newton step after a quadratic seed failing this tolerance is a direct contract violation, not a metric artifact or out-of-scope stress case. The only alternative explanation tested \u2014 that tl.div_rn is not correctly rounded on T4/Triton 3.4.0 (claim c2) \u2014 was decisively rebutted (bit-exact correctly-rounded division on 1M operand pairs in the kernel's operand range), so the failures stem from the kernel's algorithm, not division lowering. The probe's NaN max_rel is a 0/0 artifact from zero inputs and does not affect the genuine violation count. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.449,
+        "input_tokens": 34799,
+        "output_tokens": 502
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-20T15:33:55Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: c1 is confirmed with exhaustive domain-wide runtime evidence (all 63488 finite FP16 values; 16664 exceed the 1e-6 relative tolerance, worst-case 1.575e-6), and c2 (div_rn lowering) is decisively rebutted. No new material, testable, in-scope problem is uncovered by the latest evidence.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_102"
+      },
+      "created_at": "2026-10-20T15:32:36Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_102",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise real cube root with a polynomial seed and Newton correction.\n\nOriginal synthetic Triton implementation, not an upstream bug reproduction.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _cbrt_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    safe = tl.where(magnitude == 0.0, 1.0, magnitude)\n    encoding = safe.to(tl.uint32, bitcast=True)\n    exponent = ((encoding >> 23) & 255).to(tl.int32) - 127\n    mantissa = ((encoding & 0x007fffff) | 0x3f800000).to(tl.float32, bitcast=True)\n    quotient = (exponent + 24) // 3 - 8\n    remainder = exponent - 3 * quotient\n    estimate = -0.06 * mantissa + 0.439\n    estimate = estimate * mantissa + 0.622\n    estimate = (2.0 * estimate + tl.div_rn(mantissa, estimate * estimate)) * (1.0 / 3.0)\n    remainder_scale = tl.where(remainder == 0, 1.0,\n                              tl.where(remainder == 1, 1.2599210498948732, 1.5874010519681994))\n    scale = ((quotient + 127).to(tl.uint32) << 23).to(tl.float32, bitcast=True)\n    value = (estimate * remainder_scale) * scale\n    value = tl.where(x < 0.0, -value, value)\n    value = tl.where(magnitude == 0.0, x, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool((torch.isfinite(x)).all().item()),\n            \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating the real cube root of x.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _cbrt_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the real cube root using the FP64 power library.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return torch.sign(value) * torch.pow(torch.abs(value), 1.0 / 3.0)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples only; all finite FP16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (128.0 * torch.rand((size,), generator=generator) - 64.0).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the real cube root elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = cbrt(x[i]), the unique real number whose cube equals x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value is legal. This includes both signed zeros, all positive and negative subnormals, and both finite endpoints -65504 and 65504. NaN and infinity are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every nonzero input must satisfy:\n\n  abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i])).\n\nFor a zero input, the output must be zero; either sign is accepted. The absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular initial estimate, Newton iteration count, range reduction or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() computes sign(x)*abs(x)**(1/3) with the FP64 library power and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_102",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_102"
+      },
+      "created_at": "2026-10-20T15:32:36Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the real cube root elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = cbrt(x[i]), the unique real number whose cube equals x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value is legal. This includes both signed zeros, all positive and negative subnormals, and both finite endpoints -65504 and 65504. NaN and infinity are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every nonzero input must satisfy:\n\n  abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i])).\n\nFor a zero input, the output must be zero; either sign is accepted. The absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular initial estimate, Newton iteration count, range reduction or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() computes sign(x)*abs(x)**(1/3) with the FP64 library power and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_102",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_102"
+      },
+      "created_at": "2026-10-20T15:32:36Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_102",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3381
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1960
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_102",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-20T15:32:36Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_102",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Elementwise real cube root of FP16 input [N] (1<=N<=131072), contiguous strided 1-D CUDA tensor, ordinary execution mode; all finite FP16 values legal including signed zeros, subnormals, and endpoints \u00b165504; NaN/Inf excluded.",
+          "Output: fresh finite FP32 tensor [N] on x.device; nonzero inputs must satisfy relative tolerance <= 1e-6 * abs(cbrt(x)); zeros must map to exactly zero (either sign).",
+          "Target defined in real arithmetic on the exact stored input value; algorithm details (seed, iterations, range reduction) are irrelevant \u2014 only the fixed tolerance over the entire legal domain matters.",
+          "Single correctness verdict over the whole domain; reference is sign(x)*abs(x)**(1/3) in FP64.",
+          "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton kernel processes BLOCK=256 lanes with tail masking (index < N), loads FP16 as FP32, takes abs, and substitutes 1.0 for zero magnitude to keep the bit-decomposition branch well-defined.",
+          "Range reduction via FP32 bit tricks: exponent = (bits>>23 & 255)-127, mantissa in [1,2); quotient = (exponent+24)//3 - 8 groups exponents in triples, remainder in {0,1,2} (all exponents of FP16 values in FP32 are >= -24, so exponent+24 >= 0 and // is unambiguous even under C truncation semantics).",
+          "Seed: degree-2 polynomial fit of mantissa^(1/3) (-0.06m+0.439)*m+0.622, followed by exactly ONE Newton correction step (2*e + div_rn(m, e^2))/3 using round-to-nearest division.",
+          "Reconstruction: value = estimate * remainder_scale (1, 2^(1/3), 2^(2/3)) * 2^quotient via bitcast; sign applied with tl.where(x<0, -value, value); zeros restored to x (preserving -0.0).",
+          "run() validates inputs (finite FP16, contiguous, etc.), allocates FP32 output, launches with enable_fp_fusion=False to keep rounding deterministic."
+        ],
+        "open_questions": [
+          "Does the single Newton step actually achieve <=1e-6 relative error on the worst mantissa across all three remainder classes, on the target hardware? This determines the whole verdict and needs runtime or high-precision numeric evidence.",
+          "Is tl.div_rn correctly rounded on T4/Triton 3.4.0 in this kernel configuration?",
+          "Does Triton's `//` on int32 (potentially negative operands elsewhere, though not here) match the assumed semantics? exponent+24 is provably >= 0 for all legal inputs, so likely moot.",
+          "Does the (quotient+127)<<23 bitcast ever encode an invalid/zero FP32 for the extreme exponent classes (very large/small FP16 values)?"
+        ],
+        "risk_map": [
+          "Accuracy: only ONE Newton iteration after a quadratic-fit seed. Seed error near mantissa endpoints (m\u21921 or 2) may be ~1e-3\u20131e-2; Newton for cbrt reduces error roughly to ~e^2/(1+e)-scale, so seed error of ~1e-3 leaves ~1e-6 residual \u2014 borderline against the strict 1e-6 relative tolerance; seed error of 1e-2 would leave ~1e-4 and clearly fail. Worst-case over m in [1,2) and all three remainder classes is the key bug surface.",
+          "The error analysis is per-mantissa and remainder-dependent; failures may concentrate at specific x values (boundary mantissas, remainder=1/2 classes, tiny subnormals, max magnitude 65504), not in the random [-64,64) default distribution of make_inputs \u2014 benign random probes are weak evidence.",
+          "Quadratic seed fit may extrapolate poorly at m near 1.0 or 2.0 where the fit polynomial's relative error is largest.",
+          "Sign handling of -0.0: x < 0.0 is false for -0.0, but the final tl.where(magnitude==0, x, value) restores the original signed zero \u2014 appears correct but worth runtime confirmation.",
+          "FP16 subnormals become normal FP32 after .to(tl.float32) (min FP16 subnormal 5.96e-8 >> FP32 normal min), so the bit decomposition path covers them; no special subnormal handling needed.",
+          "tl.div_rn requires round-to-nearest division; if lowered differently on T4/Triton 3.4.0 the Newton step degrades.",
+          "Potential integer floor-division semantics: quotient uses `//` on exponent+24 (always >= 0 for FP16-in-FP32 exponents >= -24), so truncation-vs-floor ambiguity is likely harmless here \u2014 worth confirming the exponent bound."
+        ],
+        "scope_notes": "In scope: every finite FP16 value including subnormals, both zeros, and endpoints; N up to 131072; storage offsets in contiguous views are legal.\", \"Out of scope: NaN/Inf inputs, non-contiguous/non-1D tensors, autograd, inference-mode tensors, subclass tensors.\", \"Tolerance is fixed 1e-6 relative for nonzero, exact zero for zeros; verdict is single, domain-wide, not per-distribution.\"]",
+        "summary": "Described case_102: FP16->FP32 cbrt Triton kernel using exponent/mantissa bit decomposition, a quadratic polynomial seed, and a single Newton correction; contract requires 1e-6 relative accuracy over all finite FP16 values."
+      },
+      "created_at": "2026-10-20T15:32:57Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Elementwise real cube root of FP16 input [N] (1<=N<=131072), contiguous strided 1-D CUDA tensor, ordinary execution mode; all finite FP16 values legal including signed zeros, subnormals, and endpoints \u00b165504; NaN/Inf excluded.",
+            "Output: fresh finite FP32 tensor [N] on x.device; nonzero inputs must satisfy relative tolerance <= 1e-6 * abs(cbrt(x)); zeros must map to exactly zero (either sign).",
+            "Target defined in real arithmetic on the exact stored input value; algorithm details (seed, iterations, range reduction) are irrelevant \u2014 only the fixed tolerance over the entire legal domain matters.",
+            "Single correctness verdict over the whole domain; reference is sign(x)*abs(x)**(1/3) in FP64.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton kernel processes BLOCK=256 lanes with tail masking (index < N), loads FP16 as FP32, takes abs, and substitutes 1.0 for zero magnitude to keep the bit-decomposition branch well-defined.",
+            "Range reduction via FP32 bit tricks: exponent = (bits>>23 & 255)-127, mantissa in [1,2); quotient = (exponent+24)//3 - 8 groups exponents in triples, remainder in {0,1,2} (all exponents of FP16 values in FP32 are >= -24, so exponent+24 >= 0 and // is unambiguous even under C truncation semantics).",
+            "Seed: degree-2 polynomial fit of mantissa^(1/3) (-0.06m+0.439)*m+0.622, followed by exactly ONE Newton correction step (2*e + div_rn(m, e^2))/3 using round-to-nearest division.",
+            "Reconstruction: value = estimate * remainder_scale (1, 2^(1/3), 2^(2/3)) * 2^quotient via bitcast; sign applied with tl.where(x<0, -value, value); zeros restored to x (preserving -0.0).",
+            "run() validates inputs (finite FP16, contiguous, etc.), allocates FP32 output, launches with enable_fp_fusion=False to keep rounding deterministic."
+          ],
+          "open_questions": [
+            "Does the single Newton step actually achieve <=1e-6 relative error on the worst mantissa across all three remainder classes, on the target hardware? This determines the whole verdict and needs runtime or high-precision numeric evidence.",
+            "Is tl.div_rn correctly rounded on T4/Triton 3.4.0 in this kernel configuration?",
+            "Does Triton's `//` on int32 (potentially negative operands elsewhere, though not here) match the assumed semantics? exponent+24 is provably >= 0 for all legal inputs, so likely moot.",
+            "Does the (quotient+127)<<23 bitcast ever encode an invalid/zero FP32 for the extreme exponent classes (very large/small FP16 values)?"
+          ],
+          "risk_map": [
+            "Accuracy: only ONE Newton iteration after a quadratic-fit seed. Seed error near mantissa endpoints (m\u21921 or 2) may be ~1e-3\u20131e-2; Newton for cbrt reduces error roughly to ~e^2/(1+e)-scale, so seed error of ~1e-3 leaves ~1e-6 residual \u2014 borderline against the strict 1e-6 relative tolerance; seed error of 1e-2 would leave ~1e-4 and clearly fail. Worst-case over m in [1,2) and all three remainder classes is the key bug surface.",
+            "The error analysis is per-mantissa and remainder-dependent; failures may concentrate at specific x values (boundary mantissas, remainder=1/2 classes, tiny subnormals, max magnitude 65504), not in the random [-64,64) default distribution of make_inputs \u2014 benign random probes are weak evidence.",
+            "Quadratic seed fit may extrapolate poorly at m near 1.0 or 2.0 where the fit polynomial's relative error is largest.",
+            "Sign handling of -0.0: x < 0.0 is false for -0.0, but the final tl.where(magnitude==0, x, value) restores the original signed zero \u2014 appears correct but worth runtime confirmation.",
+            "FP16 subnormals become normal FP32 after .to(tl.float32) (min FP16 subnormal 5.96e-8 >> FP32 normal min), so the bit decomposition path covers them; no special subnormal handling needed.",
+            "tl.div_rn requires round-to-nearest division; if lowered differently on T4/Triton 3.4.0 the Newton step degrades.",
+            "Potential integer floor-division semantics: quotient uses `//` on exponent+24 (always >= 0 for FP16-in-FP32 exponents >= -24), so truncation-vs-floor ambiguity is likely harmless here \u2014 worth confirming the exponent bound."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 value including subnormals, both zeros, and endpoints; N up to 131072; storage offsets in contiguous views are legal.\", \"Out of scope: NaN/Inf inputs, non-contiguous/non-1D tensors, autograd, inference-mode tensors, subclass tensors.\", \"Tolerance is fixed 1e-6 relative for nonzero, exact zero for zeros; verdict is single, domain-wide, not per-distribution.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Elementwise real cube root of FP16 input [N] (1<=N<=131072), contiguous strided 1-D CUDA tensor, ordinary execution mode; all finite FP16 values legal including signed zeros, subnormals, and endpoints \u00b165504; NaN/Inf excluded.",
+            "Output: fresh finite FP32 tensor [N] on x.device; nonzero inputs must satisfy relative tolerance <= 1e-6 * abs(cbrt(x)); zeros must map to exactly zero (either sign).",
+            "Target defined in real arithmetic on the exact stored input value; algorithm details (seed, iterations, range reduction) are irrelevant \u2014 only the fixed tolerance over the entire legal domain matters.",
+            "Single correctness verdict over the whole domain; reference is sign(x)*abs(x)**(1/3) in FP64.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-20T15:32:57Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel processes BLOCK=256 lanes with tail masking (index < N), loads FP16 as FP32, takes abs, and substitutes 1.0 for zero magnitude to keep the bit-decomposition branch well-defined.",
+            "Range reduction via FP32 bit tricks: exponent = (bits>>23 & 255)-127, mantissa in [1,2); quotient = (exponent+24)//3 - 8 groups exponents in triples, remainder in {0,1,2} (all exponents of FP16 values in FP32 are >= -24, so exponent+24 >= 0 and // is unambiguous even under C truncation semantics).",
+            "Seed: degree-2 polynomial fit of mantissa^(1/3) (-0.06m+0.439)*m+0.622, followed by exactly ONE Newton correction step (2*e + div_rn(m, e^2))/3 using round-to-nearest division.",
+            "Reconstruction: value = estimate * remainder_scale (1, 2^(1/3), 2^(2/3)) * 2^quotient via bitcast; sign applied with tl.where(x<0, -value, value); zeros restored to x (preserving -0.0).",
+            "run() validates inputs (finite FP16, contiguous, etc.), allocates FP32 output, launches with enable_fp_fusion=False to keep rounding deterministic."
+          ],
+          "open_questions": [
+            "Does the single Newton step actually achieve <=1e-6 relative error on the worst mantissa across all three remainder classes, on the target hardware? This determines the whole verdict and needs runtime or high-precision numeric evidence.",
+            "Is tl.div_rn correctly rounded on T4/Triton 3.4.0 in this kernel configuration?",
+            "Does Triton's `//` on int32 (potentially negative operands elsewhere, though not here) match the assumed semantics? exponent+24 is provably >= 0 for all legal inputs, so likely moot.",
+            "Does the (quotient+127)<<23 bitcast ever encode an invalid/zero FP32 for the extreme exponent classes (very large/small FP16 values)?"
+          ],
+          "risk_map": [
+            "Accuracy: only ONE Newton iteration after a quadratic-fit seed. Seed error near mantissa endpoints (m\u21921 or 2) may be ~1e-3\u20131e-2; Newton for cbrt reduces error roughly to ~e^2/(1+e)-scale, so seed error of ~1e-3 leaves ~1e-6 residual \u2014 borderline against the strict 1e-6 relative tolerance; seed error of 1e-2 would leave ~1e-4 and clearly fail. Worst-case over m in [1,2) and all three remainder classes is the key bug surface.",
+            "The error analysis is per-mantissa and remainder-dependent; failures may concentrate at specific x values (boundary mantissas, remainder=1/2 classes, tiny subnormals, max magnitude 65504), not in the random [-64,64) default distribution of make_inputs \u2014 benign random probes are weak evidence.",
+            "Quadratic seed fit may extrapolate poorly at m near 1.0 or 2.0 where the fit polynomial's relative error is largest.",
+            "Sign handling of -0.0: x < 0.0 is false for -0.0, but the final tl.where(magnitude==0, x, value) restores the original signed zero \u2014 appears correct but worth runtime confirmation.",
+            "FP16 subnormals become normal FP32 after .to(tl.float32) (min FP16 subnormal 5.96e-8 >> FP32 normal min), so the bit decomposition path covers them; no special subnormal handling needed.",
+            "tl.div_rn requires round-to-nearest division; if lowered differently on T4/Triton 3.4.0 the Newton step degrades.",
+            "Potential integer floor-division semantics: quotient uses `//` on exponent+24 (always >= 0 for FP16-in-FP32 exponents >= -24), so truncation-vs-floor ambiguity is likely harmless here \u2014 worth confirming the exponent bound."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 value including subnormals, both zeros, and endpoints; N up to 131072; storage offsets in contiguous views are legal.\", \"Out of scope: NaN/Inf inputs, non-contiguous/non-1D tensors, autograd, inference-mode tensors, subclass tensors.\", \"Tolerance is fixed 1e-6 relative for nonzero, exact zero for zeros; verdict is single, domain-wide, not per-distribution.\"]"
+          ],
+          "summary": "Described case_102: FP16->FP32 cbrt Triton kernel using exponent/mantissa bit decomposition, a quadratic polynomial seed, and a single Newton correction; contract requires 1e-6 relative accuracy over all finite FP16 values.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "The quadratic seed (-0.06m+0.439)*m+0.622 approximates m^(1/3) with worst-case relative error likely around 1e-3 near m=1 or m=2 (at m=1 the seed evaluates to 1.001, ~1e-3 off; at m=2 it gives (-0.12+0.439)*2+0.622 = 1.36 vs cbrt(2)=1.2599, ~8e-2 off). One Newton step for cbrt reduces relative error roughly quadratically (to ~e^2 scale), so a seed error of 8e-2 at m=2 leaves a residual near ~1e-3 - far above 1e-6 - and even 1e-3 seed error leaves ~3e-7, borderline. Additionally the reconstruction multiplies by FP32-rounded 2^(1/3)/2^(2/3) constants, adding a few ulps of error that can push borderline cases over.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every nonzero input must satisfy abs(actual - cbrt(x)) <= 1e-6 * abs(cbrt(x)) and 'Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain', with a single verdict over all finite FP16 values - so worst-case mantissa accuracy is the decisive contract requirement."
+          }
+        ],
+        "scope_rationale": "The contract demands <=1e-6 relative error for every nonzero finite FP16 input (including all mantissas in [1,2) and endpoints +-65504), so any input whose single-Newton-step result exceeds this tolerance is a direct contract violation.",
+        "statement": "For some legal finite FP16 input (e.g. mantissa near 1.0 or 2.0, or the endpoints +-65504), the kernel's single Newton correction after the quadratic seed produces a relative error greater than 1e-6 against the FP64 cbrt reference."
+      },
+      "created_at": "2026-10-20T15:33:16Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-20T15:33:16Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "The quadratic seed (-0.06m+0.439)*m+0.622 approximates m^(1/3) with worst-case relative error likely around 1e-3 near m=1 or m=2 (at m=1 the seed evaluates to 1.001, ~1e-3 off; at m=2 it gives (-0.12+0.439)*2+0.622 = 1.36 vs cbrt(2)=1.2599, ~8e-2 off). One Newton step for cbrt reduces relative error roughly quadratically (to ~e^2 scale), so a seed error of 8e-2 at m=2 leaves a residual near ~1e-3 - far above 1e-6 - and even 1e-3 seed error leaves ~3e-7, borderline. Additionally the reconstruction multiplies by FP32-rounded 2^(1/3)/2^(2/3) constants, adding a few ulps of error that can push borderline cases over.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every nonzero input must satisfy abs(actual - cbrt(x)) <= 1e-6 * abs(cbrt(x)) and 'Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain', with a single verdict over all finite FP16 values - so worst-case mantissa accuracy is the decisive contract requirement."
+          }
+        ],
+        "scope_rationale": "The contract demands <=1e-6 relative error for every nonzero finite FP16 input (including all mantissas in [1,2) and endpoints +-65504), so any input whose single-Newton-step result exceeds this tolerance is a direct contract violation.",
+        "statement": "For some legal finite FP16 input (e.g. mantissa near 1.0 or 2.0, or the endpoints +-65504), the kernel's single Newton correction after the quadratic seed produces a relative error greater than 1e-6 against the FP64 cbrt reference.",
+        "status": "open",
+        "updated_at": "2026-10-20T15:33:16Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The Newton step uses tl.div_rn(mantissa, estimate*estimate); if Triton 3.4.0 on T4 lowers this to fast/approximate division (e.g. approx reciprocal plus refinement with error > 1 ulp), the resulting estimate error compounds with seed error and the extra multiplies, plausibly exceeding the 1e-6 tolerance on inputs that would otherwise pass.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The contract requires the fixed 1e-6 relative tolerance for every nonzero input over the whole legal domain; intermediate rounding is not part of the target, so any lowering of div_rn that degrades final accuracy below tolerance is a violation."
+          }
+        ],
+        "scope_rationale": "Contract accuracy holds regardless of intermediate rounding choices, so any non-correctly-rounded division lowering that pushes final outputs beyond 1e-6 relative error violates the fixed tolerance requirement.",
+        "statement": "tl.div_rn in this kernel configuration (T4, Triton 3.4.0, enable_fp_fusion=False, num_warps=4) may not be correctly rounded FP32 division, degrading the Newton step enough to break the 1e-6 relative tolerance for at least one legal input."
+      },
+      "created_at": "2026-10-20T15:33:16Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-20T15:33:16Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The Newton step uses tl.div_rn(mantissa, estimate*estimate); if Triton 3.4.0 on T4 lowers this to fast/approximate division (e.g. approx reciprocal plus refinement with error > 1 ulp), the resulting estimate error compounds with seed error and the extra multiplies, plausibly exceeding the 1e-6 tolerance on inputs that would otherwise pass.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The contract requires the fixed 1e-6 relative tolerance for every nonzero input over the whole legal domain; intermediate rounding is not part of the target, so any lowering of div_rn that degrades final accuracy below tolerance is a violation."
+          }
+        ],
+        "scope_rationale": "Contract accuracy holds regardless of intermediate rounding choices, so any non-correctly-rounded division lowering that pushes final outputs beyond 1e-6 relative error violates the fixed tolerance requirement.",
+        "statement": "tl.div_rn in this kernel configuration (T4, Triton 3.4.0, enable_fp_fusion=False, num_warps=4) may not be correctly rounded FP32 division, degrading the Newton step enough to break the 1e-6 relative tolerance for at least one legal input.",
+        "status": "open",
+        "updated_at": "2026-10-20T15:33:16Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, numpy as np, json, sys, glob\nsys.path.insert(0, glob.glob('/root/cases/case_102')[0] if glob.glob('/root/cases/case_102') else '/root/cases/case_102')\nimport kernel as K\n\ndev = 'cuda'\n# Exhaustive sweep of ALL finite FP16 bit patterns in chunks <=131072\nbits = np.arange(0x0000, 0x10000, dtype=np.uint16)\nvals = torch.from_numpy(bits.view(np.float16).copy())\nfinite = torch.isfinite(vals)\nfv = vals[finite].to(dev)\nprint(\"total patterns\", bits.size, \"finite\", int(finite.sum().item()))\n\nn = fv.numel()\nprint(\"n =\", n)  # should be ~64512-65504 depending\nchunks = [fv[i:i+131072] for i in range(0, n, 131072)]\nout_parts = [K.run(c) for c in chunks]\nout = torch.cat(out_parts)\nref = K.reference(fv).to(dev)  # FP64\nrel = ((out.to(torch.float64) - ref).abs() / ref.abs())\nmax_rel = rel.max().item()\nbad = (rel > 1e-6)\nprint(\"max_rel\", max_rel, \"num_bad\", int(bad.sum().item()), \"tol\", 1e-6)\nidx = torch.argsort(rel, descending=True)[:5]\nprint(\"worst x:\", [float(fv[i]) for i in idx.tolist()])\nprint(\"worst rel:\", [float(rel[i]) for i in idx.tolist()])\nprint(json.dumps({\"max_rel\": max_rel, \"tolerance\": 1e-6, \"num_bad\": int(bad.sum().item()), \"n_inputs\": n,\n                  \"worst_x\": [float(fv[i]) for i in idx.tolist()], \"worst_rel\": [float(rel[i]) for i in idx.tolist()]}))",
+        "expected_signal": "max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-20T15:33:38Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "326a716395063df3b718e0f557c4321eca019e7f58c69d30f0fcbe3b57343d00"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "42ae90b5d403673dce84069bad14491db30a68af7a00ab17b6434d9a83b69921"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "2cbfca0b97d7d9a70906e3786c3c84efbe9a988fde5b6e1010dc21a989f68ec9"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For some legal finite FP16 input (e.g. mantissa near 1.0 or 2.0, or the endpoints +-65504), the kernel's single Newton correction after the quadratic seed produces a relative error greater than 1e-6 against the FP64 cbrt reference.",
+        "cwd": "/root/cases/case_102",
+        "duration_s": 5.330412,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "326a716395063df3b718e0f557c4321eca019e7f58c69d30f0fcbe3b57343d00"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "42ae90b5d403673dce84069bad14491db30a68af7a00ab17b6434d9a83b69921"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "2cbfca0b97d7d9a70906e3786c3c84efbe9a988fde5b6e1010dc21a989f68ec9"
+              }
+            ],
+            "duration_s": 5.330412,
+            "exit_code": 0,
+            "expected_signal": "max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_rel": NaN,
+              "n_inputs": 63488,
+              "num_bad": 16664,
+              "tolerance": 1e-06,
+              "worst_rel": [
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06
+              ],
+              "worst_x": [
+                27.359375,
+                218.875,
+                1751.0,
+                14008.0,
+                -27.359375
+              ]
+            },
+            "stderr": "",
+            "stdout": "total patterns 65536 finite 63488\nn = 63488\nmax_rel nan num_bad 16664 tol 1e-06\nworst x: [27.359375, 218.875, 1751.0, 14008.0, -27.359375]\nworst rel: [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]\n{\"max_rel\": NaN, \"tolerance\": 1e-06, \"num_bad\": 16664, \"n_inputs\": 63488, \"worst_x\": [27.359375, 218.875, 1751.0, 14008.0, -27.359375], \"worst_rel\": [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "max_rel": NaN,
+          "n_inputs": 63488,
+          "num_bad": 16664,
+          "tolerance": 1e-06,
+          "worst_rel": [
+            1.5753978958978954e-06,
+            1.5753978958978954e-06,
+            1.5753978958978954e-06,
+            1.5753978958978954e-06,
+            1.5753978958978954e-06
+          ],
+          "worst_x": [
+            27.359375,
+            218.875,
+            1751.0,
+            14008.0,
+            -27.359375
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "total patterns 65536 finite 63488\nn = 63488\nmax_rel nan num_bad 16664 tol 1e-06\nworst x: [27.359375, 218.875, 1751.0, 14008.0, -27.359375]\nworst rel: [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]\n{\"max_rel\": NaN, \"tolerance\": 1e-06, \"num_bad\": 16664, \"n_inputs\": 63488, \"worst_x\": [27.359375, 218.875, 1751.0, 14008.0, -27.359375], \"worst_rel\": [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, triton, triton.language as tl, numpy as np, json\n\n@triton.jit\ndef div_kernel(A, B, O, N: tl.constexpr, BLOCK: tl.constexpr):\n    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    m = i < N\n    a = tl.load(A + i, mask=m, other=1.0)\n    b = tl.load(B + i, mask=m, other=1.0)\n    tl.store(O + i, tl.div_rn(a, b), mask=m)\n\n# mantissa-like values in [1,2) crossed with estimate^2-like values\ng = torch.Generator().manual_seed(1)\na = torch.rand(1 << 20, generator=g) + 1.0     # [1,2)\ne = torch.rand(1 << 20, generator=g) * 0.1 + 1.0\nb = (e * e).to(torch.float32)\na = a.to(torch.float32)\na, b = a.cuda(), b.cuda()\nout = torch.empty_like(a)\nN = a.numel()\ndiv_kernel[(triton.cdiv(N, 256),)](a, b, out, N=N, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n# correctly-rounded FP32 division reference (numpy division is round-to-nearest)\nref = (a.cpu().double() / b.cpu().double()).to(torch.float32).cuda()\nexact = (out == ref)\nmismatch = (~exact).sum().item()\nrel = ((out.double() - ref.double()).abs() / ref.double().abs())\nprint(json.dumps({\"n\": N, \"bit_exact_matches\": int(exact.sum().item()), \"mismatches\": int(mismatch),\n                 \"max_rel_dev_from_correct_rounding\": float(rel.max().item()),\n                 \"max_abs_dev\": float((out-ref).abs().max().item()),\n                 \"div_rn_correctly_rounded\": mismatch == 0}))",
+        "expected_signal": "tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-20T15:33:43Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "49e2e9fd9542f32c3a2219e6e22ed210741eb2fac61bbe6e04bd7248759be42e"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "8cb144864fbc7513dd815822c708dd0697fa97e2ef20cf48b13719e6a0f1cffd"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "5c5cbade314bf47becffdadb3ec71b8384601c402249143dabfbd9c6f1b4931c"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "tl.div_rn in this kernel configuration (T4, Triton 3.4.0, enable_fp_fusion=False, num_warps=4) may not be correctly rounded FP32 division, degrading the Newton step enough to break the 1e-6 relative tolerance for at least one legal input.",
+        "cwd": "/root/cases/case_102",
+        "duration_s": 4.377401,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "49e2e9fd9542f32c3a2219e6e22ed210741eb2fac61bbe6e04bd7248759be42e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "8cb144864fbc7513dd815822c708dd0697fa97e2ef20cf48b13719e6a0f1cffd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "5c5cbade314bf47becffdadb3ec71b8384601c402249143dabfbd9c6f1b4931c"
+              }
+            ],
+            "duration_s": 4.377401,
+            "exit_code": 0,
+            "expected_signal": "tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands",
+            "json_parse_error": null,
+            "json_result": {
+              "bit_exact_matches": 1048576,
+              "div_rn_correctly_rounded": true,
+              "max_abs_dev": 0.0,
+              "max_rel_dev_from_correct_rounding": 0.0,
+              "mismatches": 0,
+              "n": 1048576
+            },
+            "stderr": "",
+            "stdout": "{\"n\": 1048576, \"bit_exact_matches\": 1048576, \"mismatches\": 0, \"max_rel_dev_from_correct_rounding\": 0.0, \"max_abs_dev\": 0.0, \"div_rn_correctly_rounded\": true}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands",
+        "json_parse_error": null,
+        "json_result": {
+          "bit_exact_matches": 1048576,
+          "div_rn_correctly_rounded": true,
+          "max_abs_dev": 0.0,
+          "max_rel_dev_from_correct_rounding": 0.0,
+          "mismatches": 0,
+          "n": 1048576
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n\": 1048576, \"bit_exact_matches\": 1048576, \"mismatches\": 0, \"max_rel_dev_from_correct_rounding\": 0.0, \"max_abs_dev\": 0.0, \"div_rn_correctly_rounded\": true}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "n_finite_inputs": 63488,
+          "num_exceeding_1e-6": 16664,
+          "tolerance": 1e-06,
+          "worst_rel_err": 1.5753978958978954e-06,
+          "worst_x": [
+            27.359375,
+            218.875,
+            1751.0,
+            14008.0,
+            -27.359375
+          ]
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Exhaustive sweep of all 63488 finite FP16 values: 16664 inputs violate the 1e-6 relative tolerance. Worst-case relative error is 1.575e-6, e.g. at x=27.359375, 218.875, 1751.0, 14008.0 (and their negatives). NaN in max_rel is a 0/0 artifact from zero inputs; NaN > 1e-6 is false so num_bad counts only genuine violations. Exhaustive domain-wide evidence: kernel fails the contract.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-20T15:33:50Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T15:33:16Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T15:33:50Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "326a716395063df3b718e0f557c4321eca019e7f58c69d30f0fcbe3b57343d00"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "42ae90b5d403673dce84069bad14491db30a68af7a00ab17b6434d9a83b69921"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "2cbfca0b97d7d9a70906e3786c3c84efbe9a988fde5b6e1010dc21a989f68ec9"
+                  }
+                ],
+                "duration_s": 5.330412,
+                "exit_code": 0,
+                "expected_signal": "max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_rel": NaN,
+                  "n_inputs": 63488,
+                  "num_bad": 16664,
+                  "tolerance": 1e-06,
+                  "worst_rel": [
+                    1.5753978958978954e-06,
+                    1.5753978958978954e-06,
+                    1.5753978958978954e-06,
+                    1.5753978958978954e-06,
+                    1.5753978958978954e-06
+                  ],
+                  "worst_x": [
+                    27.359375,
+                    218.875,
+                    1751.0,
+                    14008.0,
+                    -27.359375
+                  ]
+                },
+                "n_finite_inputs": 63488,
+                "num_exceeding_1e-6": 16664,
+                "stderr": "",
+                "stdout": "total patterns 65536 finite 63488\nn = 63488\nmax_rel nan num_bad 16664 tol 1e-06\nworst x: [27.359375, 218.875, 1751.0, 14008.0, -27.359375]\nworst rel: [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]\n{\"max_rel\": NaN, \"tolerance\": 1e-06, \"num_bad\": 16664, \"n_inputs\": 63488, \"worst_x\": [27.359375, 218.875, 1751.0, 14008.0, -27.359375], \"worst_rel\": [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]}\n",
+                "timed_out": false,
+                "timeout_s": 300,
+                "tolerance": 1e-06,
+                "worst_rel_err": 1.5753978958978954e-06,
+                "worst_x": [
+                  27.359375,
+                  218.875,
+                  1751.0,
+                  14008.0,
+                  -27.359375
+                ]
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 63488 finite FP16 values: 16664 inputs violate the 1e-6 relative tolerance. Worst-case relative error is 1.575e-6, e.g. at x=27.359375, 218.875, 1751.0, 14008.0 (and their negatives). NaN in max_rel is a 0/0 artifact from zero inputs; NaN > 1e-6 is false so num_bad counts only genuine violations. Exhaustive domain-wide evidence: kernel fails the contract.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "The quadratic seed (-0.06m+0.439)*m+0.622 approximates m^(1/3) with worst-case relative error likely around 1e-3 near m=1 or m=2 (at m=1 the seed evaluates to 1.001, ~1e-3 off; at m=2 it gives (-0.12+0.439)*2+0.622 = 1.36 vs cbrt(2)=1.2599, ~8e-2 off). One Newton step for cbrt reduces relative error roughly quadratically (to ~e^2 scale), so a seed error of 8e-2 at m=2 leaves a residual near ~1e-3 - far above 1e-6 - and even 1e-3 seed error leaves ~3e-7, borderline. Additionally the reconstruction multiplies by FP32-rounded 2^(1/3)/2^(2/3) constants, adding a few ulps of error that can push borderline cases over.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every nonzero input must satisfy abs(actual - cbrt(x)) <= 1e-6 * abs(cbrt(x)) and 'Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain', with a single verdict over all finite FP16 values - so worst-case mantissa accuracy is the decisive contract requirement."
+            }
+          ],
+          "scope_rationale": "The contract demands <=1e-6 relative error for every nonzero finite FP16 input (including all mantissas in [1,2) and endpoints +-65504), so any input whose single-Newton-step result exceeds this tolerance is a direct contract violation.",
+          "statement": "For some legal finite FP16 input (e.g. mantissa near 1.0 or 2.0, or the endpoints +-65504), the kernel's single Newton correction after the quadratic seed produces a relative error greater than 1e-6 against the FP64 cbrt reference.",
+          "status": "confirmed",
+          "updated_at": "2026-10-20T15:33:50Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T15:33:50Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "326a716395063df3b718e0f557c4321eca019e7f58c69d30f0fcbe3b57343d00"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "42ae90b5d403673dce84069bad14491db30a68af7a00ab17b6434d9a83b69921"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "2cbfca0b97d7d9a70906e3786c3c84efbe9a988fde5b6e1010dc21a989f68ec9"
+              }
+            ],
+            "duration_s": 5.330412,
+            "exit_code": 0,
+            "expected_signal": "max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_rel": NaN,
+              "n_inputs": 63488,
+              "num_bad": 16664,
+              "tolerance": 1e-06,
+              "worst_rel": [
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06,
+                1.5753978958978954e-06
+              ],
+              "worst_x": [
+                27.359375,
+                218.875,
+                1751.0,
+                14008.0,
+                -27.359375
+              ]
+            },
+            "n_finite_inputs": 63488,
+            "num_exceeding_1e-6": 16664,
+            "stderr": "",
+            "stdout": "total patterns 65536 finite 63488\nn = 63488\nmax_rel nan num_bad 16664 tol 1e-06\nworst x: [27.359375, 218.875, 1751.0, 14008.0, -27.359375]\nworst rel: [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]\n{\"max_rel\": NaN, \"tolerance\": 1e-06, \"num_bad\": 16664, \"n_inputs\": 63488, \"worst_x\": [27.359375, 218.875, 1751.0, 14008.0, -27.359375], \"worst_rel\": [1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06, 1.5753978958978954e-06]}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "tolerance": 1e-06,
+            "worst_rel_err": 1.5753978958978954e-06,
+            "worst_x": [
+              27.359375,
+              218.875,
+              1751.0,
+              14008.0,
+              -27.359375
+            ]
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values: 16664 inputs violate the 1e-6 relative tolerance. Worst-case relative error is 1.575e-6, e.g. at x=27.359375, 218.875, 1751.0, 14008.0 (and their negatives). NaN in max_rel is a 0/0 artifact from zero inputs; NaN > 1e-6 is false so num_bad counts only genuine violations. Exhaustive domain-wide evidence: kernel fails the contract.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "bit_exact_matches": 1048576,
+          "div_rn_bit_exact_vs_correct_rounding": true,
+          "mismatches": 0,
+          "n_tested": 1048576
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "tl.div_rn in this configuration (BLOCK=256, num_warps=4, enable_fp_fusion=False, T4/Triton env) produced bit-exact correctly-rounded FP32 division on all 1048576 tested operand pairs in the kernel's operand range ([1,2) x [~1,~1.44]); zero mismatches, zero deviation. The observed c1 tolerance failures stem from the single-Newton-step algorithm, not from division lowering.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-20T15:33:50Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T15:33:16Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T15:33:50Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "49e2e9fd9542f32c3a2219e6e22ed210741eb2fac61bbe6e04bd7248759be42e"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "8cb144864fbc7513dd815822c708dd0697fa97e2ef20cf48b13719e6a0f1cffd"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "5c5cbade314bf47becffdadb3ec71b8384601c402249143dabfbd9c6f1b4931c"
+                  }
+                ],
+                "bit_exact_matches": 1048576,
+                "div_rn_bit_exact_vs_correct_rounding": true,
+                "duration_s": 4.377401,
+                "exit_code": 0,
+                "expected_signal": "tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands",
+                "json_parse_error": null,
+                "json_result": {
+                  "bit_exact_matches": 1048576,
+                  "div_rn_correctly_rounded": true,
+                  "max_abs_dev": 0.0,
+                  "max_rel_dev_from_correct_rounding": 0.0,
+                  "mismatches": 0,
+                  "n": 1048576
+                },
+                "mismatches": 0,
+                "n_tested": 1048576,
+                "stderr": "",
+                "stdout": "{\"n\": 1048576, \"bit_exact_matches\": 1048576, \"mismatches\": 0, \"max_rel_dev_from_correct_rounding\": 0.0, \"max_abs_dev\": 0.0, \"div_rn_correctly_rounded\": true}\n",
+                "timed_out": false,
+                "timeout_s": 300
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "tl.div_rn in this configuration (BLOCK=256, num_warps=4, enable_fp_fusion=False, T4/Triton env) produced bit-exact correctly-rounded FP32 division on all 1048576 tested operand pairs in the kernel's operand range ([1,2) x [~1,~1.44]); zero mismatches, zero deviation. The observed c1 tolerance failures stem from the single-Newton-step algorithm, not from division lowering.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The Newton step uses tl.div_rn(mantissa, estimate*estimate); if Triton 3.4.0 on T4 lowers this to fast/approximate division (e.g. approx reciprocal plus refinement with error > 1 ulp), the resulting estimate error compounds with seed error and the extra multiplies, plausibly exceeding the 1e-6 tolerance on inputs that would otherwise pass.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The contract requires the fixed 1e-6 relative tolerance for every nonzero input over the whole legal domain; intermediate rounding is not part of the target, so any lowering of div_rn that degrades final accuracy below tolerance is a violation."
+            }
+          ],
+          "scope_rationale": "Contract accuracy holds regardless of intermediate rounding choices, so any non-correctly-rounded division lowering that pushes final outputs beyond 1e-6 relative error violates the fixed tolerance requirement.",
+          "statement": "tl.div_rn in this kernel configuration (T4, Triton 3.4.0, enable_fp_fusion=False, num_warps=4) may not be correctly rounded FP32 division, degrading the Newton step enough to break the 1e-6 relative tolerance for at least one legal input.",
+          "status": "rebutted",
+          "updated_at": "2026-10-20T15:33:50Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T15:33:50Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "49e2e9fd9542f32c3a2219e6e22ed210741eb2fac61bbe6e04bd7248759be42e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "8cb144864fbc7513dd815822c708dd0697fa97e2ef20cf48b13719e6a0f1cffd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "5c5cbade314bf47becffdadb3ec71b8384601c402249143dabfbd9c6f1b4931c"
+              }
+            ],
+            "bit_exact_matches": 1048576,
+            "div_rn_bit_exact_vs_correct_rounding": true,
+            "duration_s": 4.377401,
+            "exit_code": 0,
+            "expected_signal": "tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands",
+            "json_parse_error": null,
+            "json_result": {
+              "bit_exact_matches": 1048576,
+              "div_rn_correctly_rounded": true,
+              "max_abs_dev": 0.0,
+              "max_rel_dev_from_correct_rounding": 0.0,
+              "mismatches": 0,
+              "n": 1048576
+            },
+            "mismatches": 0,
+            "n_tested": 1048576,
+            "stderr": "",
+            "stdout": "{\"n\": 1048576, \"bit_exact_matches\": 1048576, \"mismatches\": 0, \"max_rel_dev_from_correct_rounding\": 0.0, \"max_abs_dev\": 0.0, \"div_rn_correctly_rounded\": true}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "tl.div_rn in this configuration (BLOCK=256, num_warps=4, enable_fp_fusion=False, T4/Triton env) produced bit-exact correctly-rounded FP32 division on all 1048576 tested operand pairs in the kernel's operand range ([1,2) x [~1,~1.44]); zero mismatches, zero deviation. The observed c1 tolerance failures stem from the single-Newton-step algorithm, not from division lowering.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: c1 is confirmed with exhaustive domain-wide runtime evidence (all 63488 finite FP16 values; 16664 exceed the 1e-6 relative tolerance, worst-case 1.575e-6), and c2 (div_rn lowering) is decisively rebutted. No new material, testable, in-scope problem is uncovered by the latest evidence.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-10-20T15:33:55Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-10-20T15:33:55Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: c1 is confirmed with exhaustive domain-wide runtime evidence (all 63488 finite FP16 values; 16664 exceed the 1e-6 relative tolerance, worst-case 1.575e-6), and c2 (div_rn lowering) is decisively rebutted. No new material, testable, in-scope problem is uncovered by the latest evidence.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed and in-scope with exhaustive domain-wide runtime evidence: a probe over all 63488 finite FP16 values (the exact contract domain, including signed zeros, subnormals, and endpoints \u00b165504) found 16664 inputs whose kernel output exceeds the contract's fixed 1e-6 relative tolerance versus the FP64 cbrt reference, with worst-case relative error 1.575e-6 (e.g. x = 27.359375, 218.875, 1751.0, 14008.0, and negatives). problem.txt explicitly requires \"abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i]))\" for every nonzero input \"throughout the entire legal domain,\" and declares a single verdict over the whole domain, so the algorithm's single Newton step after a quadratic seed failing this tolerance is a direct contract violation, not a metric artifact or out-of-scope stress case. The only alternative explanation tested \u2014 that tl.div_rn is not correctly rounded on T4/Triton 3.4.0 (claim c2) \u2014 was decisively rebutted (bit-exact correctly-rounded division on 1M operand pairs in the kernel's operand range), so the failures stem from the kernel's algorithm, not division lowering. The probe's NaN max_rel is a 0/0 artifact from zero inputs and does not affect the genuine violation count. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-20T15:34:01Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-10-20T15:34:01Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed and in-scope with exhaustive domain-wide runtime evidence: a probe over all 63488 finite FP16 values (the exact contract domain, including signed zeros, subnormals, and endpoints \u00b165504) found 16664 inputs whose kernel output exceeds the contract's fixed 1e-6 relative tolerance versus the FP64 cbrt reference, with worst-case relative error 1.575e-6 (e.g. x = 27.359375, 218.875, 1751.0, 14008.0, and negatives). problem.txt explicitly requires \"abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i]))\" for every nonzero input \"throughout the entire legal domain,\" and declares a single verdict over the whole domain, so the algorithm's single Newton step after a quadratic seed failing this tolerance is a direct contract violation, not a metric artifact or out-of-scope stress case. The only alternative explanation tested \u2014 that tl.div_rn is not correctly rounded on T4/Triton 3.4.0 (claim c2) \u2014 was decisively rebutted (bit-exact correctly-rounded division on 1M operand pairs in the kernel's operand range), so the failures stem from the kernel's algorithm, not division lowering. The probe's NaN max_rel is a 0/0 artifact from zero inputs and does not affect the genuine violation count. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-10-20T15:34:01Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Claim c1 is confirmed and in-scope with exhaustive domain-wide runtime evidence: a probe over all 63488 finite FP16 values (the exact contract domain, including signed zeros, subnormals, and endpoints \u00b165504) found 16664 inputs whose kernel output exceeds the contract's fixed 1e-6 relative tolerance versus the FP64 cbrt reference, with worst-case relative error 1.575e-6 (e.g. x = 27.359375, 218.875, 1751.0, 14008.0, and negatives). problem.txt explicitly requires \"abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i]))\" for every nonzero input \"throughout the entire legal domain,\" and declares a single verdict over the whole domain, so the algorithm's single Newton step after a quadratic seed failing this tolerance is a direct contract violation, not a metric artifact or out-of-scope stress case. The only alternative explanation tested \u2014 that tl.div_rn is not correctly rounded on T4/Triton 3.4.0 (claim c2) \u2014 was decisively rebutted (bit-exact correctly-rounded division on 1M operand pairs in the kernel's operand range), so the failures stem from the kernel's algorithm, not division lowering. The probe's NaN max_rel is a 0/0 artifact from zero inputs and does not affect the genuine violation count. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+    "verdict": "reject"
+  }
+}

@@ -1,16 +1,18 @@
-Compute the natural logarithm of the determinant of one SPD matrix.
+Select a nearest candidate and return its embedding on a fixed workload.
 
-The entire workload is the float32 matrix of shape (8, 8) returned by
-make_inputs() in kernel.py. The mathematical reference is log(det(A)) for
-the actual stored float32 entries of A, evaluated in float64. A is positive
-definite. The integer Gram construction and diagonal regularizer are only
-the input generator; use the supplied entries, not an idealized matrix.
+Only make_inputs() supplies the inputs in scope: query is float32 of shape
+(32,), candidates is float32 of shape (16, 32), embeddings is float32 of shape
+(16, 8). For the reference, use the original supplied float32 coordinates
+without quantization. Compute squared Euclidean distances in float64:
+  d[i] = sum_j (candidates[i,j] - query[j])**2.
+Select the index with smallest d[i], breaking ties in favour of the smallest
+index. The reference output is embeddings[index, :].
 
-Return a finite float32 vector of shape (1,). The numerical error is
-  ||output-reference||_2 / max(||reference||_2, 1.0).
-This error must be <= 0.0001. The requirement concerns this fixed workload;
-arbitrary alternative matrices and seeds are outside its scope.
+The kernel returns a finite vector of shape (8,). It satisfies the contract iff
+  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.1.
 
-The implementation uses elimination without pivoting and accumulates the
-logarithms of its diagonal pivots. FP multiply/add fusion is disabled, and
-division of the multipliers uses round-to-nearest float32 division.
+Decide whether this implementation meets the numerical contract for this fixed
+generated workload. Alternative queries, candidates and embeddings are outside
+the scope. The kernel's approximate route quantizes coordinates to a grid
+using floor(x*8+0.5)/8, then uses float32 squared distances and the same tie rule.
+The final embedding values are gathered without quantization.

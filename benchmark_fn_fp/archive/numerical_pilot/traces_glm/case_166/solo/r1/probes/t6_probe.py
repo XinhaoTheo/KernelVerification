@@ -1,23 +1,19 @@
 import torch, numpy as np, json, sys
-sys.path.insert(0, "/root/pilot_cases/case_103")
-import kernel as K
-
-q, k, v = K.make_inputs("cuda")
-out = K.run(q, k, v).double().cpu().numpy()
-
-# float64 reference on same float32 inputs
-q64, k64, v64 = q.double(), k.double(), v.double()
-z = k64 @ q64 / np.sqrt(32.0, dtype=np.float64)
-p = np.exp(z - z.max()); p /= p.sum()
-ref = (p[:, None] * v64.cpu().numpy()).sum(0) if False else (p[:, None] * v64.cpu().numpy()).sum(0)
-
-out32 = out.astype(np.float64)
-num = np.linalg.norm(out32 - ref)
-den = max(np.linalg.norm(ref), 0.001 * np.sqrt(ref.size))
-print(json.dumps({
-  "E": num / den,
-  "num": float(num), "den": float(den),
-  "finite": bool(np.all(np.isfinite(out32))),
-  "ref_norm": float(np.linalg.norm(ref)),
-  "max_abs_err": float(np.max(np.abs(out32 - ref))),
-}))
+sys.path.insert(0, "/root/pilot_cases/case_97")
+import kernel
+a, b = kernel.make_inputs()
+out = kernel.run(a, b)
+out = out.float().cpu().numpy()
+af = a.cpu().numpy().astype(np.float64)
+bf = b.cpu().numpy().astype(np.float64)
+# reference in float64 on same float32 inputs
+ref = np.empty_like(bf)
+h = np.zeros(bf.shape[1])
+for t in range(bf.shape[0]):
+    h = af[t]*h + bf[t]
+    ref[t] = h
+n = ref.size
+err = np.linalg.norm((out-ref).ravel())
+den = max(np.linalg.norm(ref.ravel()), 0.001*np.sqrt(n))
+E = err/den
+print(json.dumps({"E": float(E), "err": float(err), "ref_norm": float(np.linalg.norm(ref.ravel())), "n": int(n), "finite": bool(np.isfinite(out).all())}))

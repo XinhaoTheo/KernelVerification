@@ -17,7 +17,7 @@ from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trial_sort_key
 
-CASES = tuple(f"case_{i + 124:02d}" for i in range(1, 5))
+CASES = tuple(f"case_{i + 130:02d}" for i in range(1, 5))
 ARMS = ("single_call", "solo", "debate")
 TRIALS = ("ea_pilot_r1", "ea_pilot_r2")
 MODEL = "accounts/fireworks/models/glm-5p3"

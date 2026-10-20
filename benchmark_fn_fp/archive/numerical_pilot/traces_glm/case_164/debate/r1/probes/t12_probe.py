@@ -1,17 +1,21 @@
+import sys, json
+sys.path.insert(0, "/root/pilot_cases/case_95")
+import torch, numpy as np
+from kernel import make_inputs, run
 
-import torch, numpy as np, json, importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/pilot_cases/case_101/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-a, b = k.make_inputs("cuda")
-out = k.run(a, b)
-af = a.cpu().numpy().astype(np.float64); bf = b.cpu().numpy().astype(np.float64)
-T, D = af.shape
-ref = np.empty_like(af); h = np.zeros(D)
-for t in range(T):
-    h = af[t]*h + bf[t]; ref[t] = h
-o = out.cpu().numpy().astype(np.float64)
-diff = o - ref
-num = np.linalg.norm(diff.ravel())
-den = max(np.linalg.norm(ref.ravel()), 0.001*np.sqrt(ref.size))
-E = num/den
-print(json.dumps({"E": float(E), "norm_out_ref_diff": float(num), "norm_ref": float(np.linalg.norm(ref.ravel())), "num_elements": int(ref.size), "tolerance": 0.003, "all_finite": bool(np.isfinite(o).all()), "max_abs_err": float(np.abs(diff).max())}))
+x, w = make_inputs("cuda")
+out = run(x, w)
+ref = w.detach().cpu().numpy().astype(np.float64) @ x.detach().cpu().numpy().astype(np.float64)
+o = out.detach().cpu().numpy().astype(np.float64)
+den = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))
+E = np.linalg.norm(o - ref) / den
+# decompose: error vector of kernel vs quantized-fp64 prediction
+wf = w.cpu().numpy().astype(np.float64)
+scale = np.max(np.abs(wf), axis=1, keepdims=True)/7.0
+q = np.clip(np.floor(wf/scale + 0.5), -7, 7)*scale
+quant_ref = wf @ x.cpu().numpy().astype(np.float64)
+r_col = (q - wf).sum(axis=0); r_col /= np.linalg.norm(r_col)
+err = o - ref
+print(json.dumps({"E": float(E), "budget": 0.12, "finite": bool(np.all(np.isfinite(o))),
+ "ref_norm": float(np.linalg.norm(ref)), "err_norm": float(np.linalg.norm(err)),
+ "err_aligned_with_r_col": float(err @ r_col), "E_pass": bool(E <= 0.12)}))

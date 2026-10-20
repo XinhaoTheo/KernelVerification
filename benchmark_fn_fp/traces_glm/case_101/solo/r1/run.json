@@ -1,0 +1,744 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_101",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise real cube root with a polynomial seed and Newton correction.\n\nOriginal synthetic Triton implementation, not an upstream bug reproduction.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _cbrt_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    safe = tl.where(magnitude == 0.0, 1.0, magnitude)\n    encoding = safe.to(tl.uint32, bitcast=True)\n    exponent = ((encoding >> 23) & 255).to(tl.int32) - 127\n    mantissa = ((encoding & 0x007fffff) | 0x3f800000).to(tl.float32, bitcast=True)\n    quotient = (exponent + 24) // 3 - 8\n    remainder = exponent - 3 * quotient\n    estimate = -0.0603 * mantissa + 0.4394\n    estimate = estimate * mantissa + 0.6215\n    estimate = (2.0 * estimate + tl.div_rn(mantissa, estimate * estimate)) * (1.0 / 3.0)\n    remainder_scale = tl.where(remainder == 0, 1.0,\n                              tl.where(remainder == 1, 1.2599210498948732, 1.5874010519681994))\n    scale = ((quotient + 127).to(tl.uint32) << 23).to(tl.float32, bitcast=True)\n    value = (estimate * remainder_scale) * scale\n    value = tl.where(x < 0.0, -value, value)\n    value = tl.where(magnitude == 0.0, x, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool((torch.isfinite(x)).all().item()),\n            \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating the real cube root of x.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _cbrt_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the real cube root using the FP64 power library.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return torch.sign(value) * torch.pow(torch.abs(value), 1.0 / 3.0)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples only; all finite FP16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (128.0 * torch.rand((size,), generator=generator) - 64.0).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the real cube root elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = cbrt(x[i]), the unique real number whose cube equals x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value is legal. This includes both signed zeros, all positive and negative subnormals, and both finite endpoints -65504 and 65504. NaN and infinity are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every nonzero input must satisfy:\n\n  abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i])).\n\nFor a zero input, the output must be zero; either sign is accepted. The absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular initial estimate, Newton iteration count, range reduction or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() computes sign(x)*abs(x)**(1/3) with the FP64 library power and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_101",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-20T15:31:25Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T15:31:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "00e87810f7f17ab7635205cc17df4164834b1356ec1b23e6542f4857404011b1"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "3d9d100e6986c30e5c9a4001ffce48e799b68ef638fdcc5fa975e6829c1df7c8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.370527,
+            "exit_code": 0,
+            "expected_signal": "max_rel_err <= 1e-6 and zero_ok true",
+            "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+            "json_result": null,
+            "max_rel_err": 6.316959542614163e-07,
+            "num_tested": 63488,
+            "passes": true,
+            "stderr": "",
+            "stdout": "{'num_tested': 63488, 'max_rel_err': 6.316959542614163e-07, 'tol': 1e-06, 'passes': True, 'zero_ok': True, 'worst_bits': None, 'worst_x': None}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06,
+            "zero_ok": true
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values: max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros map to exact zero. No legal input violates the contract.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The polynomial seed plus one Newton step and coarse remainder scaling may not achieve 1e-6 relative accuracy over the full finite FP16 range, especially at subnormals, endpoints \u00b165504, and values whose exponent remainder path stresses the approximation.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every finite FP16 value is legal, including subnormals and endpoints, and every nonzero input must satisfy abs(actual-cbrt(x)) <= 1e-6*abs(cbrt(x))."
+        }
+      ],
+      "scope_rationale": "The contract requires the fixed relative tolerance 1e-6 for every nonzero finite FP16 input, and requires zero output for zero input with zero absolute tolerance.",
+      "statement": "The kernel's approximation fails the 1e-6 relative tolerance or the exact-zero rule for at least one legal finite FP16 input value.",
+      "status": "rebutted",
+      "updated_at": "2026-10-20T15:31:47Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_101",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_101"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_101"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_101"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_101",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 3.871651589,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll record a claim that the kernel may violate the 1e-6 relative tolerance on some legal finite FP16 input, then exhaustively test all finite FP16 values.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The polynomial seed plus one Newton step and coarse remainder scaling may not achieve 1e-6 relative accuracy over the full finite FP16 range, especially at subnormals, endpoints \u00b165504, and values whose exponent remainder path stresses the approximation.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every finite FP16 value is legal, including subnormals and endpoints, and every nonzero input must satisfy abs(actual-cbrt(x)) <= 1e-6*abs(cbrt(x))."
+              }
+            ],
+            "scope_rationale": "The contract requires the fixed relative tolerance 1e-6 for every nonzero finite FP16 input, and requires zero output for zero input with zero absolute tolerance.",
+            "statement": "The kernel's approximation fails the 1e-6 relative tolerance or the exact-zero rule for at least one legal finite FP16 input value."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.872,
+        "input_tokens": 9289,
+        "output_tokens": 283
+      }
+    },
+    {
+      "duration_s": 5.239926085,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll exhaustively test all finite FP16 values against the 1e-6 relative tolerance, plus check the zero rule.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys\nsys.path.insert(0, '/root/cases/case_101')\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int32)\nx16 = bits.to(torch.uint16).view(torch.float16).cpu()\nfinite = torch.isfinite(x16)\nxf = x16[finite].to(torch.float32).cuda()\n\nout = kernel.run(xf)\n\nxd = xf.cpu().to(torch.float64)\nref = torch.sign(xd) * torch.pow(torch.abs(xd), 1.0/3.0)\nactual = out.cpu().to(torch.float64)\n\nnonzero = xd != 0\nrel = (actual[nonzero] - ref[nonzero]).abs() / ref[nonzero].abs()\nmaxrel = rel.max().item()\nworst_bits = None\nif rel.max() > 1e-6:\n    idx = int(rel.argmax())\n    worst = int(torch.where(nonzero)[0][idx])\n    worst_bits = int(bits[finite][worst])\nzero_ok = bool((actual[~nonzero] == 0).all().item())\nprint({'num_tested': int(xf.numel()), 'max_rel_err': maxrel, 'tol': 1e-6,\n       'passes': maxrel <= 1e-6, 'zero_ok': zero_ok, 'worst_bits': worst_bits})\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.24,
+        "input_tokens": 10426,
+        "output_tokens": 364
+      }
+    },
+    {
+      "duration_s": 4.281661461999999,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe failed because I converted the input to FP32 before calling run(). I'll rerun with the FP16 tensor itself.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys\nsys.path.insert(0, '/root/cases/case_101')\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int32)\nx16 = bits.to(torch.uint16).view(torch.float16).cpu()\nfinite = torch.isfinite(x16)\nxf = x16[finite].to('cuda')  # keep fp16\n\nout = kernel.run(xf)\n\nxd = xf.cpu().to(torch.float64)\nref = torch.sign(xd) * torch.pow(torch.abs(xd), 1.0/3.0)\nactual = out.cpu().to(torch.float64)\n\nnonzero = xd != 0\nrel = (actual[nonzero] - ref[nonzero]).abs() / ref[nonzero].abs()\nmaxrel = rel.max().item()\nworst_bits = None\nworst_x = None\nif maxrel > 1e-6:\n    idx = int(rel.argmax())\n    wi = int(torch.where(nonzero)[0][idx])\n    worst_bits = int(bits[finite][wi])\n    worst_x = float(x16[finite][wi])\nzero_ok = bool((actual[~nonzero] == 0).all().item())\nprint({'num_tested': int(xf.numel()), 'max_rel_err': maxrel, 'tol': 1e-6,\n       'passes': maxrel <= 1e-6, 'zero_ok': zero_ok, 'worst_bits': worst_bits, 'worst_x': worst_x})\n",
+            "expected_signal": "max_rel_err <= 1e-6 and zero_ok true"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.282,
+        "input_tokens": 12437,
+        "output_tokens": 415
+      }
+    },
+    {
+      "duration_s": 4.277223708000001,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive probe (all 63,488 finite FP16 values) passed with max relative error ~6.3e-7 \u2264 1e-6 and zeros exact. I'll record this and finalize the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_rel_err": 6.316959542614163e-07,
+              "num_tested": 63488,
+              "passes": true,
+              "tol": 1e-06,
+              "zero_ok": true
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "Exhaustive sweep of all 63488 finite FP16 values: max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros map to exact zero. No legal input violates the contract.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.277,
+        "input_tokens": 14395,
+        "output_tokens": 204
+      }
+    },
+    {
+      "duration_s": 3.606340502000002,
+      "role": "solo",
+      "round": 6,
+      "text": "The exhaustive probe covered every one of the 63,488 finite FP16 values \u2014 the entire legal input domain \u2014 with max relative error 6.3e-7 \u2264 1e-6 and zeros mapping to exact zero. The claim is rebutted; the contract is satisfied on all legal inputs. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.99,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Exhaustive runtime probe (tool event t7) tested the kernel on all 63,488 finite FP16 values \u2014 the complete legal domain per problem.txt \u2014 against an FP64 reference. Max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros produced exact zero output. Since every legal input was tested, the approximation-error claim (c1) is rebutted with full domain coverage, and the kernel satisfies the contract.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.606,
+        "input_tokens": 16813,
+        "output_tokens": 223
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_101"
+      },
+      "created_at": "2026-10-20T15:31:19Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_101",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise real cube root with a polynomial seed and Newton correction.\n\nOriginal synthetic Triton implementation, not an upstream bug reproduction.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _cbrt_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    safe = tl.where(magnitude == 0.0, 1.0, magnitude)\n    encoding = safe.to(tl.uint32, bitcast=True)\n    exponent = ((encoding >> 23) & 255).to(tl.int32) - 127\n    mantissa = ((encoding & 0x007fffff) | 0x3f800000).to(tl.float32, bitcast=True)\n    quotient = (exponent + 24) // 3 - 8\n    remainder = exponent - 3 * quotient\n    estimate = -0.0603 * mantissa + 0.4394\n    estimate = estimate * mantissa + 0.6215\n    estimate = (2.0 * estimate + tl.div_rn(mantissa, estimate * estimate)) * (1.0 / 3.0)\n    remainder_scale = tl.where(remainder == 0, 1.0,\n                              tl.where(remainder == 1, 1.2599210498948732, 1.5874010519681994))\n    scale = ((quotient + 127).to(tl.uint32) << 23).to(tl.float32, bitcast=True)\n    value = (estimate * remainder_scale) * scale\n    value = tl.where(x < 0.0, -value, value)\n    value = tl.where(magnitude == 0.0, x, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool((torch.isfinite(x)).all().item()),\n            \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating the real cube root of x.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _cbrt_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the real cube root using the FP64 power library.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return torch.sign(value) * torch.pow(torch.abs(value), 1.0 / 3.0)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples only; all finite FP16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (128.0 * torch.rand((size,), generator=generator) - 64.0).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the real cube root elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = cbrt(x[i]), the unique real number whose cube equals x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value is legal. This includes both signed zeros, all positive and negative subnormals, and both finite endpoints -65504 and 65504. NaN and infinity are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every nonzero input must satisfy:\n\n  abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i])).\n\nFor a zero input, the output must be zero; either sign is accepted. The absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular initial estimate, Newton iteration count, range reduction or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() computes sign(x)*abs(x)**(1/3) with the FP64 library power and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_101",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_101"
+      },
+      "created_at": "2026-10-20T15:31:19Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the real cube root elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = cbrt(x[i]), the unique real number whose cube equals x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value is legal. This includes both signed zeros, all positive and negative subnormals, and both finite endpoints -65504 and 65504. NaN and infinity are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every nonzero input must satisfy:\n\n  abs(actual[i] - cbrt(x[i])) <= 1e-6 * abs(cbrt(x[i])).\n\nFor a zero input, the output must be zero; either sign is accepted. The absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular initial estimate, Newton iteration count, range reduction or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() computes sign(x)*abs(x)**(1/3) with the FP64 library power and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_101",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_101"
+      },
+      "created_at": "2026-10-20T15:31:19Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_101",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3385
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1960
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_101",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-20T15:31:19Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_101",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The polynomial seed plus one Newton step and coarse remainder scaling may not achieve 1e-6 relative accuracy over the full finite FP16 range, especially at subnormals, endpoints \u00b165504, and values whose exponent remainder path stresses the approximation.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every finite FP16 value is legal, including subnormals and endpoints, and every nonzero input must satisfy abs(actual-cbrt(x)) <= 1e-6*abs(cbrt(x))."
+          }
+        ],
+        "scope_rationale": "The contract requires the fixed relative tolerance 1e-6 for every nonzero finite FP16 input, and requires zero output for zero input with zero absolute tolerance.",
+        "statement": "The kernel's approximation fails the 1e-6 relative tolerance or the exact-zero rule for at least one legal finite FP16 input value."
+      },
+      "created_at": "2026-10-20T15:31:25Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-20T15:31:25Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The polynomial seed plus one Newton step and coarse remainder scaling may not achieve 1e-6 relative accuracy over the full finite FP16 range, especially at subnormals, endpoints \u00b165504, and values whose exponent remainder path stresses the approximation.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every finite FP16 value is legal, including subnormals and endpoints, and every nonzero input must satisfy abs(actual-cbrt(x)) <= 1e-6*abs(cbrt(x))."
+          }
+        ],
+        "scope_rationale": "The contract requires the fixed relative tolerance 1e-6 for every nonzero finite FP16 input, and requires zero output for zero input with zero absolute tolerance.",
+        "statement": "The kernel's approximation fails the 1e-6 relative tolerance or the exact-zero rule for at least one legal finite FP16 input value.",
+        "status": "open",
+        "updated_at": "2026-10-20T15:31:25Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys\nsys.path.insert(0, '/root/cases/case_101')\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int32)\nx16 = bits.to(torch.uint16).view(torch.float16).cpu()\nfinite = torch.isfinite(x16)\nxf = x16[finite].to(torch.float32).cuda()\n\nout = kernel.run(xf)\n\nxd = xf.cpu().to(torch.float64)\nref = torch.sign(xd) * torch.pow(torch.abs(xd), 1.0/3.0)\nactual = out.cpu().to(torch.float64)\n\nnonzero = xd != 0\nrel = (actual[nonzero] - ref[nonzero]).abs() / ref[nonzero].abs()\nmaxrel = rel.max().item()\nworst_bits = None\nif rel.max() > 1e-6:\n    idx = int(rel.argmax())\n    worst = int(torch.where(nonzero)[0][idx])\n    worst_bits = int(bits[finite][worst])\nzero_ok = bool((actual[~nonzero] == 0).all().item())\nprint({'num_tested': int(xf.numel()), 'max_rel_err': maxrel, 'tol': 1e-6,\n       'passes': maxrel <= 1e-6, 'zero_ok': zero_ok, 'worst_bits': worst_bits})\n"
+      },
+      "created_at": "2026-10-20T15:31:33Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "bd47b90d52fc5051a6d88e9b5f87fd2dad2506de679328209e87c8758e840b5d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "c3387fa131a9252f1930f5ef24a34ee836bf971d246ffed78f0533b4d188aefa"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's approximation fails the 1e-6 relative tolerance or the exact-zero rule for at least one legal finite FP16 input value.",
+        "cwd": "/root/cases/case_101",
+        "duration_s": 3.648379,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "bd47b90d52fc5051a6d88e9b5f87fd2dad2506de679328209e87c8758e840b5d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "c3387fa131a9252f1930f5ef24a34ee836bf971d246ffed78f0533b4d188aefa"
+              }
+            ],
+            "duration_s": 3.648379,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_101/solo/probes/t6_probe.py\", line 10, in <module>\n    out = kernel.run(xf)\n          ^^^^^^^^^^^^^^\n  File \"/root/cases/case_101/kernel.py\", line 59, in run\n    validate_inputs(x)\n  File \"/root/cases/case_101/kernel.py\", line 51, in validate_inputs\n    require(x.dtype == torch.float16, \"FP16 input required\")\n  File \"/root/cases/case_101/kernel.py\", line 38, in require\n    raise ValueError(message)\nValueError: FP16 input required\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_101/solo/probes/t6_probe.py\", line 10, in <module>\n    out = kernel.run(xf)\n          ^^^^^^^^^^^^^^\n  File \"/root/cases/case_101/kernel.py\", line 59, in run\n    validate_inputs(x)\n  File \"/root/cases/case_101/kernel.py\", line 51, in validate_inputs\n    require(x.dtype == torch.float16, \"FP16 input required\")\n  File \"/root/cases/case_101/kernel.py\", line 38, in require\n    raise ValueError(message)\nValueError: FP16 input required\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys\nsys.path.insert(0, '/root/cases/case_101')\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int32)\nx16 = bits.to(torch.uint16).view(torch.float16).cpu()\nfinite = torch.isfinite(x16)\nxf = x16[finite].to('cuda')  # keep fp16\n\nout = kernel.run(xf)\n\nxd = xf.cpu().to(torch.float64)\nref = torch.sign(xd) * torch.pow(torch.abs(xd), 1.0/3.0)\nactual = out.cpu().to(torch.float64)\n\nnonzero = xd != 0\nrel = (actual[nonzero] - ref[nonzero]).abs() / ref[nonzero].abs()\nmaxrel = rel.max().item()\nworst_bits = None\nworst_x = None\nif maxrel > 1e-6:\n    idx = int(rel.argmax())\n    wi = int(torch.where(nonzero)[0][idx])\n    worst_bits = int(bits[finite][wi])\n    worst_x = float(x16[finite][wi])\nzero_ok = bool((actual[~nonzero] == 0).all().item())\nprint({'num_tested': int(xf.numel()), 'max_rel_err': maxrel, 'tol': 1e-6,\n       'passes': maxrel <= 1e-6, 'zero_ok': zero_ok, 'worst_bits': worst_bits, 'worst_x': worst_x})\n",
+        "expected_signal": "max_rel_err <= 1e-6 and zero_ok true"
+      },
+      "created_at": "2026-10-20T15:31:43Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "00e87810f7f17ab7635205cc17df4164834b1356ec1b23e6542f4857404011b1"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "3d9d100e6986c30e5c9a4001ffce48e799b68ef638fdcc5fa975e6829c1df7c8"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's approximation fails the 1e-6 relative tolerance or the exact-zero rule for at least one legal finite FP16 input value.",
+        "cwd": "/root/cases/case_101",
+        "duration_s": 5.370527,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "00e87810f7f17ab7635205cc17df4164834b1356ec1b23e6542f4857404011b1"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "3d9d100e6986c30e5c9a4001ffce48e799b68ef638fdcc5fa975e6829c1df7c8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.370527,
+            "exit_code": 0,
+            "expected_signal": "max_rel_err <= 1e-6 and zero_ok true",
+            "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{'num_tested': 63488, 'max_rel_err': 6.316959542614163e-07, 'tol': 1e-06, 'passes': True, 'zero_ok': True, 'worst_bits': None, 'worst_x': None}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "max_rel_err <= 1e-6 and zero_ok true",
+        "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{'num_tested': 63488, 'max_rel_err': 6.316959542614163e-07, 'tol': 1e-06, 'passes': True, 'zero_ok': True, 'worst_bits': None, 'worst_x': None}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_rel_err": 6.316959542614163e-07,
+          "num_tested": 63488,
+          "passes": true,
+          "tol": 1e-06,
+          "zero_ok": true
+        },
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "Exhaustive sweep of all 63488 finite FP16 values: max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros map to exact zero. No legal input violates the contract.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-20T15:31:47Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T15:31:25Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T15:31:47Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "00e87810f7f17ab7635205cc17df4164834b1356ec1b23e6542f4857404011b1"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "3d9d100e6986c30e5c9a4001ffce48e799b68ef638fdcc5fa975e6829c1df7c8"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 5.370527,
+                "exit_code": 0,
+                "expected_signal": "max_rel_err <= 1e-6 and zero_ok true",
+                "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+                "json_result": null,
+                "max_rel_err": 6.316959542614163e-07,
+                "num_tested": 63488,
+                "passes": true,
+                "stderr": "",
+                "stdout": "{'num_tested': 63488, 'max_rel_err': 6.316959542614163e-07, 'tol': 1e-06, 'passes': True, 'zero_ok': True, 'worst_bits': None, 'worst_x': None}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tol": 1e-06,
+                "zero_ok": true
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 63488 finite FP16 values: max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros map to exact zero. No legal input violates the contract.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The polynomial seed plus one Newton step and coarse remainder scaling may not achieve 1e-6 relative accuracy over the full finite FP16 range, especially at subnormals, endpoints \u00b165504, and values whose exponent remainder path stresses the approximation.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every finite FP16 value is legal, including subnormals and endpoints, and every nonzero input must satisfy abs(actual-cbrt(x)) <= 1e-6*abs(cbrt(x))."
+            }
+          ],
+          "scope_rationale": "The contract requires the fixed relative tolerance 1e-6 for every nonzero finite FP16 input, and requires zero output for zero input with zero absolute tolerance.",
+          "statement": "The kernel's approximation fails the 1e-6 relative tolerance or the exact-zero rule for at least one legal finite FP16 input value.",
+          "status": "rebutted",
+          "updated_at": "2026-10-20T15:31:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T15:31:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "00e87810f7f17ab7635205cc17df4164834b1356ec1b23e6542f4857404011b1"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "3d9d100e6986c30e5c9a4001ffce48e799b68ef638fdcc5fa975e6829c1df7c8"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 5.370527,
+            "exit_code": 0,
+            "expected_signal": "max_rel_err <= 1e-6 and zero_ok true",
+            "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+            "json_result": null,
+            "max_rel_err": 6.316959542614163e-07,
+            "num_tested": 63488,
+            "passes": true,
+            "stderr": "",
+            "stdout": "{'num_tested': 63488, 'max_rel_err': 6.316959542614163e-07, 'tol': 1e-06, 'passes': True, 'zero_ok': True, 'worst_bits': None, 'worst_x': None}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06,
+            "zero_ok": true
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values: max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros map to exact zero. No legal input violates the contract.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.99,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Exhaustive runtime probe (tool event t7) tested the kernel on all 63,488 finite FP16 values \u2014 the complete legal domain per problem.txt \u2014 against an FP64 reference. Max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros produced exact zero output. Since every legal input was tested, the approximation-error claim (c1) is rebutted with full domain coverage, and the kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-20T15:31:51Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.99,
+        "created_at": "2026-10-20T15:31:51Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Exhaustive runtime probe (tool event t7) tested the kernel on all 63,488 finite FP16 values \u2014 the complete legal domain per problem.txt \u2014 against an FP64 reference. Max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros produced exact zero output. Since every legal input was tested, the approximation-error claim (c1) is rebutted with full domain coverage, and the kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.99,
+    "created_at": "2026-10-20T15:31:51Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Exhaustive runtime probe (tool event t7) tested the kernel on all 63,488 finite FP16 values \u2014 the complete legal domain per problem.txt \u2014 against an FP64 reference. Max relative error 6.32e-7 <= 1e-6 tolerance; both signed zeros produced exact zero output. Since every legal input was tested, the approximation-error claim (c1) is rebutted with full domain coverage, and the kernel satisfies the contract.",
+    "verdict": "trust"
+  }
+}

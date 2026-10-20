@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_u`
+- Entry: `case_o`
 - Turns: 10
 - Tool events: 13
 - Claims: 1
 - Description updates: 2
-- LLM time: 71.768s across 9 calls | tokens: in=149859 out=4163 total=154022
+- LLM time: 82.434s across 9 calls | tokens: in=184703 out=5487 total=190190
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
 - Confidence: 0.95
@@ -26,42 +26,48 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_u",
+    "entry": "case_o",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_u"
+    "entry": "case_o"
   }
 
-### Turn 2 - `describer` (11.493790423999997s, in=4731 out=834)
+### Turn 2 - `describer` (18.614247832s, in=4777 out=1459)
+
+Message:
+
+```text
+The artifact context is already fully loaded, so I can describe it directly. The kernel is a Triton float32 sequential-accumulation implementation of the projection, and the workload makes b nearly parallel to u, so residual cancellation is the dominant risk surface.
+```
 
 Tool calls:
 
@@ -69,37 +75,36 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coefficients[0,k-1]*cos(2*pi*k*n/64) + coefficients[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 from the supplied float32 inputs.",
-      "Only inputs in scope are those from make_inputs(): coefficients shape (2,16) float32, offset shape (1,); fixed public workload, other tensors out of scope.",
-      "Output: finite float32 vector of shape (64,); relative L2 error vs reference <= 0.15.",
-      "Problem explicitly acknowledges the implementation uses a fixed frequency cutoff as an approximation, so the question is whether the cutoff error fits the 0.15 tolerance for this workload.",
-      "FP multiply/add fusion is disabled at launch."
+      "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+      "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+      "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+      "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
     ],
     "kernel_model": [
-      "Triton kernel computes output[n] 
-  ...[truncated 2492 chars]
+      "_projection_kernel is a single-program (grid (1,), num_warps=1, 
+  ...[truncated 3804 chars]
   Output summary:
   {
     "contract_model": [
-      "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coefficients[0,k-1]*cos(2*pi*k*n/64) + coefficients[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 from the supplied float32 inputs.",
-      "Only inputs in scope are those from make_inputs(): coefficients shape (2,16) float32, offset shape (1,); fixed public workload, other tensors out of scope.",
-      "Output: finite float32 vector of shape (64,); relative L2 error vs reference <= 0.15.",
-      "Problem explicitly acknowledges the implementation uses a fixed frequency cutoff as an approximation, so the question is whether the cutoff error fits the 0.15 tolerance for this workload.",
-      "FP multiply/add fusion is disabled at launch."
+      "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+      "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+      "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+      "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel computes output[n] = offset + sum over only the first RETAINED=6 of 16 modes (k=1..6), discarding modes 7..16 entirely (kernel.py lines 12-17).",
-      "Coefficient layout: a = Coefficients[k-1] (cos row), b = Coefficients[MODES + k - 1] = Coefficients[15 + k - 1] (sin row), matching the row-major (2,16) layout with MODES=16.",
-      "Angle = n * (2*pi*k/N) in float32; accumulation in float32 w
-  ...[truncated 2192 chars]
+      "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+      "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+      "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+      "P
+  ...[truncated 3504 chars]
 
-### Turn 3 - `skeptic` (8.597708428999994s, in=11653 out=385)
+### Turn 3 - `skeptic` (6.506884462000002s, in=13700 out=404)
 
 Message:
 
 ```text
-The central risk here is the mode truncation: the kernel keeps only 6 of 16 modes, and the contract demands relative L2 error ≤ 0.15 against a full 16-mode float64 reference on the fixed seed-811164 workload. Whether that passes depends entirely on the actual energy ratio of the dropped small-std modes to the retained modes, which needs a runtime probe. I'll record that as the primary claim.
+The decisive risk is clear from the description: catastrophic cancellation in the residual on the near-parallel fixed workload, where fp32 rounding noise (~1e-7 of O(1) operands) is comparable to the orthogonal noise amplitude (~1e-5), putting the output direction near the 0.01 relative-L2 tolerance. I'll record this as the primary testable claim.
 ```
 
 Tool calls:
@@ -107,28 +112,28 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The problem's own tolerance is 0.15; the dropped modes 7-16 contribute RMS-per-sample error ~0.179 (sqrt(2*10)*0.04) while the reference norm is dominated by the DC term (coefficients[0,0] ~1.25) plus retained modes with std 0.15, so the ratio sits near the bound and only a computation on the actual seeded values can decide it.",
+    "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference uses ALL sixteen modes; numerical contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs() workload, and the implementation's fixed frequency cutoff must satisfy that bound."
+        "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
       }
     ],
-    "statement": "On the fixed seed-811164 workload from make_inputs(), the kernel's 6-mode cutoff (dropping mode
-  ...[truncated 130 chars]
+    "statement": "On the fixed make_inputs() workload, the kernel's fp32 co
+  ...[truncated 243 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (5.719182177999983s, in=12491 out=333)
+### Turn 4 - `skeptic` (6.502152360999997s, in=14594 out=394)
 
 Message:
 
 ```text
-The prior claim call was rejected for missing `scope_rationale`; I'll re-send it correctly.
+The prior claim submission was rejected only for missing scope_rationale, so I'll resubmit the same in-scope claim properly.
 ```
 
 Tool calls:
@@ -136,37 +141,37 @@ Tool calls:
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Dropped modes 7-16 contribute RMS-per-sample error ~0.179 (sqrt(2*10)*0.04) while the reference norm is dominated by the DC term (~1.25) plus retained modes with std 0.15, so the relative error sits near the 0.15 bound and only a computation on the actual seeded values can decide it.",
+    "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs() workload, and the implementation's fixed frequency cutoff approximation must satisfy that bound."
+        "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
       }
     ],
-    "scope_rationale": "The problem.txt contract requires relative L2 error <= 0.15 against the full 16-mode float64 reference for the fixed make_inputs()
-  ...[truncated 388 chars]
+    "scope_rationale": "The contract fixes the input domain to exactly the 
+  ...[truncated 568 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Dropped modes 7-16 contribute RMS-per-sample error ~0.179 (sqrt(2*10)*0.04) while the reference norm is dominated by the DC term (~1.25) plus retained modes with std 0.15, so the relative error sits near the 0.15 bound and only a computation on the actual seeded values can decide it.",
+    "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs() workload, and the implementation's fixed frequency cutoff approximation must satisfy that bound."
+        "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
       }
     ],
-    "scope_rationale": "The problem.txt contract requires relative L2 error <= 0.15 against the full 16-mode float64 reference for the fixed make_inputs() workload; the kernel's RETAINED=6 cutoff drops modes 7..16, so this claim tests whether that truncation violates the stated numerical contract.",
-    "statement": "On the fixed seed-811164 workload from make_inputs(), the kernel's 6-mode cutoff (dropping modes 7..16) yields relative L2 error against the full 16-mode float64 reference that exceeds 0.15, violating the stated tolerance."
-  ...[truncated 22 chars]
+    "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+    "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic canc
+  ...[truncated 202 chars]
 
-### Turn 5 - `describer` (14.759276379s, in=12282 out=860)
+### Turn 5 - `describer` (17.742956764s, in=14608 out=1247)
 
 Message:
 
 ```text
-The description model is already in place and there are no open description tasks. The one refinement I can add is a back-of-envelope energy analysis that clarifies what the deciding experiment should measure, since claim c1 (whether the 6-mode cutoff exceeds the 0.15 relative-L2 tolerance) is still awaiting runtime evidence. I'll record this as refined context without making a verdict.
+The existing description model covers the artifact, but claim c1 is still evidence-less and the error-magnitude estimate is borderline, so I'll refine the model with a sharper decomposition of the error mechanisms and probe-design guidance for the Experimenter.
 ```
 
 Tool calls:
@@ -175,31 +180,28 @@ Tool calls:
   Args:
   {
     "kernel_model": [
-      "Analytical estimate from source distributions: dropped-modes error energy ~ sum over 10 modes x 2 rows of 32*(0.04^2) ~ 1.02, i.e. ||error||_2 ~ 1.01; reference energy ~ DC (1.25^2*64 = 100) + retained 12 modes (~32*0.15^2*12 ~ 8.6) + dropped (~1.0), giving ||reference||_2 ~ 10.5 and a nominal relative error ~0.097, i.e. below the 0.15 bound on expectation -- but this is an order-statistics estimate over the fixed seed, not a measurement.",
-      "The DC shift (+1.0 on coefficients[0,0]) and constant offset 0.25 inflate ||reference||_2 without affecting ||output-reference||, so the relative-L2 metric is dominated by whether the small-std dropped modes (7..16) have atypically large realized values on seed 811164."
-    ],
-    "open_questions": [
-      "Exact relative L2 er
-  ...[truncated 1203 chars]
+      "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+      "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+      "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direc
+  ...[truncated 2975 chars]
   Output summary:
   {
     "contract_model": [],
     "impact_on_claims": [],
     "kernel_model": [
-      "Analytical estimate from source distributions: dropped-modes error energy ~ sum over 10 modes x 2 rows of 32*(0.04^2) ~ 1.02, i.e. ||error||_2 ~ 1.01; reference energy ~ DC (1.25^2*64 = 100) + retained 12 modes (~32*0.15^2*12 ~ 8.6) + dropped (~1.0), giving ||reference||_2 ~ 10.5 and a nominal relative error ~0.097, i.e. below the 0.15 bound on expectation -- but this is an order-statistics estimate over the fixed seed, not a measurement.",
-      "The DC shift (+1.0 on coefficients[0,0]) and constant offset 0.25 inflate ||reference||_2 without affecting ||output-reference||, so the relative-L2 metric is dominated by whether the small-std dropped modes (7..16) have atypically large realized values on seed 811164."
-    ],
-    "open_questions": [
-      "Exact relative L2 error on seed 811164: the expected-value estimate ~0.097 sits below 0.15, so the deciding factor is whether the realized dropped-mode coefficients on this specific seed are small enough; only a runtime float64-reference computation can settle c1 either way.",
-      "Whether the realized RMS of dropped modes on seed 811164 is near, above, or below the p
-  ...[truncated 917 chars]
+      "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+      "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+      "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+      "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+      "A CPU-si
+  ...[truncated 2689 chars]
 
-### Turn 6 - `skeptic` (8.346471919999999s, in=18027 out=339)
+### Turn 6 - `skeptic` (6.425407379999996s, in=23391 out=310)
 
 Message:
 
 ```text
-The single decisive issue here is already captured by claim c1: whether the 6-mode truncation exceeds the 0.15 relative-L2 bound on the fixed seed-811164 workload. The contract admits only this one workload, and the description model's own energy estimate (~0.10 expected) shows the answer hinges purely on the realized coefficients, which only a runtime float64-reference probe can settle. Secondary risks (float32 rounding, cos/sin precision, contiguity) are all negligible or out of scope relative to the truncation term, and I have no additional high-quality in-scope hypotheses to add.
+The decisive in-scope claim (c1, catastrophic cancellation on the fixed near-parallel workload) is already recorded and the description model covers both contributing error sources (product rounding and fp32 alpha error). Other residual risks (norm underflow, masking, denominator zero) are negligible or out of scope on this fixed workload. I see no additional distinct high-value claims to raise.
 ```
 
 Tool calls:
@@ -207,7 +209,7 @@ Tool calls:
 - `record_no_new_claims -> t9 ok`
   Args:
   {
-    "reason": "Reviewed the description model and kernel source: the only in-scope, contract-relevant failure mode is whether the RETAINED=6 cutoff's relative L2 error exceeds the 0.15 bound on the fixed seed-811164 workload, which is already captured by open claim c1. Other potential issues (float32 accumulation/angle rounding, non-contiguous input layout) are either orders of magnitude smaller than the truncation error or out of scope given make_inputs() produces contiguous row-major tensors and the problem restricts scope to this single workload. No experiment results are available yet, so no new evidence-based claims can be added.",
+    "reason": "The single decisive in-scope risk (c1: fp32 cancellation in b - alpha*u on the fixed make_inputs() workload, expected relative-L2 error ~1e-2 vs the 0.01 tolerance) is already recorded. The description model's refined analysis shows both dominant error sources (product rounding and fp32 alpha error) feed the same boundary condition and are covered by c1; all other risks (underflow, masking with N=32 power of two, denominator zero, epilogue inconsistency) are negligible or out of scope on this fixed workload. What remains is an Experimenter probe, not new claims.",
     "reviewed_claims": [
       "c1"
     ]
@@ -215,7 +217,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Reviewed the description model and kernel source: the only in-scope, contract-relevant failure mode is whether the RETAINED=6 cutoff's relative L2 error exceeds the 0.15 bound on the fixed seed-811164 workload, which is already captured by open claim c1. Other potential issues (float32 accumulation/angle rounding, non-contiguous input layout) are either orders of magnitude smaller than the truncation error or out of scope given make_inputs() produces contiguous row-major tensors and the problem restricts scope to this single workload. No experiment results are available yet, so no new evidence-based claims can be added.",
+    "reason": "The single decisive in-scope risk (c1: fp32 cancellation in b - alpha*u on the fixed make_inputs() workload, expected relative-L2 error ~1e-2 vs the 0.01 tolerance) is already recorded. The description model's refined analysis shows both dominant error sources (product rounding and fp32 alpha error) feed the same boundary condition and are covered by c1; all other risks (underflow, masking with N=32 power of two, denominator zero, epilogue inconsistency) are negligible or out of scope on this fixed workload. What remains is an Experimenter probe, not new claims.",
     "reviewed_claims": [
       "c1"
     ],
@@ -223,12 +225,12 @@ Tool calls:
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (6.33619998399999s, in=19245 out=491)
+### Turn 7 - `experimenter` (9.304178883000006s, in=24558 out=685)
 
 Message:
 
 ```text
-I'll run the decisive deterministic probe for c1: generate the fixed seed-811164 inputs, compute the full 16-mode float64 reference, invoke the kernel's `run()`, and measure the relative L2 error against the 0.15 bound.
+The single open claim c1 needs the decisive numeric probe: run the kernel on the fixed make_inputs() workload and compare to a float64 reference, with an fp32 CPU emulation as cross-check.
 ```
 
 Tool calls:
@@ -237,8 +239,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_u\")\nimport numpy as np, torch\nimport kernel\n\ncoefficients, offset = kernel.make_inputs_numpy()\nc = coefficients.astype(np.float64)\no = float(offset[0])\nn = np.arange(64, dtype=np.float64)\nref = o + np.zeros(64)\nfor k in range(1, 17):\n    ref += c[0, k-1]*np.cos(2*np.pi*k*n/64) + c[1, k-1]*np.sin(2*np.pi*k*n/64)\n\ndev = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nct = torch.from_numpy(coefficients).to(dev)\not = torch.from_numpy(offset).to(dev)\nout = kernel.run(ct, ot).cpu().numpy().astype(np.float64)\n\nerr = np.linalg.norm(out - ref)\nnref = np.linalg.norm(ref)\nrel = err / max(nref, 1e-12)\ndropped_rms = float(np.sqrt(np.mean(c[:, 6:]**2)))\nprint(json.dumps({\n    \"re
-  ...[truncated 494 chars]
+    "code": "import json, numpy as np, torch, triton\nimport sys\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nimport kernel as K\n\nu, b = K.make_inputs(\"cuda\")\nout = K.run(u, b)\ntorch.cuda.synchronize()\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nu64 = u.detach().cpu().numpy().astype(np.float64)\nb64 = b.detach().cpu().numpy().astype(np.float64)\n\n# fp64 reference (recentred-free, cancellation negligible in fp64)\nalpha = (u64 * b64).sum() / (u64 * u64).sum()\nres = b64 - alpha * u64\nref = res / np.linalg.norm(res)\n\nerr = np.linalg.norm(out_np - ref) / max(np.linalg.norm(ref), 1e-12)\n\n# fp32 CPU emulation of kernel arithmetic\nu32 = u.detach().cpu().numpy(); b32 = b.detach().cpu().numpy()\nnum = np.float32(0.0); den = np.float32(0.0)\
+  ...[truncated 1205 chars]
   Output summary:
   {
     "artifacts": [
@@ -246,13 +248,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "ac5758d42d6b4cbe8099f27df07b6f071bf1746128990c6f80fa321459f71a54"
+        "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "76947adcc3025bebae486036bd95083874722e5907f1c87ca673a02b12f1be4f"
+        "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -264,19 +266,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "a4a47a897e883465fa845361bd6e6b631b0c4268050d0a034c9efc04620c5269"
+        "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the fixed seed-811164 workload from make_inputs(), the kernel's 6-mode cutoff (dropping modes 7..16) yields relative L2 error against the full 16-mode float64 reference that exceeds 0.15, violating the stat
-  ...[truncated 3282 chars]
+    "claim_statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the 
+  ...[truncated 3523 chars]
 
-### Turn 8 - `experimenter` (5.074232991999992s, in=21811 out=320)
+### Turn 8 - `experimenter` (7.0938953599999905s, in=27659 out=393)
 
 Message:
 
 ```text
-The probe completed: relative L2 error is 0.0717, well below the 0.15 tolerance, so the 6-mode cutoff actually satisfies the contract on the fixed workload — claim c1 is rebutted.
+The decisive probe for c1 has already completed: measured relative L2 error is 0.00154, well under the 0.01 tolerance, and the CPU fp32 emulation bit-matches the GPU. I'll finalize this as rebutted.
 ```
 
 Tool calls:
@@ -285,35 +287,35 @@ Tool calls:
   Args:
   {
     "data": {
-      "dropped_mode_rms": 0.02428137439063324,
-      "max_abs_err": 0.1988538267047335,
-      "output_finite": true,
-      "passes_contract": true,
-      "ref_norm": 8.566189857158276,
-      "relative_l2": 0.07170935573821624,
-      "tolerance": 0.15
+      "alpha_fp32_kernel": 1.125000238418579,
+      "alpha_fp64": 1.125000242654227,
+      "bitmatch_gpu_vs_emu": true,
+      "passes_tolerance": true,
+      "rel_l2_fp32emu_vs_fp64ref": 0.0015436494833812023,
+      "rel_l2_gpu_vs_fp64ref": 0.0015436494833812023,
+      "residual_norm_fp64": 6.621097760007478e-05,
+      "tolerance": 0.01
     },
     "event_id": "t10",
     "status": "rebutted",
-    "summary": "On the fixed seed-811164 workload (CUDA execution), the kernel's 6-mode cutoff output has relative L2 error 0.0717 against the full 16-mode float64 reference, well below the 0.15 tolerance (output finite, shape (64,), passes_contract=true). Realized dropped-mode RMS was 0.0243, below the 0.04 population std, explaining the margin. Claim c1 (error exceeds 0.15) is contradicted.",
-    "supports": "rebutted"
-  }
+    "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 
+  ...[truncated 181 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed seed-811164 workload (CUDA execution), the kernel's 6-mode cutoff output has relative L2 error 0.0717 against the full 16-mode float64 reference, well below the 0.15 tolerance (output finite, shape (64,), passes_contract=true). Realized dropped-mode RMS was 0.0243, below the 0.04 population std, explaining the margin. Claim c1 (error exceeds 0.15) is contradicted.",
+    "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
     "supports": "rebutted",
     "tool_event_id": "t10"
   }
 
-### Turn 9 - `skeptic` (4.8453238529999965s, in=24628 out=277)
+### Turn 9 - `skeptic` (5.079397126999993s, in=30517 out=248)
 
 Message:
 
 ```text
-The decisive probe is complete: on the fixed seed-811164 workload, the 6-mode cutoff yields relative L2 error 0.0717, well below the 0.15 tolerance, with a finite float32 (64,) output. Claim c1 is the only in-scope failure hypothesis and it is rebutted by direct runtime evidence. Secondary risks (float32 rounding, indexing, contiguity) are either negligible relative to the tolerance or out of scope for this single fixed workload. No new claims are warranted.
+The decisive probe measured relative L2 error 0.00154 versus the 0.01 tolerance on the exact fixed workload, with a bit-exact CPU fp32 emulation matching the GPU output — c1 is solidly rebutted and no other in-scope risk applies to this single fixed input. I'll record no new claims.
 ```
 
 Tool calls:
@@ -321,7 +323,7 @@ Tool calls:
 - `record_no_new_claims -> t12 ok`
   Args:
   {
-    "reason": "Final review: the sole in-scope claim c1 was decisively rebutted by the deterministic CUDA probe (relative L2 error 0.0717 vs the full 16-mode float64 reference, tolerance 0.15, output finite float32 shape (64,)). The realized dropped-mode RMS (0.0243) is below the population std, confirming the cutoff margin. Remaining risks (float32 angle/accumulation rounding, contiguity, other coefficient tensors) are orders of magnitude below the tolerance or explicitly out of scope per problem.txt, so no material, testable in-scope problem remains.",
+    "reason": "Final review: the sole in-scope claim c1 (fp32 cancellation exceeding the 0.01 tolerance) was decisively rebutted by the runtime probe on the exact fixed make_inputs() workload \u2014 measured relative L2 error 0.00154, ~6.5x below the tolerance, output finite and shape (32,), with a bit-exact fp32 CPU emulation matching the GPU output confirming IEEE round-to-nearest arithmetic as assumed. No other risks (denominator zero, underflow, masking with N=32, epilogue consistency) are material on this fixed workload, and alternative inputs are explicitly out of scope. No new claims warranted.",
     "reviewed_claims": [
       "c1"
     ]
@@ -329,7 +331,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the sole in-scope claim c1 was decisively rebutted by the deterministic CUDA probe (relative L2 error 0.0717 vs the full 16-mode float64 reference, tolerance 0.15, output finite float32 shape (64,)). The realized dropped-mode RMS (0.0243) is below the population std, confirming the cutoff margin. Remaining risks (float32 angle/accumulation rounding, contiguity, other coefficient tensors) are orders of magnitude below the tolerance or explicitly out of scope per problem.txt, so no material, testable in-scope problem remains.",
+    "reason": "Final review: the sole in-scope claim c1 (fp32 cancellation exceeding the 0.01 tolerance) was decisively rebutted by the runtime probe on the exact fixed make_inputs() workload \u2014 measured relative L2 error 0.00154, ~6.5x below the tolerance, output finite and shape (32,), with a bit-exact fp32 CPU emulation matching the GPU output confirming IEEE round-to-nearest arithmetic as assumed. No other risks (denominator zero, underflow, masking with N=32, epilogue consistency) are material on this fixed workload, and alternative inputs are explicitly out of scope. No new claims warranted.",
     "reviewed_claims": [
       "c1"
     ],
@@ -337,12 +339,12 @@ Tool calls:
     "turn": 9
   }
 
-### Turn 10 - `judge` (6.59561588599999s, in=24991 out=324)
+### Turn 10 - `judge` (5.164504340999997s, in=30899 out=347)
 
 Message:
 
 ```text
-The evidence is decisive: the sole in-scope claim (c1) was rebutted by a deterministic probe showing relative L2 error 0.0717, well within the 0.15 tolerance on the fixed workload, with a finite float32 (64,) output. Skeptic has signed off with no new claims. I'll record a trust verdict.
+The single in-scope claim was decisively rebutted by the runtime probe on the exact fixed workload (relative L2 0.00154 vs tolerance 0.01, ~6.5x margin, finite output, bit-exact fp32 emulation cross-check), and the Skeptic signed off with no new claims. Recording the verdict.
 ```
 
 Tool calls:
@@ -354,15 +356,15 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt, the operative artifact since no test.py exists) requires the fixed frequency-cutoff approximation to achieve relative L2 error <= 0.15 against the full 16-mode float64 reference on the fixed make_inputs() seed-811164 workload. The deterministic runtime probe (t10, CUDA) measured relative L2 error 0.0717 (ref_norm 8.566, abs err 0.614, output finite float32 of shape (64,)), passing the contract. This directly rebuts claim c1, the only in-scope failure hypothesis; the cutoff truncation is explicitly sanctioned by the contract clause acknowledging a fixed frequency cutoff, so the observed margin is acceptable per that clause. Remaining risks (float32 rounding, contiguity, other coefficient ten
-  ...[truncated 193 chars]
+    "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential a
+  ...[truncated 298 chars]
   Output summary:
   {
     "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt, the operative artifact since no test.py exists) requires the fixed frequency-cutoff approximation to achieve relative L2 error <= 0.15 against the full 16-mode float64 reference on the fixed make_inputs() seed-811164 workload. The deterministic runtime probe (t10, CUDA) measured relative L2 error 0.0717 (ref_norm 8.566, abs err 0.614, output finite float32 of shape (64,)), passing the contract. This directly rebuts claim c1, the only in-scope failure hypothesis; the cutoff truncation is explicitly sanctioned by the contract clause acknowledging a fixed frequency cutoff, so the observed margin is acceptable per that clause. Remaining risks (float32 rounding, contiguity, other coefficient tensors) are negligible or out of scope per the contract's restriction to this single workload. No open claims remain and the Skeptic signed off after the latest evidence.",
+    "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential accumulation and disabled FP fusion, so residual fp32-vs-fp64 rounding differences within the 1% tolerance are contract-permitted, and here they sit 6.5x below the limit. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: trust.",
     "verdict": "trust"
   }
 
@@ -370,96 +372,92 @@ Tool calls:
 
 {
   "contract_model": [
-    "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coefficients[0,k-1]*cos(2*pi*k*n/64) + coefficients[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 from the supplied float32 inputs.",
-    "Only inputs in scope are those from make_inputs(): coefficients shape (2,16) float32, offset shape (1,); fixed public workload, other tensors out of scope.",
-    "Output: finite float32 vector of shape (64,); relative L2 error vs reference <= 0.15.",
-    "Problem explicitly acknowledges the implementation uses a fixed frequency cutoff as an approximation, so the question is whether the cutoff error fits the 0.15 tolerance for this workload.",
-    "FP multiply/add fusion is disabled at launch."
+    "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+    "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+    "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+    "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
   ],
   "kernel_model": [
-    "Triton kernel computes output[n] = offset + sum over only the first RETAINED=6 of 16 modes (k=1..6), discarding modes 7..16 entirely (kernel.py lines 12-17).",
-    "Coefficient layout: a = Coefficients[k-1] (cos row), b = Coefficients[MODES + k - 1] = Coefficients[15 + k - 1] (sin row), matching the row-major (2,16) layout with MODES=16.",
-    "Angle = n * (2*pi*k/N) in float32; accumulation in float32 with one store of a (64,) float32 tensor; single program launch, N=64 constexpr.",
-    "make_inputs generates modes 1..6 with larger std (0.15) and modes 7..16 with small std (0.04), plus a DC shift of +1.0 on coefficients[0,0] and offset 0.25; deterministic seed 811164.",
-    "run() always produces a (64,) float32 output on the input device.",
-    "Analytical estimate from source distributions: dropped-modes error energy ~ sum over 10 modes x 2 rows of 32*(0.04^2) ~ 1.02, i.e. ||error||_2 ~ 1.01; reference energy ~ DC (1.25^2*64 = 100) + retained 12 modes (~32*0.15^2*12 ~ 8.6) + dropped (~1.0), giving ||reference||_2 ~ 10.5 and a nominal relative error ~0.097, i.e. below the 0.15 bound on expectation -- but this is an order-statistics estimate over the fixed seed, not a measurement.",
-    "The DC shift (+1.0 on coe
-...[truncated 2635 chars]
+    "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+    "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+    "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+    "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+    "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+    "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel.",
+    "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+    "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~
+...[truncated 5580 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Kernel reconstructs a 64-sample periodic signal from Fourier coefficients but keeps only the first 6 of 16 modes (RETAINED=6), adding offset; contract requires relative L2 error <= 0.15 against a float64 all-16-mode reference for the fixed make_inputs() workload.
-- `du2` tasks=`initial`: Refined description for case_u: expected-value energy analysis suggests the 6-mode cutoff relative error is ~0.10, below the 0.15 bound, so claim c1 depends on the realized seed-811164 dropped-mode magnitudes; a deterministic float64 reference computation is the decisive probe.
+- `du1` tasks=`initial`: Described case_o: fp32 Triton normalized-projection kernel on a fixed 32-length near-parallel workload; contract is 1% relative-L2 vs a float64 reference; the decisive risk is catastrophic cancellation in b - alpha*u since residual amplitude (~1e-5) is near fp32 rounding scale of the O(1) operands.
+- `du2` tasks=`initial`: Refined error analysis for c1: both dominant error sources (product rounding in alpha*u_j and fp32 alpha error) are ~sqrt(32)*1e-7 against a residual norm of ~sqrt(32)*1e-5, i.e. ~1% relative error, landing exactly at the 0.01 tolerance; a single precise measurement of relative-L2 on the fixed workload, optionally cross-checked by an fp32 CPU emulation, is the decisive evidence.
 
 ## Claims
 
 ### c1 - `rebutted`
 
-Statement: On the fixed seed-811164 workload from make_inputs(), the kernel's 6-mode cutoff (dropping modes 7..16) yields relative L2 error against the full 16-mode float64 reference that exceeds 0.15, violating the stated tolerance.
+Statement: On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.
 
 Scope: `in_scope`
 
-Scope rationale: The problem.txt contract requires relative L2 error <= 0.15 against the full 16-mode float64 reference for the fixed make_inputs() workload; the kernel's RETAINED=6 cutoff drops modes 7..16, so this claim tests whether that truncation violates the stated numerical contract.
+Scope rationale: The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.
 
 Scope evidence:
-- `problem.txt`: Reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs() workload, and the implementation's fixed frequency cutoff approximation must satisfy that bound.
+- `problem.txt`: Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference.
 
-Rationale: Dropped modes 7-16 contribute RMS-per-sample error ~0.179 (sqrt(2*10)*0.04) while the reference norm is dominated by the DC term (~1.25) plus retained modes with std 0.15, so the relative error sits near the 0.15 bound and only a computation on the actual seeded values can decide it.
+Rationale: b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t10: On the fixed seed-811164 workload (CUDA execution), the kernel's 6-mode cutoff output has relative L2 error 0.0717 against the full 16-mode float64 reference, well below the 0.15 tolerance (output finite, shape (64,), passes_contract=true). Realized dropped-mode RMS was 0.0243, below the 0.04 population std, explaining the margin. Claim c1 (error exceeds 0.15) is contradicted.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t10: Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_u"
+  "entry": "case_o"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Reference uses all 16 modes: reference[n] = offset[0] + sum_{k=1..16} coefficients[0,k-1]*cos(2*pi*k*n/64) + coefficients[1,k-1]*sin(2*pi*k*n/64), evaluated in float64 from the supplied float32 inputs.",
-    "Only inputs in scope are those from make_inputs(): coefficients shape (2,16) float32, offset shape (1,); fixed public workload, other tensors out of scope.",
-    "Output: finite float32 vector of shape (64,); relative L2 error vs reference <= 0.15.",
-    "Problem explicitly acknowledges the implementation uses a fixed frequency cutoff as an approximation, so the question is whether the cutoff error fits the 0.15 tolerance for this workload.",
-    "FP multiply/add fusion is disabled at launch."
+    "Contract covers only the two float32 (32,) vectors u and b produced by make_inputs() (seed 830230); arbitrary other vectors are out of scope.",
+    "Reference (float64 or better, recentring allowed): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2; residual is guaranteed nonzero on this workload.",
+    "Output must be finite, shape (32,), with relative L2 error ||output-reference||_2 / max(||reference||,1e-12) <= 0.01.",
+    "Problem states the kernel uses float32 arithmetic, sequential accumulations, separately rounded products/sums, and disables FP fusion \u2014 these are acknowledged implementation traits, not automatic violations."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel computes output[n] = offset + sum over only the first RETAINED=6 of 16 modes (k=1..6), discarding modes 7..16 entirely (kernel.py lines 12-17).",
-    "Coefficient layout: a = Coefficients[k-1] (cos row), b = Coefficients[MODES + k - 1] = Coefficients[15 + k - 1] (sin row), matching the row-major (2,16) layout with MODES=16.",
-    "Angle = n * (2*pi*k/N) in float32; accumulation in float32 with one store of a (64,) float32 tensor; single program launch, N=64 constexpr.",
-    "make_inputs generates modes 1..6 with larger std (0.15) and modes 7..16 with small std (0.04), plus a DC shift of +1.0 on coefficients[0,0] and offset 0.25; deterministic seed 811164.",
-    "run() always produces a (64,) float32 output on the input device."
+    "_projection_kernel is a single-program (grid (1,), num_warps=1, enable_fp_fusion=False) Triton kernel with N=32 hardwired via run().",
+    "Pass 1: scalar fp32 loop over tl.static_range(0,32) accumulates numerator = sum(u*b) and denominator = sum(u*u) sequentially, then alpha = tl.div_rn(num, den).",
+    "Pass 2: second sequential scalar loop accumulates norm_squared = sum((b - u*coefficient)^2); norm = tl.sqrt(norm_squared).",
+    "Pass 3: vectorized epilogue recomputes residual = b - u*coefficient with tl.arange(0,32) and stores residual/norm via tl.div_rn into a preallocated fp32 output tensor of shape (32,).",
+    "make_inputs: u ~ N(0,1) fp32; b = fp32(1.125*u_fp64 + 1e-5*N(0,1)) \u2014 i.e., b is b-almost-exactly parallel to u with tiny orthogonal noise. Note 1.125 is exactly representable in fp32.",
+    "run() allocates output on u.device and returns it directly; no validation, no reference computation in-kernel."
   ],
   "open_questions": [
-    "Actual relative L2 error of the 6-mode approximation vs the 16-mode float64 reference on the fixed seed-811164 workload (needs Experimenter computation).",
-    "Whether tl.cos/tl.sin precision on float32 angles introduces error relevant at the 0.15 tolerance (likely negligible vs cutoff error)."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Truncation error: dropped modes 7..16 are ~N(0, 0.04) per row; their RMS con
-...[truncated 1392 chars]
+    "Empirical relative-L2 gap between the fp32 kernel output and the fp64 recentred reference on the fixed workload \u2014 decisive for the 0.01 tolerance; requires an Experimenter probe.",
+    "Whether the fixed seed's residual norm is large enough (~sqrt(32)*1e-5) that fp3
+...[truncated 2704 chars]
 
 ### t6 - record_claim - error
 
@@ -472,16 +470,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Dropped modes 7-16 contribute RMS-per-sample error ~0.179 (sqrt(2*10)*0.04) while the reference norm is dominated by the DC term (~1.25) plus retained modes with std 0.15, so the relative error sits near the 0.15 bound and only a computation on the actual seeded values can decide it.",
+  "rationale": "b is constructed as 1.125*u plus 1e-5 noise, so each residual is the difference of two O(1) values yielding ~1e-5 residuals; the fp32 rounding of u*alpha (~1e-7 per element) is ~1% of the noise amplitude, so the normalized output direction may deviate from the fp64 reference by an amount comparable to or exceeding the 0.01 tolerance. This is the governing error mechanism, not raw fp32 epsilon.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs() workload, and the implementation's fixed frequency cutoff approximation must satisfy that bound."
+      "summary": "Only the fixed make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise) is in scope; output must satisfy ||output-reference||_2 / max(||reference||,1e-12) <= 0.01 against a float64 reference."
     }
   ],
-  "scope_rationale": "The problem.txt contract requires relative L2 error <= 0.15 against the full 16-mode float64 reference for the fixed make_inputs() workload; the kernel's RETAINED=6 cutoff drops modes 7..16, so this claim tests whether that truncation violates the stated numerical contract.",
-  "statement": "On the fixed seed-811164 workload from make_inputs(), the kernel's 6-mode cutoff (dropping modes 7..16) yields relative L2 error against the full 16-mode float64 reference that exceeds 0.15, violating the stated tolerance.",
+  "scope_rationale": "The contract fixes the input domain to exactly the make_inputs() vectors (b nearly parallel to u with ~1e-5 orthogonal noise) and requires relative L2 error <= 0.01 versus a float64 reference; cancellation in b - alpha*u on this exact workload is therefore directly decisive for the stated tolerance.",
+  "statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.",
   "status": "open"
 }
 
@@ -491,28 +489,23 @@ Evidence:
   "contract_model": [],
   "impact_on_claims": [],
   "kernel_model": [
-    "Analytical estimate from source distributions: dropped-modes error energy ~ sum over 10 modes x 2 rows of 32*(0.04^2) ~ 1.02, i.e. ||error||_2 ~ 1.01; reference energy ~ DC (1.25^2*64 = 100) + retained 12 modes (~32*0.15^2*12 ~ 8.6) + dropped (~1.0), giving ||reference||_2 ~ 10.5 and a nominal relative error ~0.097, i.e. below the 0.15 bound on expectation -- but this is an order-statistics estimate over the fixed seed, not a measurement.",
-    "The DC shift (+1.0 on coefficients[0,0]) and constant offset 0.25 inflate ||reference||_2 without affecting ||output-reference||, so the relative-L2 metric is dominated by whether the small-std dropped modes (7..16) have atypically large realized values on seed 811164."
+    "Error decomposition on the fixed workload: ideal alpha is exactly 1.125 (b = 1.125*u + 1e-5*noise, 1.125 exactly representable in fp32), so residual[j] = noise[j] with amplitude ~1e-5; ||residual||_2 ~ sqrt(32)*1e-5 ~ 6e-5.",
+    "Error source A (product rounding): each stored residual b_j - alpha*u_j has absolute error ~ ulp(1) ~ 1e-7 from rounding of alpha*u_j (and of b_j itself in its construction); ||deltaA||_2 ~ sqrt(32)*1e-7 ~ 6e-7, i.e. ~1% of ||residual||, which lands directly at the 0.01 tolerance boundary \u2014 this is what makes c1 borderline rather than clearly pass or fail.",
+    "Error source B (alpha error): fp32 alpha differs from 1.125 by ~1e-7 relative; the induced residual perturbation is along u, exactly orthogonal to the ideal residual direction, so it adds ~|alpha_err|*||u|| ~ 1e-7*sqrt(32) to the error \u2014 same order as source A.",
+    "Because both error sources are of order 1e-2 relative and partially systematic, a single run of the kernel on the fixed inputs vs a float64 recentred reference is the decisive experiment; sign cannot be predicted from source alone.",
+    "A CPU-side exact simulation is feasible: run() is a deterministic fp32 sequential loop with no fusion, so a numpy float32 emulation of lines 9-28 on the fixed u, b reproduces the GPU arithmetic to rounding (assuming IEEE round-to-nearest as the problem asserts), and gives a GPU-free estimate to cross-check."
   ],
   "open_questions": [
-    "Exact relative L2 error on seed 811164: the expected-value estimate ~0.097 sits below 0.15, so the deciding factor is whether the realized dropped-mode coefficients on this specific seed are small enough; only a runtime float64-reference computation can settle c1 either way.",
-    "Whether the realized RMS of dropped modes on seed 811164 is near, above, or below the population 0.04 std."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Claim c1 hinges on realized (not expected) seed-811164 dropped-mode magnitudes: expected-value analysis suggests relative error ~0.10 (< 0.15), so Skeptic should treat c1 as plausibly failing unless the realized dropped-mode energy is several times its expectation."
-  ],
-  "scope_notes": [
-    "Deciding probe is fully deterministic: make_inputs_numpy uses fixed PCG64 seed 811164, so a CPU float64 reference computation of the exact relative L2 error settles the contract without GPU variance concerns."
-  ],
-  "summary": "Refined description for case_u: expected-value energy analysis suggests the 6-mode cutoff relative error is ~0.10, below the 0.15 bound, so claim c1 depends on the realized seed-811164 dropped-mode magnit
-...[truncated 117 chars]
+    "Measured relative-L2 error on the fixed workload \u2014 expected order ~1e-2, right at the 0.01 tolerance; the sign of the margin is the whole verdict.",
+    "Whether the fp32 CPU emulation (round-to-nearest, no fusion) matches the GPU bit-for-bit; if it disagrees, the GPU result is still what the contract tests.",
+    "Second-order detail: whether b_j's own fp32 construction rounding (in make_inputs) is absorbed identically by both kernel and reference (it is \
+...[truncated 1889 chars]
 
 ### t9 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Reviewed the description model and kernel source: the only in-scope, contract-relevant failure mode is whether the RETAINED=6 cutoff's relative L2 error exceeds the 0.15 bound on the fixed seed-811164 workload, which is already captured by open claim c1. Other potential issues (float32 accumulation/angle rounding, non-contiguous input layout) are either orders of magnitude smaller than the truncation error or out of scope given make_inputs() produces contiguous row-major tensors and the problem restricts scope to this single workload. No experiment results are available yet, so no new evidence-based claims can be added.",
+  "reason": "The single decisive in-scope risk (c1: fp32 cancellation in b - alpha*u on the fixed make_inputs() workload, expected relative-L2 error ~1e-2 vs the 0.01 tolerance) is already recorded. The description model's refined analysis shows both dominant error sources (product rounding and fp32 alpha error) feed the same boundary condition and are covered by c1; all other risks (underflow, masking with N=32 power of two, denominator zero, epilogue inconsistency) are negligible or out of scope on this fixed workload. What remains is an Experimenter probe, not new claims.",
   "reviewed_claims": [
     "c1"
   ],
@@ -528,13 +521,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "ac5758d42d6b4cbe8099f27df07b6f071bf1746128990c6f80fa321459f71a54"
+      "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "76947adcc3025bebae486036bd95083874722e5907f1c87ca673a02b12f1be4f"
+      "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -546,12 +539,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "a4a47a897e883465fa845361bd6e6b631b0c4268050d0a034c9efc04620c5269"
+      "sha256": "a322ea00b8741075859bf534de6c2d79f7cea41245aec72cbe9a1219e146c5b2"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the fixed seed-811164 workload from make_inputs(), the kernel's 6-mode cutoff (dropping modes 7..16) yields relative L2 error against the full 16-mode float64 reference that exceeds 0.15, violating the stated tolerance.",
-  "duration_s": 5.761485,
+  "claim_statement": "On the fixed make_inputs() workload, the kernel's fp32 computation of residual = b - alpha*u suffers catastrophic cancellation (O(1) operands, ~1e-5 result), so the computed output direction deviates from the float64 reference by a relative L2 error that may exceed the contract tolerance of 0.01.",
+  "duration_s": 7.05006,
   "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c1",
@@ -561,20 +554,18 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "ac5758d42d6b4cbe8099f27df07b6f071bf1746128990c6f80fa321459f71a54"
+          "sha256": "074641770771e5c1fc48d9d519ff0efc8ed7ffec4ca92573fa6391566835b04d"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t10_stdout.txt",
-          "sha256": "76947adcc3025bebae486036bd95083874722e5907f1c87ca673a02b12f1be4f"
+          "sha256": "2e903c7fb1457efa0e66ee8ef0d677a9be64302f357be2e499a35168268cc4dc"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t10_stderr.txt",
-        
-...[truncated 2482 chars]
+     
+...[truncated 2723 chars]
 
 ### t11 - finalize_probe_evidence - ok
 
@@ -582,7 +573,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed seed-811164 workload (CUDA execution), the kernel's 6-mode cutoff output has relative L2 error 0.0717 against the full 16-mode float64 reference, well below the 0.15 tolerance (output finite, shape (64,), passes_contract=true). Realized dropped-mode RMS was 0.0243, below the 0.04 population std, explaining the margin. Claim c1 (error exceeds 0.15) is contradicted.",
+  "summary": "Decisive probe on the fixed make_inputs() workload: kernel output vs float64 reference has relative L2 error 0.00154 (tolerance 0.01), a margin of ~6.5x below the limit. Output is finite, shape (32,). The fp32 CPU emulation of the kernel arithmetic matches the GPU output bit-for-bit, confirming the GPU arithmetic behaves as IEEE round-to-nearest as assumed. Cancellation is present (residual norm 6.6e-5 vs O(1) operands) but the resulting direction error stays well within tolerance, so c1's predicted failure does not occur on this fixed workload.",
   "supports": "rebutted",
   "tool_event_id": "t10"
 }
@@ -591,7 +582,7 @@ Evidence:
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the sole in-scope claim c1 was decisively rebutted by the deterministic CUDA probe (relative L2 error 0.0717 vs the full 16-mode float64 reference, tolerance 0.15, output finite float32 shape (64,)). The realized dropped-mode RMS (0.0243) is below the population std, confirming the cutoff margin. Remaining risks (float32 angle/accumulation rounding, contiguity, other coefficient tensors) are orders of magnitude below the tolerance or explicitly out of scope per problem.txt, so no material, testable in-scope problem remains.",
+  "reason": "Final review: the sole in-scope claim c1 (fp32 cancellation exceeding the 0.01 tolerance) was decisively rebutted by the runtime probe on the exact fixed make_inputs() workload \u2014 measured relative L2 error 0.00154, ~6.5x below the tolerance, output finite and shape (32,), with a bit-exact fp32 CPU emulation matching the GPU output confirming IEEE round-to-nearest arithmetic as assumed. No other risks (denominator zero, underflow, masking with N=32, epilogue consistency) are material on this fixed workload, and alternative inputs are explicitly out of scope. No new claims warranted.",
   "reviewed_claims": [
     "c1"
   ],
@@ -606,7 +597,7 @@ Evidence:
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt, the operative artifact since no test.py exists) requires the fixed frequency-cutoff approximation to achieve relative L2 error <= 0.15 against the full 16-mode float64 reference on the fixed make_inputs() seed-811164 workload. The deterministic runtime probe (t10, CUDA) measured relative L2 error 0.0717 (ref_norm 8.566, abs err 0.614, output finite float32 of shape (64,)), passing the contract. This directly rebuts claim c1, the only in-scope failure hypothesis; the cutoff truncation is explicitly sanctioned by the contract clause acknowledging a fixed frequency cutoff, so the observed margin is acceptable per that clause. Remaining risks (float32 rounding, contiguity, other coefficient tensors) are negligible or out of scope per the contract's restriction to this single workload. No open claims remain and the Skeptic signed off after the latest evidence.",
+  "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential accumulation and disabled FP fusion, so residual fp32-vs-fp64 rounding differences within the 1% tolerance are contract-permitted, and here they sit 6.5x below the limit. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: trust.",
   "verdict": "trust"
 }
 
@@ -614,10 +605,10 @@ Evidence:
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-24T01:01:58Z",
+  "created_at": "2026-09-24T00:59:15Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt, the operative artifact since no test.py exists) requires the fixed frequency-cutoff approximation to achieve relative L2 error <= 0.15 against the full 16-mode float64 reference on the fixed make_inputs() seed-811164 workload. The deterministic runtime probe (t10, CUDA) measured relative L2 error 0.0717 (ref_norm 8.566, abs err 0.614, output finite float32 of shape (64,)), passing the contract. This directly rebuts claim c1, the only in-scope failure hypothesis; the cutoff truncation is explicitly sanctioned by the contract clause acknowledging a fixed frequency cutoff, so the observed margin is acceptable per that clause. Remaining risks (float32 rounding, contiguity, other coefficient tensors) are negligible or out of scope per the contract's restriction to this single workload. No open claims remain and the Skeptic signed off after the latest evidence.",
+  "reason": "The contract (problem.txt) fixes the scope to the single make_inputs() workload (seed 830230, b = 1.125*u + 1e-5 noise, shape (32,)) and requires a finite output within 0.01 relative-L2 of a float64 reference. The sole in-scope claim c1 \u2014 that catastrophic cancellation in b - alpha*u would push the fp32 kernel past the 0.01 tolerance \u2014 was decisively rebutted by runtime probe t10 on exactly that workload: measured relative L2 error 0.00154 (tolerance 0.01), output finite, shape (32,). A bit-exact fp32 CPU emulation of the kernel arithmetic matched the GPU output, confirming the GPU behaves as the assumed IEEE round-to-nearest arithmetic. The contract explicitly acknowledges fp32 arithmetic with sequential accumulation and disabled FP fusion, so residual fp32-vs-fp64 rounding differences within the 1% tolerance are contract-permitted, and here they sit 6.5x below the limit. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: trust.",
   "verdict": "trust"
 }

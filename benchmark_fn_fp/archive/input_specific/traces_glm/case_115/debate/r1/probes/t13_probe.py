@@ -1,43 +1,35 @@
-import numpy as np, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_q")
-from kernel import make_inputs_numpy
+import sys, json, numpy as np, torch
+sys.path.insert(0, "/root/numerical_cases/case_k")
+import kernel
 
-query, candidates, embeddings = make_inputs_numpy()
+A32, b32 = kernel.make_inputs_numpy()
+A = A32.astype(np.float64); b = b32.astype(np.float64)
+x = np.linalg.solve(A, b)
 
-# exact float64 route
-q64 = query.astype(np.float64)
-d_exact = ((candidates.astype(np.float64) - q64) ** 2).sum(axis=1)
-ref_idx = int(np.argmin(d_exact))
+# fp64 64-step Richardson (pure truncation)
+s64 = np.zeros(16)
+for _ in range(64):
+    s64 = s64 + (b - A @ s64)
+# fp32 64-step Richardson (truncation + rounding, mimicking kernel ops)
+s32 = np.zeros(16, dtype=np.float32)
+A32m, b32v = A32, b32
+for _ in range(64):
+    prod = (A32m * s32[None, :]).astype(np.float32)
+    acc = prod.sum(axis=1, dtype=np.float32)  # fp32 accumulation
+    resid = (b32v - acc).astype(np.float32)
+    s32 = (s32 + resid).astype(np.float32)
 
-# quantized float32 route mirroring kernel lines 11-20
-def quant(x):
-    return np.floor(x.astype(np.float32) * np.float32(8.0) + np.float32(0.5)).astype(np.float32) * np.float32(0.125)
-q_q = quant(query)
-c_q = quant(candidates)
-dist = np.zeros(16, dtype=np.float32)
-for i in range(16):
-    acc = np.float32(0.0)
-    for j in range(32):
-        delta = np.float32(c_q[i, j] - q_q[j])
-        acc = np.float32(acc + np.float32(delta * delta))
-    dist[i] = acc
-minimum = dist.min()
-tied = np.where(dist == minimum)[0]
-qwin = int(tied.min())  # smallest-index tie rule
-
-rel = float(np.linalg.norm(embeddings[qwin].astype(np.float64) - embeddings[ref_idx].astype(np.float64)) /
-            max(np.linalg.norm(embeddings[ref_idx].astype(np.float64)), 1e-12))
-
+den = max(np.linalg.norm(x), 0.001*np.sqrt(16))
+e64 = np.linalg.norm(s64 - x) / den
+e32 = np.linalg.norm(s32.astype(np.float64) - x) / den
 print(json.dumps({
-    "metric": "quantized-space tie presence and smallest-index resolution vs exact float64 winner",
-    "exact64_ref_index": ref_idx,
-    "quantized_winner_index": qwin,
-    "quantized_min_distance": float(minimum),
-    "n_tied_at_min": int(len(tied)),
-    "tied_indices": tied.tolist(),
-    "quantized_dists": dist.tolist(),
-    "exact64_dists": d_exact.tolist(),
-    "tie_changes_index_vs_exact": bool(qwin != ref_idx),
-    "relative_l2_if_wrong": rel,
-    "tolerance": 0.1,
+    "metric": "relerr of fp32 vs fp64 64-step Richardson simulation vs exact fp64 solve",
+    "reason": "fp64 loop isolates truncation; fp32 loop adds rounding; difference is the rounding contribution vs the 0.08 bound",
+    "relerr_fp64_iteration": float(e64),
+    "relerr_fp32_iteration": float(e32),
+    "rounding_increment": float(e32 - e64),
+    "fp32_alone_passes": bool(e32 <= 0.08),
+    "fp64_iteration_passes": bool(e64 <= 0.08),
+    "max_abs_diff_fp32_vs_fp64_states": float(np.max(np.abs(s32.astype(np.float64) - s64))),
+    "tolerance": 0.08
 }))

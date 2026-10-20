@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e10`
+- Entry: `case_e04`
 - Turns: 10
 - Tool events: 17
 - Claims: 2
-- Description updates: 2
-- LLM time: 91.163s across 9 calls | tokens: in=199134 out=5764 total=204898
+- Description updates: 1
+- LLM time: 103.563s across 9 calls | tokens: in=212995 out=7357 total=220352
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.98
+- Confidence: 0.99
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,81 +26,73 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e10"
+    "entry": "case_e04"
   }
   Output summary:
   {
-    "entry": "case_e10"
+    "entry": "case_e04"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e10"
+    "entry": "case_e04"
   }
   Output summary:
   {
-    "entry": "case_e10"
+    "entry": "case_e04"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e10"
+    "entry": "case_e04"
   }
   Output summary:
   {
-    "entry": "case_e10"
+    "entry": "case_e04"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e10",
+    "entry": "case_e04",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e10"
+    "entry": "case_e04"
   }
 
-### Turn 2 - `describer` (17.29348400799998s, in=6743 out=1145)
+### Turn 2 - `describer` (28.353016851000007s, in=7548 out=2013)
 
 Message:
 
 ```text
-The key thing I see: `step()` returns `weights.view(N)` — a view of the in-place buffer — so every retained history tensor aliases the same storage, and all six observed values at observation time equal w[6]. The contract explicitly permits aliasing but judges values at observation time, so the history requirement is likely violated. Recording the description model now.
+I have full source and problem context. Analyzing the permutation-tracking semantics before recording the description model.
 ```
 
 Tool calls:
 
-- `record_description_update -> t5 ok`
+- `record_description_update -> t5 error`
   Args:
   {
     "contract_model": [
-      "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
-      "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
-      "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
-      "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
-      "Single fixed workload (make_inputs with seed 734201); differe
-  ...[truncated 3480 chars]
+      "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32 from make_inputs_numpy(), with fixed Delta (8,32) float32 and two int32 permutations P (2,8).",
+      "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; output must be the final logical cache.",
+      "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; all values are multiples of 1/16 so float32 arithmetic is exact here.",
+      "Each P is individually an involution, but no property of their composition may be assumed.",
+      "run() defaults to word (0,1,2) and is not the wh
+  ...[truncated 4198 chars]
   Output summary:
   {
-    "contract_model": [
-      "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
-      "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
-      "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
-      "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
-      "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constant
-  ...[truncated 3170 chars]
+    "error_type": "ToolRegistryError",
+    "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"High-suspicion surface: _append's Delta indexing (kernel.py lines 23-26). It yields the contract-correct Delta[i] only when order is an involution; smoke words with a single involution reorder before op 2 (e.g. (0,2), (0,0,2)) pass for exactly this reason, so the recorded probe pass is weak evidence.\", \"Words where order = P_a\u2218P_b composition (non-involution) precedes an op 2, e.g. (0,1,2), (1,0,2), (0,1,1,2), are the prime candidates for failure; also repeated op 2 after a non-identity order, e.g. (0,2,2) \u2014 second append repeats the same misindexed Delta.\", \"In-place physical mutation plus wrong indexing may still keep output finite/float32, so the failure mode is a value mismatch, not a crash; error would be a multiple of 1/16 and far above 1e-5 when it occurs.\", \"Do not accept involution-based reasoning for compositions: contract explicitly forbids assuming composition properties of P[0] and P[1].\", \"Empty word and reorder-only words exercise only _reorder/_materialize, which are consistent; these are likely to pass and do not cover the 
+  ...[truncated 53 chars]
 
-### Turn 3 - `skeptic` (8.489456957000016s, in=14649 out=593)
+### Turn 3 - `skeptic` (10.787345795999997s, in=12605 out=838)
 
 Message:
 
 ```text
-The primary failure surface is clear: `step()` returns a live view of the mutated weights buffer, so all retained history rows collapse to w[6] at observation time. I'll record that as the key in-scope claim, plus a secondary check on G invariance and final-state correctness.
+The Describer analysis exposes a prime suspect: `_append` indexes Delta by `order[row]` (physical address) rather than by logical row, which is only correct when `order` is an involution. The smoke words all happen to have involution order before the append, masking this. I'll record concrete in-scope claims tied to the 121-word contract.
 ```
 
 Tool calls:
@@ -108,16 +100,16 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+    "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(...,0.1) <= 0.025 where H_target[t]=w[t+1]. The contract judges values at observation time, and aliasing itself is not a failure \u2014 only observed values."
+        "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; a word like (0,1,2) (also run()'s default) is explicitly in the domain."
       }
     ],
-    "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the 
-  ...[truncated 246 chars]
+    "sta
+  ...[truncated 320 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -126,28 +118,28 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "Although source shows no store to Gradient, Triton pointer handling or caching bugs could in principle mutate inputs; a runtime byte-compare plus final-state error check would confirm the only remaining contract requirements pass, isolating the failure to history values.",
+    "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64 reference w[6]/v[6], and finite float32 outputs of stated shapes."
+        "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
       }
     ],
-    "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged."
-  }
+    "statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is re
+  ...[truncated 151 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (10.407537337999997s, in=16120 out=682)
+### Turn 4 - `skeptic` (6.946154330000013s, in=14272 out=732)
 
 Message:
 
 ```text
-My two earlier record_claim calls were rejected for missing `scope_rationale`. I'll re-send both with that field filled in.
+Both prior claim recordings failed for missing `scope_rationale` — I'll re-send them with the required fields.
 ```
 
 Tool calls:
@@ -155,65 +147,64 @@ Tool calls:
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+    "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+        "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain."
       }
     ],
-    "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller 
-  ...[truncated 670 chars]
+    "scope_rationale
+  ...[truncated 621 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+    "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+        "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain."
       }
     ],
-    "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.",
-    "statement": "Because step() returns weights.view(N), all six retained history tens
-  ...[truncated 304 chars]
+    "scope_rationale": "problem.txt requires Delta to address current LOGICAL rows for all 121 words of length 0-4 over {0,1,2}; a word such as (0,1,2) or (1,0,2) \u2014 both in the admitted domain \u2014 yields a possibly non-involution order before op 2, directly exercising the _append Delta-indexing surface.",
+    "statement": "For any in-scope word where a non-involution order (e.g. the composition P0
+  ...[truncated 255 chars]
 - `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+    "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+        "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
       }
     ],
-    "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so ver
-  ...[truncated 290 chars]
+    "scope_rationale": "problem.txt explicitly defines the contract as all 121 words of length 
+  ...[truncated 408 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+    "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+        "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
       }
     ],
-    "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.",
-    "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
-    "status": "open"
-  }
+    "scope_rationale": "problem.txt explicitly defines the contract as all 121 words of length 0-4 over {0,1,2} and states the initial probe's pass is evidence about its five words only; deciding the contract therefore requires sweeping the whole word set.",
+    "statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the fiv
+  ...[truncated 42 chars]
 
-### Turn 5 - `describer` (16.15659842400001s, in=17534 out=988)
+### Turn 5 - `describer` (15.837557869000022s, in=15922 out=1288)
 
 Message:
 
 ```text
-The description model is already recorded, but there's one subtle insight worth adding: the recorded initial_probe's zero history error is degenerate — the probe's reference also retains views (`reference_weights.view(N)`) of its own mutated buffer, so both `actual` and `expected` collapse to their respective final w[6], making the history comparison trivially 0.0 and masking the aliasing behavior rather than testing it. I'll record this refinement.
+My previous description update failed due to malformed arguments — I'm re-sending it correctly now, with the same analysis of the `_append` Delta-indexing risk that supports open claims c1/c2.
 ```
 
 Tool calls:
@@ -222,34 +213,32 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
-      "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
-      "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
-    ],
-    "kernel_model": [
-      "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
-      "The recorded initial_probe result (all errors 0.0) is d
-  ...[truncated 2126 chars]
+      "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
+      "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
+      "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
+      "Each P is individually an involution, but no property of their composition may be assumed.",
+      "run() def
+  ...[truncated 3961 chars]
   Output summary:
   {
     "contract_model": [
-      "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
-      "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
-      "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+      "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
+      "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
+      "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
+      "Each P is individually an involution, but no property of their composition may be assumed.",
+      "run() defaults to word (0,1,2) and is not the whole domain; initial_probe() covers only five smoke words and its recorded pass is evidence for those words only."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
-      "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
-      "The Triton kerne
-  ...[truncated 1816 chars]
+      "Kernel tracks a logical->physical row mapping `order` (int32, identity initially) and mutates physical storage lazily: _reorder sets next_order[i] = order[P[i]] (lines 13-16); _materialize ou
+  ...[truncated 3651 chars]
 
-### Turn 6 - `skeptic` (5.3652436259999945s, in=24227 out=266)
+### Turn 6 - `skeptic` (7.200247823000012s, in=25234 out=383)
 
 Message:
 
 ```text
-Both key in-scope claims (aliased retained history collapsing to w[6], and the secondary final-state/G-invariance check) are already recorded in the ledger with proper scope evidence. The description model's refinement about the degenerate initial_probe is also captured. No additional high-quality in-scope claims remain.
+Both high-risk surfaces are already captured: c1 targets the `_append` physical-vs-logical Delta indexing (the exact defect masked by all five smoke words having involution order before a single append), and c2 requires the exhaustive 121-word sweep the contract demands. I've checked `_reorder` and `_materialize` — they are mutually consistent under the stated convention and pose no independent suspicious surface. No further in-scope attack surfaces exist beyond these claims.
 ```
 
 Tool calls:
@@ -257,7 +246,7 @@ Tool calls:
 - `record_no_new_claims -> t11 ok`
   Args:
   {
-    "reason": "The two decisive in-scope claims are already recorded: c1 (all six retained history tensors alias the mutated weights buffer via weights.view(N), so H rows equal w[6] at observation time, likely violating the 0.025 history tolerance on the fixed seeded workload) and c2 (final state w[6]/v[6] and byte-for-byte G invariance are expected to pass, isolating the failure to history values). The kernel math, store targets, and aliasing behavior are fully pinned by source inspection; remaining open questions are runtime-confirmation tasks for the experimenter, not new claims. No other testable failure surface exists in scope (single fixed workload, N=128, 6 steps).",
+    "reason": "The kernel's only mismatch surface is _append's Delta indexing by physical address (covered by c1), and deciding the full 121-word finite contract requires the exhaustive sweep (covered by c2). _reorder and _materialize are internally consistent under the logical->physical order convention, and the empty/reorder-only words cannot expose any distinct failure beyond what c1/c2 already cover. No additional testable in-scope claims found.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -266,7 +255,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The two decisive in-scope claims are already recorded: c1 (all six retained history tensors alias the mutated weights buffer via weights.view(N), so H rows equal w[6] at observation time, likely violating the 0.025 history tolerance on the fixed seeded workload) and c2 (final state w[6]/v[6] and byte-for-byte G invariance are expected to pass, isolating the failure to history values). The kernel math, store targets, and aliasing behavior are fully pinned by source inspection; remaining open questions are runtime-confirmation tasks for the experimenter, not new claims. No other testable failure surface exists in scope (single fixed workload, N=128, 6 steps).",
+    "reason": "The kernel's only mismatch surface is _append's Delta indexing by physical address (covered by c1), and deciding the full 121-word finite contract requires the exhaustive sweep (covered by c2). _reorder and _materialize are internally consistent under the logical->physical order convention, and the empty/reorder-only words cannot expose any distinct failure beyond what c1/c2 already cover. No additional testable in-scope claims found.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -275,12 +264,12 @@ Tool calls:
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (12.941492109999984s, in=25494 out=887)
+### Turn 7 - `experimenter` (12.350335431000019s, in=26286 out=895)
 
 Message:
 
 ```text
-I'll launch two independent probes: one measuring the retained-history error at observation time (c1) and one checking final state vs a float64 reference plus G invariance (c2). Both use fresh inputs from the kernel module so they don't confound each other.
+I'll launch two independent runtime probes: c1 tests targeted words with a non-involution order before an append, and c2 runs the exhaustive 121-word sweep. Both use fresh inputs per word and compare against the exact CPU logical reference.
 ```
 
 Tool calls:
@@ -289,8 +278,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nw, v, G = k.make_inputs(device)\n# float64 reference w[t+1]\nw64 = w.double().clone(); v64 = v.double().clone()\ntarget = []\nfor g in G:\n    v64 = 0.75*v64 + 0.25*g.double()\n    w64 = w64 - 0.03125*v64\n    target.append(w64.clone())\ntarget = torch.stack(target)\n# kernel: retained history observed only after full sequence (as contract requires)\nhist = k.run_sequence(w, v, G)  # retain, observe after\ntorch.cuda.synchronize() if device==\"cuda\" else None\nH = torch.stack(hist)\naliasi
-  ...[truncated 670 chars]
+    "code": "import sys, json, itertools\nimport numpy as np, torch\nsys.path.insert(0, \"/root/evidence_cases/case_e04\")\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs()\nP0, P1 = cpu[2][0], cpu[2][1]\ncomp = P0[P1]  # order after (0,1): next_order[i]=order[P0[i]]=P0[i]; careful below\ninv = np.array_equal(comp[comp], np.arange(K.N))\n\ndef reference(word):\n    ref = cpu[0].astype(np.float64).copy()\n    for op in word:\n        ref = ref[cpu[2][op]].copy() if op < 2 else ref + cpu[1].astype(np.float64)\n    return ref\n\nwords = [(0,1,2),(1,0,2),(0,1,1,2),(1,0,0,2),(0,1,0,2),(0,2,2),(1,2,2),(0,1,2,2)]\nrecords = []\nfor w in words:\n    actual = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(actual.astype(np.fl
+  ...[truncated 466 chars]
   Output summary:
   {
     "artifacts": [
@@ -298,13 +287,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t12_probe.py",
-        "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+        "sha256": "dbcab87ae55a205f69d3c5d5503661da49d84247be5e98d1028d01d66ee9e071"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t12_stdout.txt",
-        "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+        "sha256": "b3e93ace3e81990aa9f48db466a8f9edc9a0b73b1db12de7275c6d10e231b630"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -316,18 +305,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t12_json_result.json",
-        "sha256": "a46f2739cf8d3846d9ab9f41031501dda08be119ea1435bdbe45321c485dc524"
+        "sha256": "b25f65bd1167b50cc69eb2128c1a0f7fa50d7106fe91ae215258e59bb9b89280"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates 
-  ...[truncated 2932 chars]
+    "claim_statement": "For any in-scope word where a non-involution order (e.g. the composition P0\u2218P1 or P1\u2218P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final ou
+  ...[truncated 6811 chars]
 - `run_claim_probe -> t13 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "import json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/evidence_cases/case_e10/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nw, v, G = k.make_inputs(device)\nG0 = G.clone()\n# float64 reference\nw64 = w.double().clone(); v64 = v.double().clone()\nfor g in G:\n    v64 = 0.75*v64 + 0.25*g.double()\n    w64 = w64 - 0.03125*v64\nk.run(w, v, G)  # consume all six steps\nif device == \"cuda\": torch.cuda.synchronize()\ndef rel(a, b):\n    return (torch.linalg.vector_norm(a.double()-b.double())/max(torch.linalg.vector_norm(b.double()).item(), 0.1)).item()\nwerr = rel(w, w64); verr = rel(v, v64)\ng_same = torch.equal(G.v
-  ...[truncated 563 chars]
+    "code": "import sys, json, itertools\nimport numpy as np, torch\nsys.path.insert(0, \"/root/evidence_cases/case_e04\")\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs()\n\ndef reference(word):\n    ref = cpu[0].astype(np.float64).copy()\n    for op in word:\n        ref = ref[cpu[2][op]].copy() if op < 2 else ref + cpu[1].astype(np.float64)\n    return ref\n\nwords = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]\nassert len(words) == 121\nfails, worst = [], 0.0\nfor w in words:\n    actual = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(actual.astype(np.float64) - reference(w))))\n    ok = actual.shape == (K.N, K.D) and actual.dtype == np.float32 and np.isfinite(actual).all() and er
+  ...[truncated 390 chars]
   Output summary:
   {
     "artifacts": [
@@ -335,13 +324,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t13_probe.py",
-        "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+        "sha256": "9fb24c230da374ed4ac70ade3a230599918ad8d009fece79ce931811c54155fc"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t13_stdout.txt",
-        "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+        "sha256": "6c3cca2a1a25070e5c90747ed69dfc565f3b30ebc33400435a0b84350850c31d"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -353,20 +342,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t13_json_result.json",
-        "sha256": "95c76342fd4660e30069d6ed2de2cf31478710bed4301b60595d0b1f51b8f64c"
+        "sha256": "9ea245f87a53cf272ce33dbec7359b25a649667c3cfbfd5b55bed19e77a4cb8d"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
-   
-  ...[truncated 2789 chars]
+    "claim_statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five s
+  ...[truncated 6494 chars]
 
-### Turn 8 - `experimenter` (7.169905303000007s, in=28530 out=404)
+### Turn 8 - `experimenter` (8.886217748999997s, in=31305 out=575)
 
 Message:
 
 ```text
-Both probes completed cleanly. I'll finalize the evidence: c1 confirmed (history error 0.899 » 0.025, all rows equal w[6]), c2 confirmed (final state errors ~5e-8 ≤ 1e-5, G byte-identical).
+Both probes returned decisive failures: 12 of 121 words fail (worst error 7.625, multiple of 1/16), with the prime candidate (0,1,2) failing at 3.8125. I'll finalize both claims as confirmed.
 ```
 
 Tool calls:
@@ -375,15 +363,18 @@ Tool calls:
   Args:
   {
     "data": {
-      "all_rows_equal_w6_at_observation": true,
-      "history_relative_error": 0.8989803703905964,
-      "history_tensors_share_storage": true,
-      "target_norm": 59.93094864954865,
-      "tolerance": 0.025
+      "P0_after_P1_is_involution": false,
+      "any_fail": true,
+      "num_fail": 12,
+      "tolerance": 1e-05,
+      "word_0_1_2_2_error": 7.625,
+      "word_0_1_2_error": 3.8125,
+      "word_1_0_2_error": 3.8125,
+      "worst_error": 7.625
     },
     "event_id": "t12",
     "status": "confirmed",
-    "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+    "summary": "Targeted words confirm the _append Delta-indexing defect: P0\u2218P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.",
     "supports": "confirmed"
   }
   Output summary:
@@ -391,7 +382,7 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+    "summary": "Targeted words confirm the _append Delta-indexing defect: P0\u2218P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.",
     "supports": "confirmed",
     "tool_event_id": "t12"
   }
@@ -399,33 +390,61 @@ Tool calls:
   Args:
   {
     "data": {
-      "G_byte_identical": true,
-      "final_velocity_relative_error": 4.510977036715875e-08,
-      "final_weights_relative_error": 5.051213701513941e-08,
-      "finite_correct_shapes": true,
-      "state_tolerance": 1e-05
+      "example_failures": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          1,
+          0,
+          2
+        ],
+        [
+          0,
+          1,
+          2,
+          2
+        ],
+        [
+          0,
+          2,
+          1,
+          2
+        ],
+        [
+          1,
+          2,
+          0,
+          2
+        ]
+      ],
+      "num_fail": 12,
+      "num_words": 121,
+      "tolerance": 1e-05,
+      "worst_error": 7.625
     },
     "event_id": "t13",
     "status": "confirmed",
-    "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
-    "supports": "confirmed"
-  }
+    "summary": "Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the fiv
+  ...[truncated 52 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
+    "summary": "Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the five smoke words passing.",
     "supports": "confirmed",
     "tool_event_id": "t13"
   }
 
-### Turn 9 - `skeptic` (5.895592385999976s, in=32825 out=314)
+### Turn 9 - `skeptic` (5.447852694999995s, in=39967 out=239)
 
 Message:
 
 ```text
-The probes decisively confirmed claim c1 (history error 0.899 ≫ 0.025 due to aliased retained views) and c2 (final state and G invariance pass). This is a review turn; the existing claims fully cover the failure surface, and no new in-scope problem has emerged.
+The evidence is decisive: both in-scope claims (c1, c2) are confirmed with runtime probe artifacts — 12 of 121 contract words fail, worst error 7.625 (a multiple of 1/16, far above 1e-5), including run()'s default word (0,1,2). No additional in-scope surfaces remain uncovered.
 ```
 
 Tool calls:
@@ -433,12 +452,16 @@ Tool calls:
 - `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Final review: the two in-scope claims are both confirmed with runtime evidence. c1 confirmed by probe t12 \u2014 all six retained history tensors alias the mutated weights buffer (weights.view(N)), every row equals w[6] at post-sequence observation time, and the history relative Frobenius error vs the float64 w[t+1] reference is 0.899, far above the 0.025 tolerance on the contract's fixed seeded workload. c2 confirmed by probe t13 \u2014 final weights/velocity match float64 w[6]/v[6] within ~5e-8 (\u2264 1e-5), G is byte-for-byte unchanged, and outputs are finite float32 of shape (128,), isolating the failure solely to the retained-history criterion. The kernel's arithmetic, store targets, and aliasing behavior are fully pinned by source and runtime evidence; only the fixed 
-  ...[truncated 144 chars]
+    "reason": "Final review: the exhaustive 121-word sweep (c2/t13) and the targeted non-involution-order probes (c1/t12) both decisively confirm the _append Delta-indexing defect \u2014 12 of 121 in-scope words fail with worst error 7.625 vs the 1e-5 tolerance, including run()'s default word (0,1,2). The new evidence raises no material problem not already covered by confirmed claims c1 and c2; _reorder/_materialize remain internally consistent and no other in-scope attack surface exists.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the two in-scope claims are both confirmed with runtime evidence. c1 confirmed by probe t12 \u2014 all six retained history tensors alias the mutated weights buffer (weights.view(N)), every row equals w[6] at post-sequence observation time, and the history relative Frobenius error vs the float64 w[t+1] reference is 0.899, far above the 0.025 tolerance on the contract's fixed seeded workload. c2 confirmed by probe t13 \u2014 final weights/velocity match float64 w[6]/v[6] within ~5e-8 (\u2264 1e-5), G is byte-for-byte unchanged, and outputs are finite float32 of shape (128,), isolating the failure solely to the retained-history criterion. The kernel's arithmetic, store targets, and aliasing behavior are fully pinned by source and runtime evidence; only the fixed workload is in scope, and no additional testable failure surface exists. No new claims needed.",
+    "reason": "Final review: the exhaustive 121-word sweep (c2/t13) and the targeted non-involution-order probes (c1/t12) both decisively confirm the _append Delta-indexing defect \u2014 12 of 121 in-scope words fail with worst error 7.625 vs the 1e-5 tolerance, including run()'s default word (0,1,2). The new evidence raises no material problem not already covered by confirmed claims c1 and c2; _reorder/_materialize remain internally consistent and no other in-scope attack surface exists.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -447,12 +470,12 @@ Tool calls:
     "turn": 9
   }
 
-### Turn 10 - `judge` (7.444112106000006s, in=33012 out=485)
+### Turn 10 - `judge` (7.754344738000015s, in=39856 out=394)
 
 Message:
 
 ```text
-The evidence is decisive: probe t12 confirmed that all six retained history tensors alias the mutated weights buffer and collapse to w[6] at observation time, giving a history relative error of 0.899 vs the contract's 0.025 tolerance on the fixed seeded workload — a violation of the explicit history acceptance criterion. Probe t13 isolates the failure to that criterion alone: final state matches float64 w[6]/v[6] within ~5e-8 and G is byte-identical. The contract explicitly says aliasing itself is not a failure, but the *observed values* at observation time must satisfy the history tolerance, and they do not. The initial_probe's zero history error is degenerate (both sides alias equally) and is not evidence against this. Skeptic has signed off with no new claims; all claims are confirmed.
+The exhaustive 121-word sweep and targeted probes decisively confirm the _append Delta-indexing defect within the artifact's own declared domain. I'll record a reject verdict.
 ```
 
 Tool calls:
@@ -460,122 +483,110 @@ Tool calls:
 - `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.98,
+    "confidence": 0.99,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values 
-  ...[truncated 439 chars]
+    "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this
+  ...[truncated 490 chars]
   Output summary:
   {
-    "confidence": 0.98,
+    "confidence": 0.99,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values fail the stated tolerance. Claim c2 (final state w[6]/v[6] correct within 1e-5, G byte-for-byte unchanged, finite float32 outputs) is also confirmed, isolating the defect solely to the retained-history values. The recorded initial_probe's zero history error is degenerate (its reference implementation aliases identically) and does not rebut c1. No unresolved claims remain; Skeptic signed off with n
-  ...[truncated 39 chars]
+    "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this is not a rounding artifact), and the exhaustive sweep shows 12 of 121 contract words fail with worst error 7.625, far above the 1e-5 tolerance. No reference-undefined or tie-breaking caveat applies: the reference is exact. The five passing smoke words each had involution order before a single append, masking the defect. Skeptic reviewed the latest evidence (t16) with no new claims; no open claims
+  ...[truncated 90 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
-    "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
-    "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
-    "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
-    "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope.",
-    "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
-    "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
-    "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+    "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
+    "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
+    "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
+    "Each P is individually an involution, but no property of their composition may be assumed.",
+    "run() defaults to word (0,1,2) and is not the whole domain; initial_probe() covers only five smoke words and its recorded pass is evidence for those words only."
   ],
   "kernel_model": [
-    "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
-    "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
-    "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the
-...[truncated 4237 chars]
+    "Kernel tracks a logical->physical row mapping `order` (int32, identity initially) and mutates physical storage lazily: _reorder sets next_order[i] = order[P[i]] (lines 13-16); _materialize outputs Output[i] = Cache[order[i]] (lines 30-34); _append adds Delta to physical rows in place (lines 20-26).",
+    "Convention: logical row i resides at physical row order[i]; _reorder and _materialize are mutually consistent with this convention.",
+    "Mismatch surface in _append (lines 23-26): it adds Delta[order[row]] to physical slot `row`, i.e. Delta is indexed by PHYSICAL address, while the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the two agree only when order is an involution.",
+    "run_sequence clones initial each call, so every word starts fresh, matching the contract; all kernels are single-block with N=8, D=32, num_warps=1.",
+    "All five smoke words end with a single op 2 preceded only by identity, P0, P1, or P0^2/P1^2 \u2014 all involutions \u2014 which exac
+...[truncated 2258 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: In-place momentum optimizer (N=128, 6 steps, fp32). Kernel math matches the contract, but step() returns a live view of the mutated weights buffer, so all six retained history tensors alias one storage; at the post-sequence observation time every history row equals w[6], likely violating the history tolerance. Final state w[6]/v[6] itself is computed correctly and sequentially.
-- `du2` tasks=`initial`: Refinement: initial_probe's zero history error is degenerate because its reference implementation also retains aliased views, so both actual and expected collapse to final w[6] and compare equal; the probe masks rather than tests the kernel's aliasing behavior. The kernel's own retained history (views of the mutated weights buffer) still collapses to w[6] at observation time, which likely violates the contract's history tolerance.
+- `du1` tasks=`initial`: Re-recording (prior update t5 failed on malformed args): case_e04 is a lazy reordered beam-cache. _reorder/_materialize are internally consistent under the convention logical row i lives at physical order[i], but _append indexes Delta by physical address (Delta[order[row]]) instead of logical row, matching the contract only when order is an involution. The five smoke words all have involution order before their single append, masking this surface; the contract covers all 121 words.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps).
+Statement: For any in-scope word where a non-involution order (e.g. the composition P0∘P1 or P1∘P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final output deviates from the mathematical reference by a multiple of 1/16, far above the 1e-5 tolerance.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.
+Scope rationale: problem.txt requires Delta to address current LOGICAL rows for all 121 words of length 0-4 over {0,1,2}; a word such as (0,1,2) or (1,0,2) — both in the admitted domain — yields a possibly non-involution order before op 2, directly exercising the _append Delta-indexing surface.
 
 Scope evidence:
-- `problem.txt`: The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure — only the observed numerical values at observation time decide acceptance.
+- `problem.txt`: Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain.
 
-Rationale: step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.
+Rationale: _append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Targeted words confirm the _append Delta-indexing defect: P0∘P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.
 
 ### c2 - `confirmed`
 
-Statement: Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.
+Statement: An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five smoke words pass.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.
+Scope rationale: problem.txt explicitly defines the contract as all 121 words of length 0-4 over {0,1,2} and states the initial probe's pass is evidence about its five words only; deciding the contract therefore requires sweeping the whole word set.
 
 Scope evidence:
-- `problem.txt`: Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes.
+- `problem.txt`: Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only.
 
-Rationale: Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.
+Rationale: Even if P0∘P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (≤ 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the five smoke words passing.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e10"
+  "entry": "case_e04"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e10"
+  "entry": "case_e04"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e10"
+  "entry": "case_e04"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e10"
+  "entry": "case_e04"
 }
 
-### t5 - record_description_update - ok
+### t5 - record_description_update - error
 
 {
-  "contract_model": [
-    "Momentum update: v[t+1] = 0.75*v[t] + 0.25*G[t]; w[t+1] = w[t] - (1/32)*v[t+1], six steps, N=128, fixed seeded inputs.",
-    "step() must update state in place and return a float32 (128,) tensor; caller retains all six returned tensors and stacks them only AFTER the sequence completes.",
-    "H = stacked retained values at observation time must satisfy rel-Frobenius error <= 0.025 vs mathematical w[t+1]; final weights/velocity rel error <= 1e-05 vs w[6]/v[6] computed in float64 or better.",
-    "G must remain byte-for-byte unchanged; mutating weights/velocity is required; storage aliasing itself is explicitly not a failure \u2014 only observed values and input-mutation rules decide acceptance.",
-    "Single fixed workload (make_inputs with seed 734201); different step counts, other inputs, and mid-sequence observations are out of scope."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Triton kernel _momentum_step loads w, v, g for indices 0..127, computes next_velocity = 0.75*v + 0.25*g and next_weights = w - 0.03125*next_velocity, stores both back into the same buffers (lines 12-19); math matches the contract exactly with representable constants.",
-    "step() launches with grid (1,), num_warps=1, enable_fp_fusion=False, and returns weights.view(N) \u2014 a VIEW of the same mutated storage, not a copy (kernel.py line 40).",
-    "run_sequence() appends these views and returns them; run() stacks at final observation time. Since all six returned tensors alias the same 128-float storage, every history row observed after the full sequence equals the final w[6], not w[t+1].",
-    "Single-threaded sequential execution, so final state w[6]/v[6] should be computed correctly; only the retained-history values are affected by the aliasing behavior.",
-    "initial_probe uses a cloned PyTorch reference and compares post-hoc; its recorded zero errors are from the probe's own reference implementation, not an oracle over this Triton kernel's ali
-...[truncated 2370 chars]
+  "error_type": "ToolRegistryError",
+  "message": "tool record_description_update got unexpected args: risk_map</arg_key>[\"High-suspicion surface: _append's Delta indexing (kernel.py lines 23-26). It yields the contract-correct Delta[i] only when order is an involution; smoke words with a single involution reorder before op 2 (e.g. (0,2), (0,0,2)) pass for exactly this reason, so the recorded probe pass is weak evidence.\", \"Words where order = P_a\u2218P_b composition (non-involution) precedes an op 2, e.g. (0,1,2), (1,0,2), (0,1,1,2), are the prime candidates for failure; also repeated op 2 after a non-identity order, e.g. (0,2,2) \u2014 second append repeats the same misindexed Delta.\", \"In-place physical mutation plus wrong indexing may still keep output finite/float32, so the failure mode is a value mismatch, not a crash; error would be a multiple of 1/16 and far above 1e-5 when it occurs.\", \"Do not accept involution-based reasoning for compositions: contract explicitly forbids assuming composition properties of P[0] and P[1].\", \"Empty word and reorder-only words exercise only _reorder/_materialize, which are consistent; these are likely to pass and do not cover the append surface.\"]</arg_value><arg_key>scope_notes"
+}
 
 ### t6 - record_claim - error
 
@@ -595,16 +606,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "step() returns weights.view(N), a live view of the same storage the Triton kernel overwrites each step; no clone is made in run_sequence. Early rows (w[1] vs w[6]) will differ, likely pushing the relative Frobenius history error above 0.025.",
+  "rationale": "_append (kernel.py lines 20-26) adds Delta[order[row]] to physical slot `row`, but the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the correct index for physical slot p is Delta[order^{-1}(p)]. The two agree only when order is an involution. The five smoke words all end with a single append preceded only by identity or a single involution permutation, so they cannot detect this.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The caller retains all six returned tensors and observes ALL of them only AFTER the full sequence completes; H must satisfy ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 where H_target[t]=w[t+1]. Aliasing itself is not a failure \u2014 only the observed numerical values at observation time decide acceptance."
+      "summary": "Contract states 'Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders' and covers all 121 words of length 0-4 over {0,1,2}, with tolerance 1e-5; words like (0,1,2) or (1,0,2) are explicitly in the domain."
     }
   ],
-  "scope_rationale": "problem.txt defines the fixed workload (seed 734201, N=128, 6 steps), requires the caller to retain all six returned tensors and observe them only after the sequence completes, and requires ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 with H_target[t]=w[t+1]. If every retained row equals w[6] instead, this stated acceptance criterion is violated on the contract's own fixed inputs.",
-  "statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps).",
+  "scope_rationale": "problem.txt requires Delta to address current LOGICAL rows for all 121 words of length 0-4 over {0,1,2}; a word such as (0,1,2) or (1,0,2) \u2014 both in the admitted domain \u2014 yields a possibly non-involution order before op 2, directly exercising the _append Delta-indexing surface.",
+  "statement": "For any in-scope word where a non-involution order (e.g. the composition P0\u2218P1 or P1\u2218P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final output deviates from the mathematical reference by a multiple of 1/16, far above the 1e-5 tolerance.",
   "status": "open"
 }
 
@@ -612,16 +623,16 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "Source shows no store to Gradient and sequential exact-order arithmetic, so final state should match a float64 reference; a runtime byte-compare of G and final-state error check would confirm the only failing requirement is the retained history values.",
+  "rationale": "Even if P0\u2218P1 happens to be an involution for SEED 941200, words with two or more appends after a reorder (e.g. (0,2,2), (1,2,2,2)) or three-reorder compositions (e.g. (0,1,0,2), (0,0,1,2)) may produce non-involution order; only an exhaustive sweep of all 121 words can decide the finite contract, and the supplied probe covers just 5.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract requires G byte-for-byte unchanged, final weights/velocity rel errors <= 1e-05 vs float64-computed w[6]/v[6], and finite float32 outputs of stated shapes."
+      "summary": "Contract requires correctness for ALL 121 words of length 0-4, including the empty word and words with multiple appends and mixed reorders; the initial probe's five passing words are explicitly noted as evidence for those words only."
     }
   ],
-  "scope_rationale": "problem.txt explicitly requires final weights/velocity relative errors <= 0.00001 vs float64 w[6]/v[6] on the fixed seeded workload, and requires G to remain byte-for-byte unchanged; these are stated contract requirements, so verifying they hold isolates the failure to the history criterion.",
-  "statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
+  "scope_rationale": "problem.txt explicitly defines the contract as all 121 words of length 0-4 over {0,1,2} and states the initial probe's pass is evidence about its five words only; deciding the contract therefore requires sweeping the whole word set.",
+  "statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five smoke words pass.",
   "status": "open"
 }
 
@@ -629,30 +640,26 @@ Evidence:
 
 {
   "contract_model": [
-    "Acceptance is judged on the values of the retained six tensors at the post-sequence observation time: H[t] must equal w[t+1] (mathematical), with rel-Frobenius error <= 0.025.",
-    "Final state w[6]/v[6] must match a float64-or-better reference within 1e-05 relative error; G must stay byte-for-byte unchanged.",
-    "Storage aliasing is explicitly permitted; only observed numerical values and input-mutation rules decide acceptance."
+    "Finite API domain: all 121 words of length 0-4 over operations {0,1,2}, each starting from a fresh C (8,32) float32, fixed Delta (8,32) float32, and two int32 involution permutations P (2,8) from make_inputs_numpy() with SEED 941200.",
+    "Semantics on the current LOGICAL cache: op 0 -> C[P[0],:], op 1 -> C[P[1],:], op 2 -> C + Delta, where Delta always addresses CURRENT logical rows regardless of prior reorders; the return value is the final logical cache.",
+    "Per-sequence requirements: shape (8,32), float32, finite, max abs error vs mathematical reference <= 1e-5; values are multiples of 1/16 so arithmetic is exactly representable in float32.",
+    "Each P is individually an involution, but no property of their composition may be assumed.",
+    "run() defaults to word (0,1,2) and is not the whole domain; initial_probe() covers only five smoke words and its recorded pass is evidence for those words only."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "step() returns weights.view(N) then run_sequence stores .detach() of it \u2014 detach shares storage with the live weights buffer, so all six retained history tensors alias the same 128 floats and, at observation time, every row equals w[6].",
-    "The recorded initial_probe result (all errors 0.0) is degenerate on the history axis: its reference also retains reference_weights.view(N).detach() of its own mutated buffer, so both actual and expected histories collapse to their final w[6] and compare equal. The probe therefore masks, rather than tests, the aliasing behavior; only the state (weights/velocity) comparisons in the probe are informative.",
-    "The Triton kernel arithmetic (0.75*v + 0.25*g, w - 0.03125*v_next, grid (1,), num_warps=1, fp fusion disabled) matches the contract math exactly and stores only to Velocity and Weights; Gradient is load-only."
-  ],
-  "open_questions": [
-    "Runtime confirmation of the actual measured history error at observation time for the Triton kernel (claim c1) is still needed.",
-    "Whether the evaluation harness clones returned tensors before continuing \u2014 contract wording implies it does not, but no runtime evidence yet."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Primary: aliased retained history (all rows equal w[6] at observation time) likely violates the 0.025 history tolerance; the initial_probe's 0.0 history error must not be read as evidence against this because both sides of that probe alias e
-...[truncated 1016 chars]
+    "Kernel tracks a logical->physical row mapping `order` (int32, identity initially) and mutates physical storage lazily: _reorder sets next_order[i] = order[P[i]] (lines 13-16); _materialize outputs Output[i] = Cache[order[i]] (lines 30-34); _append adds Delta to physical rows in place (lines 20-26).",
+    "Convention: logical row i resides at physical row order[i]; _reorder and _materialize are mutually consistent with this convention.",
+    "Mismatch surface in _append (lines 23-26): it adds Delta[order[row]] to physical slot `row`, i.e. Delta is indexed by PHYSICAL address, while the contract requires logical row i (stored at physical order[i]) to receive Delta[i]; the two agree only when order is an involution.",
+    "run_sequence clones initial each call, so every word starts fresh, matching the contract; all kernels are single-block with N=8, D=32, num_warps=1.",
+    "All five smoke words end with a single op 2 preceded only by identity, P0, P1, or P0^2/P1^2 \u2014 all inv
+...[truncated 2851 chars]
 
 ### t11 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "The two decisive in-scope claims are already recorded: c1 (all six retained history tensors alias the mutated weights buffer via weights.view(N), so H rows equal w[6] at observation time, likely violating the 0.025 history tolerance on the fixed seeded workload) and c2 (final state w[6]/v[6] and byte-for-byte G invariance are expected to pass, isolating the failure to history values). The kernel math, store targets, and aliasing behavior are fully pinned by source inspection; remaining open questions are runtime-confirmation tasks for the experimenter, not new claims. No other testable failure surface exists in scope (single fixed workload, N=128, 6 steps).",
+  "reason": "The kernel's only mismatch surface is _append's Delta indexing by physical address (covered by c1), and deciding the full 121-word finite contract requires the exhaustive sweep (covered by c2). _reorder and _materialize are internally consistent under the logical->physical order convention, and the empty/reorder-only words cannot expose any distinct failure beyond what c1/c2 already cover. No additional testable in-scope claims found.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -669,13 +676,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t12_probe.py",
-      "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+      "sha256": "dbcab87ae55a205f69d3c5d5503661da49d84247be5e98d1028d01d66ee9e071"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t12_stdout.txt",
-      "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+      "sha256": "b3e93ace3e81990aa9f48db466a8f9edc9a0b73b1db12de7275c6d10e231b630"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -687,12 +694,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t12_json_result.json",
-      "sha256": "a46f2739cf8d3846d9ab9f41031501dda08be119ea1435bdbe45321c485dc524"
+      "sha256": "b25f65bd1167b50cc69eb2128c1a0f7fa50d7106fe91ae215258e59bb9b89280"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "Because step() returns weights.view(N), all six retained history tensors alias the same storage, so at the post-sequence observation time every row of H equals the final w[6] rather than w[t+1]; this violates the required history tolerance ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025 for the fixed seeded workload (seed 734201, N=128, 6 steps).",
-  "duration_s": 6.634657,
+  "claim_statement": "For any in-scope word where a non-involution order (e.g. the composition P0\u2218P1 or P1\u2218P0 from words (0,1,2) or (1,0,2)) precedes an op 2, _append adds Delta to the wrong physical rows and the final output deviates from the mathematical reference by a multiple of 1/16, far above the 1e-5 tolerance.",
+  "duration_s": 6.231254,
   "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
@@ -702,17 +709,17 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t12_probe.py",
-          "sha256": "35dac1902e96c8c8728511bbd39a683c65e32535d4a6518c5942e51f072deeac"
+          "sha256": "dbcab87ae55a205f69d3c5d5503661da49d84247be5e98d1028d01d66ee9e071"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t12_stdout.txt",
-          "sha256": "8df305557ba2837d46fa5a1021c7b0153bead318c6acb9c63cb044e39f8df29e"
+          "sha256": "b3e93ace3e81990aa9f48db466a8f9edc9a0b73b1db12de7275c6d10e231b630"
         },
         {
-          "descript
-...[truncated 2132 chars]
+          "description": "Captured stderr from the probe proce
+...[truncated 6011 chars]
 
 ### t13 - run_claim_probe - ok
 
@@ -722,13 +729,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t13_probe.py",
-      "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+      "sha256": "9fb24c230da374ed4ac70ade3a230599918ad8d009fece79ce931811c54155fc"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t13_stdout.txt",
-      "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+      "sha256": "6c3cca2a1a25070e5c90747ed69dfc565f3b30ebc33400435a0b84350850c31d"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -740,12 +747,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t13_json_result.json",
-      "sha256": "95c76342fd4660e30069d6ed2de2cf31478710bed4301b60595d0b1f51b8f64c"
+      "sha256": "9ea245f87a53cf272ce33dbec7359b25a649667c3cfbfd5b55bed19e77a4cb8d"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "Final state and input invariance are correct: after the six steps, final weights/velocity match float64-computed w[6]/v[6] within 1e-05 relative error, and the gradient tensor G is byte-for-byte unchanged.",
-  "duration_s": 5.305982,
+  "claim_statement": "An exhaustive sweep over all 121 in-scope words (each from fresh state) is required to decide the contract, and if any word fails the kernel does not satisfy the complete finite contract even though the five smoke words pass.",
+  "duration_s": 4.607914,
   "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
@@ -755,20 +762,20 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t13_probe.py",
-          "sha256": "8f4613115b15ef55d52ca79087fe274c1dac20d9b00ee9e9fa773aea5d81cb6f"
+          "sha256": "9fb24c230da374ed4ac70ade3a230599918ad8d009fece79ce931811c54155fc"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t13_stdout.txt",
-          "sha256": "8a51c912555622a75624149f78a5c3e01bd3ea167a1bd385f808b0bfb522145d"
+          "sha256": "6c3cca2a1a25070e5c90747ed69dfc565f3b30ebc33400435a0b84350850c31d"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t13_stderr.txt",
-          "sha256": "e3b0
-...[truncated 1989 chars]
+     
+...[truncated 5694 chars]
 
 ### t14 - finalize_probe_evidence - ok
 
@@ -776,7 +783,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "At post-sequence observation time, all six retained history tensors share the same storage (weights.view(N)) and every row equals w[6]; measured history relative Frobenius error vs float64 w[t+1] reference is 0.899, far above the 0.025 tolerance.",
+  "summary": "Targeted words confirm the _append Delta-indexing defect: P0\u2218P1 is NOT an involution for SEED 941200, and in-scope words (0,1,2) and (1,0,2) each deviate from the mathematical reference by max abs error 3.8125 (a multiple of 1/16, far above the 1e-5 tolerance); (0,1,2,2) reaches 7.625. Words whose order before an append is an involution ((0,1,1,2), (1,0,0,2), (0,2,2), etc.) show error exactly 0.0, matching the predicted masking mechanism.",
   "supports": "confirmed",
   "tool_event_id": "t12"
 }
@@ -787,7 +794,7 @@ Evidence:
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Final weights/velocity match float64 w[6]/v[6] with relative errors 5.05e-8 and 4.51e-8 (\u2264 1e-5), both finite float32 of shape (128,), and G is byte-for-byte unchanged. Only the retained-history criterion fails.",
+  "summary": "Exhaustive sweep of all 121 in-scope words (each from fresh state, fixed SEED-941200 inputs): 12 words fail the contract, including run()'s default word (0,1,2) with max abs error 3.8125 and (0,1,2,2) with 7.625, both far above the 1e-5 tolerance. The kernel does not satisfy the complete finite contract despite the five smoke words passing.",
   "supports": "confirmed",
   "tool_event_id": "t13"
 }
@@ -796,7 +803,7 @@ Evidence:
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the two in-scope claims are both confirmed with runtime evidence. c1 confirmed by probe t12 \u2014 all six retained history tensors alias the mutated weights buffer (weights.view(N)), every row equals w[6] at post-sequence observation time, and the history relative Frobenius error vs the float64 w[t+1] reference is 0.899, far above the 0.025 tolerance on the contract's fixed seeded workload. c2 confirmed by probe t13 \u2014 final weights/velocity match float64 w[6]/v[6] within ~5e-8 (\u2264 1e-5), G is byte-for-byte unchanged, and outputs are finite float32 of shape (128,), isolating the failure solely to the retained-history criterion. The kernel's arithmetic, store targets, and aliasing behavior are fully pinned by source and runtime evidence; only the fixed workload is in scope, and no additional testable failure surface exists. No new claims needed.",
+  "reason": "Final review: the exhaustive 121-word sweep (c2/t13) and the targeted non-involution-order probes (c1/t12) both decisively confirm the _append Delta-indexing defect \u2014 12 of 121 in-scope words fail with worst error 7.625 vs the 1e-5 tolerance, including run()'s default word (0,1,2). The new evidence raises no material problem not already covered by confirmed claims c1 and c2; _reorder/_materialize remain internally consistent and no other in-scope attack surface exists.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -808,22 +815,24 @@ Evidence:
 ### t17 - record_verdict - ok
 
 {
-  "confidence": 0.98,
+  "confidence": 0.99,
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values fail the stated tolerance. Claim c2 (final state w[6]/v[6] correct within 1e-5, G byte-for-byte unchanged, finite float32 outputs) is also confirmed, isolating the defect solely to the retained-history values. The recorded initial_probe's zero history error is degenerate (its reference implementation aliases identically) and does not rebut c1. No unresolved claims remain; Skeptic signed off with no new claims.",
+  "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this is not a rounding artifact), and the exhaustive sweep shows 12 of 121 contract words fail with worst error 7.625, far above the 1e-5 tolerance. No reference-undefined or tie-breaking caveat applies: the reference is exact. The five passing smoke words each had involution order before a single append, masking the defect. Skeptic reviewed the latest evidence (t16) with no new claims; no open claims remain. The kernel fails the explicitly stated finite contract.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.98,
-  "created_at": "2026-09-24T06:42:33Z",
+  "confidence": 0.99,
+  "created_at": "2026-09-24T06:13:43Z",
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "Claim c1 is confirmed, in_scope, and backed by scope evidence tied to the contract's fixed seeded workload (seed 734201, N=128, 6 steps): step() returns weights.view(N), so all six retained history tensors alias the same mutated weights storage; at the contract-mandated post-sequence observation time every row of H equals w[6] instead of w[t+1], and probe t12 measured the history relative Frobenius error at 0.899 vs the required <= 0.025 tolerance. This violates the contract's explicit acceptance criterion ||H-H_target||_F/max(||H_target||_F,0.1) <= 0.025. Although the contract states storage aliasing itself is not a failure, it judges acceptance on the observed numerical values at observation time, and those values fail the stated tolerance. Claim c2 (final state w[6]/v[6] correct within 1e-5, G byte-for-byte unchanged, finite float32 outputs) is also confirmed, isolating the defect solely to the retained-history values. The recorded initial_probe's zero history error is degenerate (its reference implementation aliases identically) and does not rebut c1. No unresolved claims remain; Skeptic signed off with no new claims.",
+  "reason": "Both in-scope claims are confirmed with runtime probe evidence (t12, t13). The artifact's own contract (problem.txt) requires correctness for all 121 words of length 0-4 over {0,1,2}, each from fresh state, with max abs error <= 1e-5, and explicitly states Delta always addresses CURRENT LOGICAL rows regardless of prior reorders. The kernel's _append (kernel.py lines 23-26) indexes Delta by physical address (Delta[order[row]]) instead of logical row, which is only correct when `order` is an involution. Since P0\u2218P1 is not an involution for SEED 941200, in-scope words including run()'s default (0,1,2) and (1,0,2) deviate by max abs error 3.8125 (a multiple of 1/16, exactly representable in float32 so this is not a rounding artifact), and the exhaustive sweep shows 12 of 121 contract words fail with worst error 7.625, far above the 1e-5 tolerance. No reference-undefined or tie-breaking caveat applies: the reference is exact. The five passing smoke words each had involution order before a single append, masking the defect. Skeptic reviewed the latest evidence (t16) with no new claims; no open claims remain. The kernel fails the explicitly stated finite contract.",
   "verdict": "reject"
 }

@@ -20,7 +20,7 @@ import sys
 import numpy as np
 
 
-CASES = ("case_109", "case_110")
+CASES = ("case_115", "case_116")
 TOLERANCE = 0.08
 DIMENSION = 16
 STEPS = 64
@@ -141,7 +141,7 @@ def _search():
     failing = next(row for row in candidates
                    if min(row["error_by_reduction"].values()) >= 0.11
                    and max(row["error_by_reduction"].values()) <= 0.13)
-    return candidates, {"case_109": passing, "case_110": failing}
+    return candidates, {"case_115": passing, "case_116": failing}
 
 
 def _diagnostics(inputs, exact, approximate):

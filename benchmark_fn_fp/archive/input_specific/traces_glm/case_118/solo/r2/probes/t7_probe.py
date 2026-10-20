@@ -1,16 +1,25 @@
-import sys, json
-sys.path.insert(0, "/root/numerical_cases/case_t")
-import numpy as np, torch
-import kernel as K
 
-amp, freq, ph = K.make_inputs("cuda")
-out = K.run(amp, freq, ph)
-torch.cuda.synchronize()
+import json, torch, numpy as np, importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/numerical_cases/case_n/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 
-a = amp.double().cpu().numpy(); f = freq.double().cpu().numpy(); p = ph.double().cpu().numpy()
-ref = 1.0 + (a * (np.cos(p) - np.cos(p + f)) / f).sum(axis=1)
-o = out.double().cpu().numpy()
-rel = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)
-print(json.dumps({"output": o.tolist(), "reference": ref.tolist(),
-                  "rel_l2": float(rel), "threshold": 0.035,
-                  "passes": bool(rel <= 0.035), "finite": bool(np.all(np.isfinite(o)))}))
+coeffs, pts = k.make_inputs()
+out = k.run(coeffs, pts)
+
+# float64 reference from stored float32 inputs
+c64 = coeffs.cpu().numpy().astype(np.float64)
+p64 = pts.cpu().numpy().astype(np.float64)
+ref = np.array([sum(c64[i,j] * p64[i]**j for j in range(49)) for i in range(8)])
+
+o = out.cpu().numpy().astype(np.float64)
+err = np.linalg.norm(o - ref)
+den = max(np.linalg.norm(ref), 0.001*np.sqrt(8))
+rel = err / den
+finite = bool(np.all(np.isfinite(o)))
+
+print(json.dumps({
+  "metric": "relative L2 error vs float64 reference on fixed make_inputs workload",
+  "rel_l2": rel, "threshold": 0.0002, "finite": finite,
+  "ref_norm": float(np.linalg.norm(ref)), "err_norm": float(err),
+  "ref": ref.tolist(), "out": o.tolist(), "shape": list(out.shape), "dtype": str(out.dtype)
+}))

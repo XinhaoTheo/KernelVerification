@@ -1,16 +1,34 @@
-import numpy as np, json, sys
-sys.path.insert(0, '/root/evidence_cases/case_e17')
-import kernel
+import numpy as np, torch, itertools
+import importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/evidence_cases/case_e11/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+smoke, W, b, c = k.make_inputs_numpy()
+Wd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)
+print("W=", W); print("b=", b); print("l1=", np.abs(Wd).sum(1))
 
-x, = kernel.make_inputs()
-before = x.clone()
-out = kernel.run(x)
-vals = before.cpu().numpy().astype(np.float64)
-target = vals.sum(axis=1)  # float64; exact enough for these values
-# exact check with integer-free mathlib: also use Kahan on float64 (identical here)
-actual = out.cpu().numpy().astype(np.float64)
-rel = float(np.linalg.norm(actual-target)/max(np.linalg.norm(target),1e-12))
-structural = (tuple(out.shape)==(4,) and out.dtype==torch.float32 if False else True)
-import torch
-structural = tuple(out.shape)==(4,) and out.dtype==torch.float32 and bool(np.isfinite(actual).all()) and bool(torch.equal(x,before))
-print(json.dumps({"target":target.tolist(),"output":actual.tolist(),"relative_error":rel,"tolerance":1e-5,"structural":structural,"passed":bool(structural and rel<=1e-5)}))
+def residual(x):  # x (n,12) float32
+    x64 = x.astype(np.float64)
+    return (np.maximum(x64 @ Wd.T - bd, 0) * cd).sum(1)
+
+# candidate adversarial inputs
+cands = []
+for j in range(6):  # aligned to each neuron
+    cands.append(np.sign(Wd[j])[None, :])
+rng = np.random.default_rng(0)
+cands.append(rng.uniform(-1,1,(4096,12)))
+cands.append(rng.choice([-1.,1.],(4096,12)))
+# greedy per-coordinate: coordinate maximize sum_j c_j relu(W[j]x-b[j]) is convex; try sign of each neuron and convex combos
+cands.append(np.sign(Wd.sum(0))[None,:])
+X = np.concatenate([np.clip(a,-1,1).astype(np.float32) for a in cands])
+r = residual(X)
+i = int(np.argmax(r))
+print("max residual", r.max(), "at x=", X[i])
+# also confirm on GPU kernel output error for best x
+best = np.tile(X[i],(1,1))
+xb, wb, bb, cb = [torch.from_numpy(v).to("cuda") for v in (best, W, b, c)]
+actual = k.run(xb, wb, bb, cb)
+x64 = torch.from_numpy(best).double().cuda()
+expected = 0.25*x64[:,0]+0.5*x64[:,1] + torch.relu(x64@torch.from_numpy(Wd).cuda().T - torch.from_numpy(bd).cuda()) @ torch.from_numpy(cd).cuda()
+print("kernel output", actual.item(), "expected", expected.item(), "abs err", abs(actual.item()-expected.item()))
+import json
+print(json.dumps({"max_residual": float(r.max()), "kernel_abs_err_at_best": abs(actual.item()-expected.item())}))

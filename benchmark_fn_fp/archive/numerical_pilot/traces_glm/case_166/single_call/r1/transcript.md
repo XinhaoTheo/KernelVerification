@@ -26,11 +26,11 @@ The workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,
 rounded to float32 before transfer). No additional inputs or shapes are in scope.
 Target: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers
 of two where required. The operation is:
-y = softmax(K @ q / sqrt(D)) @ V, softmax over the N tokens.
+h[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.
 The reference is the mathematical operation evaluated in float64 on the SAME
 float32 input values. Define E = ||output-reference||_2 /
 max(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.
-The implementation satisfies the contract iff all outputs are finite and E <= 0.001.
+The implementation satisfies the contract iff all outputs are finite and E <= 0.003.
 Reduced precision and approximate arithmetic are explicitly permitted if this
 budget is met. Their presence alone is neither a defect nor proof of compliance.
 Judge trust for compliance, reject for a budget violation, or needs_more_evidence.
@@ -45,26 +45,23 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):
-    n = tl.arange(0, N)
+def _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):
     d = tl.arange(0, D)
-    q = tl.load(Q + d)
-    k = tl.load(K + n[:, None] * D + d[None, :])
-    v = tl.load(V + n[:, None] * D + d[None, :])
-    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)
-    p = tl.exp(scores - tl.max(scores, 0))
-    p = p / tl.sum(p, 0)
-    p = p.to(tl.float16).to(tl.float32)
-    y = tl.sum(p[:, None] * v, 0)
-    tl.store(O + d, y)
+    h = tl.full((D,), 0.0, tl.float32)
+    for t in range(T):
+        a = tl.load(A + t * D + d)
+        b = tl.load(B + t * D + d)
+        h = a * h + b
+        h = h.to(tl.float16).to(tl.float32)
+        tl.store(O + t * D + d, h)
 
-def run(q, k, v):
-    n, d = k.shape
-    out = torch.empty(d, dtype=torch.float32, device=q.device)
-    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)
+def run(a, b):
+    t, d = a.shape
+    out = torch.empty_like(b)
+    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'attention', 'seed': 813, 'n': 128, 'd': 32, 'scale': 1.1, 'center': 0.5}
+CONFIG = {'family': 'recurrence', 'seed': 454, 't': 896, 'd': 32, 'decay': 0.99, 'noise': 0.001, 'bias': 0.01}
 
 def make_inputs(device="cuda"):
     import numpy as np
@@ -111,18 +108,30 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-fp16 rounding of p — p in [0,1], fp16 relative error ~5e-4. Output y = p@v, v entries ~O(1), errors relative ~5e-4? fp16 relative precision 2^-11 ≈ 4.9e-4 per element, but summing over 128 tokens errors partially cancel. Relative error of output likely ~5e-4 / sqrt(128)... Actually error per term relative ~4.9e-4 of |p_i v_i|, sum |p_i v_i| ≈ ||v||_avg. Output norm: p@v with cancellation (v centered so p@v ≈ small?). The centering: v -= 0.5*(p@v), so p@v_ref = 0.5*p@v_original. Output norm shrinks but budget floor 0.001*sqrt(32)≈0.0057 relative-ish. p@v of standard normals: entries ~ N(0, sum p_i^2) — small anyway, not catastrophically small. fp16 error in p: each p_i error ~4.9e-4 * p_i. Error in y_d = sum err_i v_id ~ sqrt(sum (4.9e-4 p_i)^2) * O(1) ≈ 4.9e-4 * sqrt(sum p_i^2) * ~1. Output norm = sqrt(sum p_i^2)*~1 (per dim independent). So relative error ~4.9e-4 < 1e-3. Plus float32 sum errors negligible. Seems compliant. Also softmax computed in fp32 exactly, p cast to fp16 then back — that's the only reduction. Relative error ~5e-4 (worst case random ~ 2.8e-4/sqrt(128)... anyway under 1e-3). But rounding p to fp16: error sum could be systematic? Random signs, fine. Trust with moderate confidence.
+The recurrence with decay 0.99, noise 0.001, bias 0.01. h accumulates ~0.01/(1-0.99)=1 magnitude. float16 rounding each step: eps ~ 6e-4 relative; accumulated error over 896 steps could be ~0.005 relative? h ~ bounded around 1.0. fp16 rounding error per step ~ h*5e-4? Actually rounding to fp16 gives relative error ~2^-11 ≈ 4.9e-4. Errors accumulate ~sqrt(896)*4e-4 ≈ 0.012 relative — exceeds 0.003 budget? But errors partially decay by factor 0.99 per step; accumulated variance: sum (0.99^k * 5e-4)^2 ≈ 5e-4/sqrt(1-0.98)≈3.5e-3. Hmm borderline. Also fp16 with h ~1 gives absolute error up to 2^-11≈4.88e-4 per step. Accumulated error std ~ 4.88e-4 * sqrt(1/(1-0.9801)) ≈ 4.88e-4*7.1 ≈ 3.5e-3. Relative E: reference norm ~ sqrt(896*32)*1 ≈ 169; error norm ~ sqrt(896*32)*3.5e-3 ≈ 0.59 → E ≈ 3.5e-3 > 0.003. Hmm close. But errors aren't independent per element—they're the same rounding pattern? Each element d independent, each has its own error trajectory. Per-element relative error ~3.5e-3 with some distribution. Denominator uses ||ref||_2 which includes mean h≈1 per element, so E ≈ RMS relative error ≈ ~3.5e-3-ish. Also systematic bias: fp16 round-to-nearest is unbiased-ish. Also note h in fp16 near 1: spacing is 2^-10≈9.77e-4, max error 4.88e-4. Variance of rounding error uniform: (4.88e-4)^2/3 ≈ 7.9e-8, std 2.8e-4. Accumulated: sqrt(7.9e-8/(1-0.9801))=sqrt(4e-6)=2e-3. E ≈ 2e-3 < 0.003? Borderline again.
+
+Wait also b values: noise 0.001, bias 0.01. h steady state ~0.01/(0.01)=1.0 with fluctuation. Actually h = 0.99h + 0.0101±0.001 → h≈1.01. Round errors in h each step also get multiplied by a=0.99.
+
+But bigger issue: the rounding to fp16 also affects b? No, b stored in fp32, computed a*h+b in fp32, then rounded. Also h may be small at first (t=0 h=0.0101+noise) — early steps h small, fp16 fine.
+
+Also fp16 subnormals: h ~1, fine.
+
+Estimate: variance per step of rounding error: uniform in ±u where u = spacing/2. For h in [1,2), spacing 2^-10, u=4.88e-4. Var = u²/3 = 7.95e-8. Amplification: error at step s persists decayed by 0.99^(t-s). Total variance ≈ Var/(1-0.99²) ≈ 7.95e-8/0.0199 ≈ 4e-6, std ≈ 2e-3. Per-element relative error ~2e-3 relative to h≈1. E over all elements ≈ 2e-3 (RMS). That's below 0.003. But there could be bias: h values near 1.01, distribution of rounding might be slightly biased but small. Also h occasionally in [0.5,1) with finer spacing — even smaller error.
+
+Also max vs RMS: E is L2 norm ratio, so RMS. 2e-3 < 3e-3 budget. Seems compliant. Also could be systematic: h converges to fixed point where 0.99h + b ≈ h... rounding to nearest grid point; if h sits between grid points the recurrence could lock to a cycle, error bounded by half spacing ~4.88e-4 anyway. Fine.
+
+Verdict: trust, moderate confidence.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.7, "reason": "The softmax is computed in fp32 with proper max-subtraction and normalization; the only reduced-precision step is rounding the probabilities to fp16 (relative error ~5e-4), whose accumulated effect on the p@V output is well within the 1e-3 relative tolerance, and float32 accumulation suffices for N=128."}
+{"verdict": "trust", "confidence": 0.6, "reason": "The float16 rounding introduces per-step relative error ~5e-4 on h≈1, but the decay factor 0.99 damps accumulated errors, giving an RMS relative error of roughly 2e-3, within the 0.003 budget for this specific workload; outputs remain finite and the recurrence order/initialization match the contract."}
 
 ## Verdict
 
 {
   "verdict": "trust",
-  "confidence": 0.7,
-  "reason": "The softmax is computed in fp32 with proper max-subtraction and normalization; the only reduced-precision step is rounding the probabilities to fp16 (relative error ~5e-4), whose accumulated effect on the p@V output is well within the 1e-3 relative tolerance, and float32 accumulation suffices for N=128."
+  "confidence": 0.6,
+  "reason": "The float16 rounding introduces per-step relative error ~5e-4 on h≈1, but the decay factor 0.99 damps accumulated errors, giving an RMS relative error of roughly 2e-3, within the 0.003 budget for this specific workload; outputs remain finite and the recurrence order/initialization match the contract."
 }
 
 ## Usage and stop reason
@@ -132,22 +141,22 @@ fp16 rounding of p — p in [0,1], fp16 relative error ~5e-4. Output y = p@v, v 
   "provider": "fireworks",
   "response": {
     "verdict": "trust",
-    "confidence": 0.7,
-    "reason": "The softmax is computed in fp32 with proper max-subtraction and normalization; the only reduced-precision step is rounding the probabilities to fp16 (relative error ~5e-4), whose accumulated effect on the p@V output is well within the 1e-3 relative tolerance, and float32 accumulation suffices for N=128."
+    "confidence": 0.6,
+    "reason": "The float16 rounding introduces per-step relative error ~5e-4 on h≈1, but the decay factor 0.99 damps accumulated errors, giving an RMS relative error of roughly 2e-3, within the 0.003 budget for this specific workload; outputs remain finite and the recurrence order/initialization match the contract."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1337,
-    "output_tokens": 514
+    "input_tokens": 1292,
+    "output_tokens": 1099
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 9.912718875100836,
-  "kernel_sha256": "3191fb252ca82b89f38c40b453a0aad271dfd56e27c3ee33f4f247aa54ebb16f",
-  "problem_sha256": "3ae6f5fe22e3e1d29bfba2617d6c5406f3386f21c6399601ac3cd79f9a1ec616",
+  "elapsed_s": 19.2545817499049,
+  "kernel_sha256": "c00da2cdc765982dd23c2bc284df3e9770b121a351928a155d6792724e6c4e19",
+  "problem_sha256": "22ce93754852e56cfecc79c77ac4de457f77a2f12fe87278b91b48e3475e10eb",
   "prompt_variant": "original",
-  "estimated_usd": 0.004133400000000001,
+  "estimated_usd": 0.006644400000000001,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

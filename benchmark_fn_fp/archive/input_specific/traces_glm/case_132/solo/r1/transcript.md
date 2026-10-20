@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e08`
+- Entry: `case_e02`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 29.142s across 5 calls | tokens: in=66345 out=1575 total=67920
+- LLM time: 27.684s across 5 calls | tokens: in=66660 out=1757 total=68417
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.98
@@ -25,139 +25,115 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e08",
+    "entry": "case_e02",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e08"
+    "entry": "case_e02"
   }
 
-### Turn 2 - `solo` (6.044189823s, in=9515 out=339)
+### Turn 2 - `solo` (4.773438033s, in=9986 out=343)
 
 Message:
 
 ```text
-The kernel sorts columns by per-view anchor magnitudes — a view-dependent transform, which the contract forbids. The initial probe only checked per-view fits. I'll record the claim and test shared-transform error E directly.
+I'll verify the kernel's output against a true float64 reference (the initial_probe's reference itself used float32 accumulation, which the contract says is insufficient). Recording the claim first, then running a decisive probe.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel derives slot and sign from each view's own anchors, so view 0 and view 1 can apply different permutations/signs; the contract requires a single p,s across both views. The initial probe only measured per-view best fits, which can pass even when no shared transform exists.",
+    "rationale": "The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias rather than prove contract satisfaction.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "E = min over shared p,s of ||output - s[k]*features[v,r,p[k]]||_F / ||features||_F, with 'The same p and s must be used for every view and every row' and E <= 0.05 required."
+        "summary": "All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05."
       }
     ],
-    "scope_rationale": "Contract requires one shared signed permutation p,s across both views and all rows; kernel's transform depends on per-view anchors.",
-    "statement": "The kernel applies a view-dependent sig
-  ...[truncated 147 chars]
+    "statement": "run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a floa
+  ...[truncated 37 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 3 - `solo` (5.928296102s, in=10671 out=320)
+
+Message:
+
+```text
+The prior record_claim failed because it lacked scope_rationale. I'll re-record the claim correctly, with the scope rationale tying it to the float64-reference tolerance requirement in the contract.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05."
+      }
+    ],
+    "scope_rationale": "The contract requires the output to match the prediction comput
+  ...[truncated 369 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel derives slot and sign from each view's own anchors, so view 0 and view 1 can apply different permutations/signs; the contract requires a single p,s across both views. The initial probe only measured per-view best fits, which can pass even when no shared transform exists.",
+    "rationale": "The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "E = min over shared p,s of ||output - s[k]*features[v,r,p[k]]||_F / ||features||_F, with 'The same p and s must be used for every view and every row' and E <= 0.05 required."
+        "summary": "All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05."
       }
     ],
-    "scope_rationale": "Contract requires one shared signed permutation p,s across both views and all rows; kernel's transform depends on per-view anchors.",
-    "statement": "The kernel applies a view-dependent signed permutation, so the shared-transform error E (min over one p,s for both views, all 8 rows) exceeds the 0.05 tolerance on the fixed workload.",
-    "status": "open"
-  }
+    "scope_rationale": "The contract requires the output to match the prediction computed with float64-or-better accuracy on the fixed make_inputs() workload within relative error 0.05; a failure against a float64 reference on that exact workload violates this requirement.",
+    "statement": "run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.",
+    "status": "open
+  ...[truncated 3 chars]
 
-### Turn 3 - `solo` (5.805552604999999s, in=10759 out=315)
+### Turn 4 - `solo` (5.374796700999999s, in=12041 out=348)
 
 Message:
 
 ```text
-I'll run the decisive probe: compute the contract's E (min over shared p,s across both views) on the actual fixed workload.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t6 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "import itertools, numpy as np, torch, sys\nsys.path.insert(0, '/root/evidence_cases/case_e08')\nimport kernel\n\nf, a = kernel.make_inputs()\nbefore = (f.clone(), a.clone())\nout = kernel.run(f, a)\nx = f.double().cpu().numpy()\ny = out.double().cpu().numpy()\nbest = float('inf'); best_t=None\nfor p in itertools.permutations(range(4)):\n    for s in itertools.product((-1,1), repeat=4):\n        expected = x[:, :, list(p)] * np.asarray(s)\n        err = np.linalg.norm(y-expected)/max(np.linalg.norm(x),1e-12)\n        if err < best:\n            best = float(err); best_t=(p,s)\nprint({metric:'E_shared', value:best, best_transform:str(best_t),\n       tolerance:0.05, passed:best<=0.05,\n       'per_view_transforms_differ': True,\n       'finite': bool(np.all(n
-  ...[truncated 199 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "05678e1990e9ec033684f5640a15d0cf151271aa7dbca412d9074e9e61169198"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
-        "sha256": "101f2b2c13c2be813b18e23f25a02e52b48231dec36b06c937c379335bc582f4"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "The kernel applies a view-dependent signed permutation, so the shared-transform error E (min over one p,s for both views, all 8 rows) exceeds the 0.05 tolerance on the fixed workload.",
-    "duration_s": 7.022348,
-    "event_id": "t6",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t6_probe.p
-  ...[truncated 1822 chars]
-
-### Turn 4 - `solo` (6.106984542000003s, in=12588 out=333)
-
-Message:
-
-```text
-The probe failed on a quoting bug (`metric` wasn't a string key). Rerunning with fixed syntax.
+I'll run the decisive probe: compute the contract's float64-accurate reference on the exact make_inputs() workload and compare against the kernel output.
 ```
 
 Tool calls:
@@ -166,8 +142,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import itertools, numpy as np, torch, sys, json\nsys.path.insert(0, '/root/evidence_cases/case_e08')\nimport kernel\n\nf, a = kernel.make_inputs()\nbefore = (f.clone(), a.clone())\nout = kernel.run(f, a)\nx = f.double().cpu().numpy()\ny = out.double().cpu().numpy()\nbest = float('inf'); best_t=None\nfor p in itertools.permutations(range(4)):\n    for s in itertools.product((-1,1), repeat=4):\n        expected = x[:, :, list(p)] * np.asarray(s)\n        err = np.linalg.norm(y-expected)/max(np.linalg.norm(x),1e-12)\n        if err < best:\n            best = float(err); best_t=(list(p),list(s))\nprint(json.dumps({\"metric\":\"E_shared_over_384_transforms\",\"E\":best,\"best_transform\":best_t,\n  \"tolerance\":0.05,\"passed\":best<=0.05,\n  \"finite\":bool(np
-  ...[truncated 197 chars]
+    "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/evidence_cases/case_e02\")\nimport kernel\n\nx, y, q = kernel.make_inputs()\nout = kernel.run(x, y, q)\n\n# float64 reference over the stored float32 inputs\nX = x.double().cpu().numpy(); Y = y.double().cpu().numpy(); Q = q.double().cpu().numpy()\nmux = X.mean(axis=0); muy = Y.mean()\nXc = X - mux; yc = Y - muy\nlam = 1.0/1024\nA = Xc.T @ Xc / 32.0 + lam*np.eye(2)\nrhs = Xc.T @ yc / 32.0\nbeta = np.linalg.solve(A, rhs)\npred = muy + (Q - mux) @ beta\ndiff = out.double().cpu().numpy() - pred\nrel = np.linalg.norm(diff) / max(np.linalg.norm(pred), 0.1)\nprint(json.dumps({\"output\": out.cpu().tolist(), \"f64_reference\": pred.tolist(),\n                  \"beta\": beta.tolist(), \"rel_error\": f
+  ...[truncated 236 chars]
   Output summary:
   {
     "artifacts": [
@@ -175,13 +151,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "6734b24df8e26a874f5edd1ada9054326b276a53c950c4b7f6506c32151be2ab"
+        "sha256": "62d356f76d41f2378962692ca4fb2be2faa6b3887381f763d62619abef089c2a"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "7646ef4edb2c3d9e618366ad114a861c4b406f7236580cb0e93a3770dc3b0c06"
+        "sha256": "932cd6eec48c1686887c6df5e1c4bd9c6180cea559eecb2ec8af913a972d6a35"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -193,21 +169,22 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t7_json_result.json",
-        "sha256": "ff668ade2281debee1dce27167443cd0745344ceff2bad1c6bfe2ffe4dd6f521"
+        "sha256": "2c99e71a9158975d1b583c82aef4113dd737a2830f6a9f30d18c18f80942bbf2"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel applies a view-dependent signed permutation, so the shared-transform error E (min over one p,s for both views, all 8 rows) exceeds the 0.05 tolerance on the fixed workload.",
-    "duration_s": 6.252308,
-   
-  ...[truncated 3145 chars]
+    "claim_statement": "run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.",
+    "duration_s": 6.757074,
+    "event_id": "t7",
+    "
+  ...[truncated 3447 chars]
 
-### Turn 5 - `solo` (5.971289308999999s, in=14897 out=285)
+### Turn 5 - `solo` (5.227867343s, in=14743 out=382)
 
 Message:
 
 ```text
-The decisive probe ran: the shared-transform error E over all 384 shared signed permutations is 0.832, far above the 0.05 tolerance, while per-view fits are perfect — exactly the view-dependent transform defect. I'll finalize the evidence and verdict.
+The probe (t7) showed the kernel output deviates from the float64 reference by ~25.6% relative error on the exact contract workload — well over the 0.05 tolerance. The initial_probe's 0.0 error was indeed an artifact of comparing against a float32 reference with the same accumulation order (catastrophic cancellation in E[x²]−mean² with x≈32). I'll record the evidence and reject.
 ```
 
 Tool calls:
@@ -216,28 +193,24 @@ Tool calls:
   Args:
   {
     "data": {
-      "E": 0.8316711011500714,
-      "best_transform": [
-        [
-          1,
-          2,
-          0
-        ],
-        [
-          1,
-          -1,
-          -1,
-          -1
-        ]
+      "beta_f64": [
+        0.7097992046560915,
+        -0.9074404433080981
       ],
       "finite": true,
-      "inputs_unmodified": true,
+      "output": [
+        -0.13965053856372833,
+        0.028182610869407654,
+        0.13553990423679352,
+        -0.032625481486320496
+      ],
       "passed": false,
+      "rel_error": 0.255847958607997,
       "tolerance": 0.05
     },
     "event_id": "t7",
     "status": "confirmed",
-    "summary": "On the fixed workload, min over all 384 shared (p,s) transforms of ||output - s[k]*features[:,:,p[k]]||_F / ||features||_F is E = 0.8317, far above the 0.05 tolerance; output is finite float32 (2,8,4) and inputs unmodified. Per-view fits were perfect (initial probe), confirming the kernel applies view-dependent transforms, which the contract forbids.",
+    "summary": "On the contract's exact make_inputs() workload, run() output differs from the float64-accurate reference prediction with relative error 0.256, far exceeding the 0.05 tolerance. The initial_probe's 0.0 error was an artifact of a float32 reference sharing the kernel's cancellation-prone accumulation (E[x^2]-mu^2 with x~32 in float32).",
     "supports": "confirmed"
   }
   Output summary:
@@ -245,17 +218,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed workload, min over all 384 shared (p,s) transforms of ||output - s[k]*features[:,:,p[k]]||_F / ||features||_F is E = 0.8317, far above the 0.05 tolerance; output is finite float32 (2,8,4) and inputs unmodified. Per-view fits were perfect (initial probe), confirming the kernel applies view-dependent transforms, which the contract forbids.",
+    "summary": "On the contract's exact make_inputs() workload, run() output differs from the float64-accurate reference prediction with relative error 0.256, far exceeding the 0.05 tolerance. The initial_probe's 0.0 error was an artifact of a float32 reference sharing the kernel's cancellation-prone accumulation (E[x^2]-mu^2 with x~32 in float32).",
     "supports": "confirmed",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (5.213650051000002s, in=18586 out=303)
+### Turn 6 - `solo` (6.379911934000003s, in=19219 out=364)
 
 Message:
 
 ```text
-The decisive claim is confirmed and resolved: the kernel uses per-view anchor magnitudes to pick slot and sign, producing a view-dependent transform, while the contract requires one shared signed permutation. The measured contract metric E over all 384 shared transforms is 0.832, far above the 0.05 tolerance on the fixed workload. I'll record the reject verdict.
+The confirmed claim c1 is in-scope and decisive: the kernel's float32 accumulation suffers catastrophic cancellation computing covariance from E[x²]−mean² with x≈32, producing ~25.6% relative error versus the contract's float64-accurate prediction on the exact fixed workload. Recording the final verdict.
 ```
 
 Tool calls:
@@ -267,15 +240,15 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Kernel source derives each view's column slot and sign from that view's own anchors (kernel.py lines 10-23), making the transform view-dependent. Probe t7 on the exact fixed workload (kernel.make_inputs()) computed the contract's E as the minimum over all 384 shared signed permutations applied to both views and all 8 rows in float64: E = 0.8317, far above the required E <= 0.05 (contract: 'The same p and s must be used for every view and every row'). Output was finite float32 of shape (2,8,4) and inputs were unmodified, so the sole violation is the forbidden view-dependent transform. The bundled initial_probe passed only because it checked per-view best fits (0.0 error each with different per-view transforms), which 
-  ...[truncated 53 chars]
+    "reason": "Probe t7 ran the contract's exact make_inputs() workload and compared kernel.run() output against a float64-accurate reference prediction (numpy.linalg.solve on the centered ridge system, lambda=1/1024). Result: output [-0.1397, 0.0282, 0.1355, -0.0326] vs reference [-0.1158, 0.0360, 0.1042, -0.0469], relative error 0.2558 >> 0.05 tolerance, while output remained finite and correctly shaped. Root cause: the kernel computes covariance entries in float32 as E[x^2]-mean^2 with x values around \u00b132, where catastrophic cancellation (values ~1024 minus squares of means ~1024, true covariance ~0.004) destroys precision; initial_probe's reported 0.0 error is an artifact because its reference used the same cancellation-pr
+  ...[truncated 249 chars]
   Output summary:
   {
     "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Kernel source derives each view's column slot and sign from that view's own anchors (kernel.py lines 10-23), making the transform view-dependent. Probe t7 on the exact fixed workload (kernel.make_inputs()) computed the contract's E as the minimum over all 384 shared signed permutations applied to both views and all 8 rows in float64: E = 0.8317, far above the required E <= 0.05 (contract: 'The same p and s must be used for every view and every row'). Output was finite float32 of shape (2,8,4) and inputs were unmodified, so the sole violation is the forbidden view-dependent transform. The bundled initial_probe passed only because it checked per-view best fits (0.0 error each with different per-view transforms), which is not the contract metric.",
+    "reason": "Probe t7 ran the contract's exact make_inputs() workload and compared kernel.run() output against a float64-accurate reference prediction (numpy.linalg.solve on the centered ridge system, lambda=1/1024). Result: output [-0.1397, 0.0282, 0.1355, -0.0326] vs reference [-0.1158, 0.0360, 0.1042, -0.0469], relative error 0.2558 >> 0.05 tolerance, while output remained finite and correctly shaped. Root cause: the kernel computes covariance entries in float32 as E[x^2]-mean^2 with x values around \u00b132, where catastrophic cancellation (values ~1024 minus squares of means ~1024, true covariance ~0.004) destroys precision; initial_probe's reported 0.0 error is an artifact because its reference used the same cancellation-prone float32 accumulation. The contract explicitly requires target arithmetic evaluated in float64 or more accurately and the 0.05 relative-error bound, so this is an in-scope violation (claim c1, confirmed, evidence c1.e1).",
     "verdict": "reject"
   }
 
@@ -287,120 +260,69 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel applies a view-dependent signed permutation, so the shared-transform error E (min over one p,s for both views, all 8 rows) exceeds the 0.05 tolerance on the fixed workload.
+Statement: run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.
 
 Scope: `in_scope`
 
-Scope rationale: Contract requires one shared signed permutation p,s across both views and all rows; kernel's transform depends on per-view anchors.
+Scope rationale: The contract requires the output to match the prediction computed with float64-or-better accuracy on the fixed make_inputs() workload within relative error 0.05; a failure against a float64 reference on that exact workload violates this requirement.
 
 Scope evidence:
-- `problem.txt`: E = min over shared p,s of ||output - s[k]*features[v,r,p[k]]||_F / ||features||_F, with 'The same p and s must be used for every view and every row' and E <= 0.05 required.
+- `problem.txt`: All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05.
 
-Rationale: The kernel derives slot and sign from each view's own anchors, so view 0 and view 1 can apply different permutations/signs; the contract requires a single p,s across both views. The initial probe only measured per-view best fits, which can pass even when no shared transform exists.
+Rationale: The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: On the fixed workload, min over all 384 shared (p,s) transforms of ||output - s[k]*features[:,:,p[k]]||_F / ||features||_F is E = 0.8317, far above the 0.05 tolerance; output is finite float32 (2,8,4) and inputs unmodified. Per-view fits were perfect (initial probe), confirming the kernel applies view-dependent transforms, which the contract forbids.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: On the contract's exact make_inputs() workload, run() output differs from the float64-accurate reference prediction with relative error 0.256, far exceeding the 0.05 tolerance. The initial_probe's 0.0 error was an artifact of a float32 reference sharing the kernel's cancellation-prone accumulation (E[x^2]-mu^2 with x~32 in float32).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e08"
+  "entry": "case_e02"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel derives slot and sign from each view's own anchors, so view 0 and view 1 can apply different permutations/signs; the contract requires a single p,s across both views. The initial probe only measured per-view best fits, which can pass even when no shared transform exists.",
+  "rationale": "The contract defines the target as float64 (or more accurate) arithmetic over the stored float32 inputs; initial_probe's reference recomputes statistics in float32 with the same accumulation order as the kernel, so its 0.0 error may hide a shared bias (e.g. catastrophic cancellation in E[x^2]-mu^2 with x~32) rather than prove contract satisfaction.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "E = min over shared p,s of ||output - s[k]*features[v,r,p[k]]||_F / ||features||_F, with 'The same p and s must be used for every view and every row' and E <= 0.05 required."
+      "summary": "All target arithmetic is over the actual stored float32 input values and is evaluated in float64 or more accurately; the implementation satisfies this fixed workload iff ||output-prediction||_2 / max(||prediction||_2, 0.1) <= 0.05."
     }
   ],
-  "scope_rationale": "Contract requires one shared signed permutation p,s across both views and all rows; kernel's transform depends on per-view anchors.",
-  "statement": "The kernel applies a view-dependent signed permutation, so the shared-transform error E (min over one p,s for both views, all 8 rows) exceeds the 0.05 tolerance on the fixed workload.",
+  "scope_rationale": "The contract requires the output to match the prediction computed with float64-or-better accuracy on the fixed make_inputs() workload within relative error 0.05; a failure against a float64 reference on that exact workload violates this requirement.",
+  "statement": "run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.",
   "status": "open"
 }
-
-### t6 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "05678e1990e9ec033684f5640a15d0cf151271aa7dbca412d9074e9e61169198"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
-      "sha256": "101f2b2c13c2be813b18e23f25a02e52b48231dec36b06c937c379335bc582f4"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "The kernel applies a view-dependent signed permutation, so the shared-transform error E (min over one p,s for both views, all 8 rows) exceeds the 0.05 tolerance on the fixed workload.",
-  "duration_s": 7.022348,
-  "event_id": "t6",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "05678e1990e9ec033684f5640a15d0cf151271aa7dbca412d9074e9e61169198"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
-          "sha256": "101f2b2c13c2be813b18e23f25a02e52b48231dec36b06c937c379335bc582f4"
-        }
-      ],
-      "duration_s": 7.022348,
-      "exit_code": 1,
-      "expected_signal": "E > 0.05",
-      "json_parse_error": "stdout has no non-empty lines",
-      "json_result": null,
-      "stderr": "Traceb
-...[truncated 1022 chars]
 
 ### t7 - run_claim_probe - ok
 
@@ -410,13 +332,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "6734b24df8e26a874f5edd1ada9054326b276a53c950c4b7f6506c32151be2ab"
+      "sha256": "62d356f76d41f2378962692ca4fb2be2faa6b3887381f763d62619abef089c2a"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "7646ef4edb2c3d9e618366ad114a861c4b406f7236580cb0e93a3770dc3b0c06"
+      "sha256": "932cd6eec48c1686887c6df5e1c4bd9c6180cea559eecb2ec8af913a972d6a35"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -428,12 +350,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t7_json_result.json",
-      "sha256": "ff668ade2281debee1dce27167443cd0745344ceff2bad1c6bfe2ffe4dd6f521"
+      "sha256": "2c99e71a9158975d1b583c82aef4113dd737a2830f6a9f30d18c18f80942bbf2"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel applies a view-dependent signed permutation, so the shared-transform error E (min over one p,s for both views, all 8 rows) exceeds the 0.05 tolerance on the fixed workload.",
-  "duration_s": 6.252308,
+  "claim_statement": "run() on the contract's fixed make_inputs() workload may violate the 0.05 relative-error tolerance when compared against a float64-accurate reference prediction.",
+  "duration_s": 6.757074,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -443,20 +365,20 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "6734b24df8e26a874f5edd1ada9054326b276a53c950c4b7f6506c32151be2ab"
+          "sha256": "62d356f76d41f2378962692ca4fb2be2faa6b3887381f763d62619abef089c2a"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "7646ef4edb2c3d9e618366ad114a861c4b406f7236580cb0e93a3770dc3b0c06"
+          "sha256": "932cd6eec48c1686887c6df5e1c4bd9c6180cea559eecb2ec8af913a972d6a35"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427
-...[truncated 2345 chars]
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b
+...[truncated 2647 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
@@ -464,7 +386,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed workload, min over all 384 shared (p,s) transforms of ||output - s[k]*features[:,:,p[k]]||_F / ||features||_F is E = 0.8317, far above the 0.05 tolerance; output is finite float32 (2,8,4) and inputs unmodified. Per-view fits were perfect (initial probe), confirming the kernel applies view-dependent transforms, which the contract forbids.",
+  "summary": "On the contract's exact make_inputs() workload, run() output differs from the float64-accurate reference prediction with relative error 0.256, far exceeding the 0.05 tolerance. The initial_probe's 0.0 error was an artifact of a float32 reference sharing the kernel's cancellation-prone accumulation (E[x^2]-mu^2 with x~32 in float32).",
   "supports": "confirmed",
   "tool_event_id": "t7"
 }
@@ -476,7 +398,7 @@ Evidence:
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Kernel source derives each view's column slot and sign from that view's own anchors (kernel.py lines 10-23), making the transform view-dependent. Probe t7 on the exact fixed workload (kernel.make_inputs()) computed the contract's E as the minimum over all 384 shared signed permutations applied to both views and all 8 rows in float64: E = 0.8317, far above the required E <= 0.05 (contract: 'The same p and s must be used for every view and every row'). Output was finite float32 of shape (2,8,4) and inputs were unmodified, so the sole violation is the forbidden view-dependent transform. The bundled initial_probe passed only because it checked per-view best fits (0.0 error each with different per-view transforms), which is not the contract metric.",
+  "reason": "Probe t7 ran the contract's exact make_inputs() workload and compared kernel.run() output against a float64-accurate reference prediction (numpy.linalg.solve on the centered ridge system, lambda=1/1024). Result: output [-0.1397, 0.0282, 0.1355, -0.0326] vs reference [-0.1158, 0.0360, 0.1042, -0.0469], relative error 0.2558 >> 0.05 tolerance, while output remained finite and correctly shaped. Root cause: the kernel computes covariance entries in float32 as E[x^2]-mean^2 with x values around \u00b132, where catastrophic cancellation (values ~1024 minus squares of means ~1024, true covariance ~0.004) destroys precision; initial_probe's reported 0.0 error is an artifact because its reference used the same cancellation-prone float32 accumulation. The contract explicitly requires target arithmetic evaluated in float64 or more accurately and the 0.05 relative-error bound, so this is an in-scope violation (claim c1, confirmed, evidence c1.e1).",
   "verdict": "reject"
 }
 
@@ -484,10 +406,10 @@ Evidence:
 
 {
   "confidence": 0.98,
-  "created_at": "2026-09-24T06:39:22Z",
+  "created_at": "2026-09-24T06:10:52Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Kernel source derives each view's column slot and sign from that view's own anchors (kernel.py lines 10-23), making the transform view-dependent. Probe t7 on the exact fixed workload (kernel.make_inputs()) computed the contract's E as the minimum over all 384 shared signed permutations applied to both views and all 8 rows in float64: E = 0.8317, far above the required E <= 0.05 (contract: 'The same p and s must be used for every view and every row'). Output was finite float32 of shape (2,8,4) and inputs were unmodified, so the sole violation is the forbidden view-dependent transform. The bundled initial_probe passed only because it checked per-view best fits (0.0 error each with different per-view transforms), which is not the contract metric.",
+  "reason": "Probe t7 ran the contract's exact make_inputs() workload and compared kernel.run() output against a float64-accurate reference prediction (numpy.linalg.solve on the centered ridge system, lambda=1/1024). Result: output [-0.1397, 0.0282, 0.1355, -0.0326] vs reference [-0.1158, 0.0360, 0.1042, -0.0469], relative error 0.2558 >> 0.05 tolerance, while output remained finite and correctly shaped. Root cause: the kernel computes covariance entries in float32 as E[x^2]-mean^2 with x values around \u00b132, where catastrophic cancellation (values ~1024 minus squares of means ~1024, true covariance ~0.004) destroys precision; initial_probe's reported 0.0 error is an artifact because its reference used the same cancellation-prone float32 accumulation. The contract explicitly requires target arithmetic evaluated in float64 or more accurately and the 0.05 relative-error bound, so this is an in-scope violation (claim c1, confirmed, evidence c1.e1).",
   "verdict": "reject"
 }

@@ -1,34 +1,35 @@
-
-import json
-import numpy as np
-import sys
-sys.path.insert(0, "/root/numerical_cases/case_l")
+import json, sys, torch, numpy as np
+sys.path.insert(0, "/root/numerical_cases/case_f")
 import kernel as K
 
-matrix, rhs = K.make_inputs_numpy()
-A32 = matrix.astype(np.float32)
-b32 = rhs.astype(np.float32)
+matrix, initial, drive = K.make_inputs("cuda")
 
-def iterate(A, b, dtype):
-    state = np.zeros(16, dtype=dtype)
-    A_ = A.astype(dtype); b_ = b.astype(dtype)
-    for _ in range(64):
-        residual = b_ - (A_ * state[None, :]).sum(axis=1, dtype=dtype)
-        state = state + residual
-    return state
+m64 = matrix.double().cpu().numpy()
+s64 = initial.double().cpu().numpy().astype(np.float64)
+d64 = drive.double().cpu().numpy().astype(np.float64)
+ref = s64.copy()
+for t in range(64):
+    ref = m64 @ ref + d64[t]
 
-x64 = iterate(matrix, rhs, np.float64)
-x32 = iterate(matrix, rhs, np.float32)
-x_exact = np.linalg.solve(matrix.astype(np.float64), rhs.astype(np.float64))
-denom = max(np.linalg.norm(x_exact), 0.001*np.sqrt(16))
+out = K.run(matrix, initial, drive).cpu().numpy()
+denom = max(np.linalg.norm(ref), 0.001*np.sqrt(16))
+rel = np.linalg.norm(out.astype(np.float64) - ref)/denom
 
-rel32_exact = np.linalg.norm(x32.astype(np.float64) - x_exact)/denom
-rel64_exact = np.linalg.norm(x64 - x_exact)/denom
-rounding_gap = abs(rel32_exact - rel64_exact)
-res = {"rel_fp32_iteration_vs_exact": float(rel32_exact),
-       "rel_fp64_iteration_vs_exact": float(rel64_exact),
-       "rounding_shift_abs": float(rounding_gap),
-       "fp32_rounding_meaningful": bool(rounding_gap > 0.005),
-       "tolerance": 0.08,
-       "note": "if fp64 64-step iteration is under tolerance but fp32 is over, c2 confirmed; otherwise rebutted"}
-print(json.dumps(res))
+# error decomposition: per-step fp16 rounding of intermediate states (source line 16)
+sim = s64.copy()
+for t in range(64):
+    nxt = m64 @ sim + d64[t]
+    sim = nxt.astype(np.float16).astype(np.float64)
+rel_sim = np.linalg.norm(sim - ref)/denom
+
+print(json.dumps({
+    "metric": "relative L2 vs float64 reference on fixed seeded workload",
+    "reason": "contract requires rel L2 <= 0.002 for run(*make_inputs())",
+    "rel_l2_kernel": float(rel),
+    "rel_l2_fp16_per_step_sim": float(rel_sim),
+    "tolerance": 0.002,
+    "ref_norm": float(np.linalg.norm(ref)),
+    "out_finite": bool(np.all(np.isfinite(out))),
+    "out_shape": list(out.shape),
+    "out_dtype": str(out.dtype)
+}))

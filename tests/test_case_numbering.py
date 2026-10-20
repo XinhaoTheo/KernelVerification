@@ -67,9 +67,10 @@ def test_private_validation_takes_precedence_over_stale_legacy_copy(tmp_path, da
     assert checked_case_hashes(tmp_path, dataset_name, "case_38") == hashes
 
 
-@pytest.mark.parametrize("existing_case", ["case_99", "case_100"])
-def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monkeypatch, existing_case):
+@pytest.mark.parametrize("case_index", [0, 1])
+def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monkeypatch, case_index):
     from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.correlation_pair import build
+    existing_case = build.CASE_IDS[case_index]
     dataset = tmp_path / "benchmark_fn_fp/single_call_vs_tools_challenges"
     monkeypatch.setattr(build, "ROOT", dataset)
     case = dataset.parent / "triton_eval_cases" / existing_case

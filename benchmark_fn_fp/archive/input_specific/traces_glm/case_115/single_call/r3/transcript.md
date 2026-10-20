@@ -21,24 +21,22 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Select a nearest candidate and return its embedding on a fixed workload.
+Solve the fixed symmetric positive definite linear system in kernel.py.
 
-Only make_inputs() supplies the inputs in scope: query is float32 of shape
-(32,), candidates is float32 of shape (16, 32), embeddings is float32 of shape
-(16, 8). For the reference, use the original supplied float32 coordinates
-without quantization. Compute squared Euclidean distances in float64:
-  d[i] = sum_j (candidates[i,j] - query[j])**2.
-Select the index with smallest d[i], breaking ties in favour of the smallest
-index. The reference output is embeddings[index, :].
+Only the float32 tensors returned by make_inputs() are in scope. matrix has
+shape (16,16), and rhs has shape (16,). The entire deterministic generator and
+its seed are public. The reference output is the unique solution x of
+  matrix @ x = rhs
+computed in float64 using the original supplied float32 values. The reference
+is the solution of the system, not the result of a finite iteration count.
 
-The kernel returns a finite vector of shape (8,). It satisfies the contract iff
-  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.1.
+The implementation may use an approximate solver. Its output must be a finite
+vector of shape (16,), with relative L2 error
+  ||output - x||_2 / max(||x||_2, 0.001*sqrt(16))
+at most 0.08. The target execution device is an NVIDIA T4.
 
-Decide whether this implementation meets the numerical contract for this fixed
-generated workload. Alternative queries, candidates and embeddings are outside
-the scope. The kernel's approximate route quantizes coordinates to a grid
-using floor(x*8+0.5)/8, then uses float32 squared distances and the same tie rule.
-The final embedding values are gathered without quantization.
+Decide whether run(*make_inputs()) satisfies this numerical contract for the
+specified workload. Alternative right-hand sides or matrices are outside scope.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -51,40 +49,40 @@ import triton.language as tl
 
 
 @triton.jit
-def _route_kernel(Query, Candidates, Embeddings, Output, N: tl.constexpr,
-                  D: tl.constexpr, E: tl.constexpr):
-    row = tl.arange(0, N)
-    distances = tl.full((N,), 0.0, tl.float32)
-    for j in tl.static_range(0, D):
-        query = tl.load(Query + j).to(tl.float32)
-        candidate = tl.load(Candidates + row * D + j).to(tl.float32)
-        query_q = tl.floor(query * 8.0 + 0.5) * 0.125
-        candidate_q = tl.floor(candidate * 8.0 + 0.5) * 0.125
-        delta = candidate_q - query_q
-        distances = distances + delta * delta
-    minimum = tl.min(distances, axis=0)
-    winner = tl.min(tl.where(distances == minimum, row, 2147483647), axis=0)
-    component = tl.arange(0, E)
-    result = tl.load(Embeddings + winner * E + component)
-    tl.store(Output + component, result)
+def _solve_kernel(Matrix, RHS, Output, N: tl.constexpr, STEPS: tl.constexpr):
+    i = tl.arange(0, N)
+    j = tl.arange(0, N)
+    matrix = tl.load(Matrix + i[:, None] * N + j[None, :]).to(tl.float32)
+    rhs = tl.load(RHS + i).to(tl.float32)
+    state = tl.full((N,), 0.0, tl.float32)
+    for step in range(STEPS):
+        residual = rhs - tl.sum(matrix * state[None, :], axis=1)
+        state = state + residual
+    tl.store(Output + i, state)
 
 
-def run(query, candidates, embeddings):
-    output = torch.empty((8,), device=query.device, dtype=torch.float32)
-    _route_kernel[(1,)](query, candidates, embeddings, output, N=16, D=32, E=8,
-                        num_warps=1, enable_fp_fusion=False)
+def run(matrix, rhs):
+    output = torch.empty((16,), device=matrix.device, dtype=torch.float32)
+    _solve_kernel[(1,)](matrix, rhs, output, N=16, STEPS=64,
+                       num_warps=4, enable_fp_fusion=False)
     return output
 
 
 def make_inputs_numpy():
-    rng = np.random.Generator(np.random.PCG64(840104))
-    query = rng.normal(0.0, 0.3, 32).astype(np.float32)
-    offsets = rng.normal(size=(16, 32))
-    offsets /= np.linalg.norm(offsets, axis=1, keepdims=True)
-    radii = 1.0 + rng.uniform(-0.002, 0.002, 16)
-    candidates = (query.astype(np.float64)[None, :] + offsets * radii[:, None]).astype(np.float32)
-    embeddings = rng.normal(size=(16, 8)).astype(np.float32)
-    return query, candidates, embeddings
+    orthogonal = np.array([[1.0]], dtype=np.float64)
+    while len(orthogonal) < 16:
+        orthogonal = np.block([[orthogonal, orthogonal], [orthogonal, -orthogonal]])
+    orthogonal /= 4.0
+    eigenvalues = np.array([0.03125, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75,
+                            0.875, 1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75],
+                           dtype=np.float64)
+    matrix = np.sum(orthogonal[:, :, None] * eigenvalues[None, :, None]
+                    * orthogonal.T[None, :, :], axis=1).astype(np.float32)
+    rng = np.random.Generator(np.random.PCG64(701010))
+    rhs = rng.normal(0.0, 1.0, 16).astype(np.float32)
+    norm = np.sqrt(np.sum(rhs.astype(np.float64) ** 2, dtype=np.float64))
+    rhs = (rhs.astype(np.float64) / norm).astype(np.float32)
+    return matrix, rhs
 
 
 def make_inputs(device="cuda"):
@@ -96,22 +94,32 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Quantization to 1/8 grid: candidates are query + unit offsets with radius ~1, coordinates ~N(0,0.3)±1. Quantizing both query and candidate to grid of 1/8 may cause many collisions or wrong winner. The question: is the resulting winner's embedding within 10% relative norm of reference? Embeddings are random N(0,1) 8-dim; different index gives totally different vector, error likely ~sqrt(2) relative > 0.1. So correctness hinges on whether quantized route picks the same index.
+Iteration: state += residual = Richardson iteration with step size 1 (no preconditioner). Converges if spectral radius of (I - A) < 1, i.e., eigenvalues of A in (0,2). Eigenvalues given: min 0.03125, max 1.75. So I - A eigenvalues: 1-λ, max |1-λ| = 1-0.03125 = 0.96875. Convergence rate 0.96875^64 ≈ e^(64·ln0.96875) = e^(-64·0.031749) = e^-2.032 ≈ 0.131. Error reduced ~×0.131 per component. Residual relative? Richardson error: x_k - x = (I-A)^k (x_0 - x). Initial error magnitude ~ ||x||. Relative error ~0.13 which exceeds 0.08? Hmm, but error components depend on eigenvector decomposition of -x. Worst case 0.131·||x||, but typical could be smaller. Also float32 accumulation errors: eigenvalue 0.03125 component converges slowly; other components converge fast. The smallest eigenvector (Hadamard first column, constant) — rhs is random normalized; its projection onto constant vector is some value. Eigenvalue 0.03125 → factor 0.96875^64 ≈ 0.131. Also eigenvalue 0.0625 → 0.9375^64 ≈ e^-4.06 ≈ 0.017. Others negligible.
 
-Candidates: query + offsets*radii, offsets unit-norm, radii≈1. Quantized: q grid points floor(x*8+0.5)/8. Delta per coordinate after quantization. Quantization error up to 1/16 per coordinate, and errors differ between query and candidate. The true squared distances: sum_j (offset_j*r_i)^2 ≈ radii^2 ≈ 1, differences between candidates ~ 0.004 (radii range 0.004). Quantization noise: per coordinate error difference up to ~1/16, squared distance error ~ sum of ~32 * (2*(1/16)*delta)... actually the quantized distance is sum (c_q - q_q)^2. c_q - q_q ≈ (c-q) ± quantization differences. c-q per coordinate is offset_j ~ 1/sqrt(32) ≈ 0.177. Quantization step 0.125, so quantization shifts delta by up to ±0.125 per coordinate. Quantized delta ≈ round-ish of 0.177 to multiples of 0.125? Not exactly — c and q quantized independently to grid; delta_q = grid point difference, multiple of 0.125. True delta 0.177 rounds to 0.125 or 0.25 with errors up to 0.0625 each... per coordinate error e_j with |e_j| ≤ 0.125/2? Actually delta_q is nearest multiple of 0.125 to... no. floor(x*8+0.5)/8 is nearest grid point to x. delta_q = nearest(c) - nearest(q), which is within 0.125 of c-q (each rounding ±0.0625). So delta_q = delta + e, |e|≤0.125.
+So error ≈ 0.131·|c1| + 0.017·|c2| relative to ||x||. ||x||² = Σ c_k²/λ_k². With λ1=0.03125, that term dominates: 32·c1². So ||x|| ≈ 5.66|c1|. Relative error ≈ 0.131·|c1| / (5.66|c1|) ≈ 0.023 < 0.08. Good—since the small eigenvalue inflates ||x||, relative error is small.
 
-Quantized distance sum (delta+e)^2 = sum delta² + 2 sum delta e + sum e². sum e² up to 32*0.0156=0.5 noise, and cross term. True distances all ≈1 ± 0.002. Quantized distances will be scattered widely (~0.5-1.5), so winner likely wrong index. Then embedding wrong → error huge. So reject.
+But float32 accumulation: state + residual repeatedly; rounding errors ~ machine eps · ||A||· iterations... Each step adds residual ~ small; error accumulation roughly STEPS·eps·something. Also compute residual via sum of matrix*state; relative error per step ~ eps·κ? Actually rounding errors act like perturbing rhs slightly; fixed error ~ eps·||A||·||x|| · const. eps=1e-7, 64 steps: ~1e-4 relative. Fine.
+
+Also does the kernel converge to true solution? Yes. Also check rhs float32 vs reference in float64 with original float32 values — the matrix is float32, rhs float32; solver uses these exactly. Richardson converges to the exact float32-system solution, which approximates the float64 solution of float32 inputs. Fine.
+
+One concern: tl.arange(0,16) power of two, fine.STEPS=64 constexpr loop unrolled fine.
+
+Compute c1: rhs projection onto Hadamard constant column /4... The projection onto eigenvector for λ=0.03125 is the constant vector (normalized). c1 = sum(rhs)/4 (since orthogonal columns are ±1/4 each, norm 1). Random normal normalized: sum ~ N(0, 16)/4 → std ~1... anyway nonzero generally. Even if c1 tiny, c2 term: ||x|| then dominated by 1/0.0625=16·c2. 0.017·|c2|/(16|c2|)=0.001. Fine. Worst case: if all mass in large eigenvalues, error tiny. Denominator has max(||x||, 0.004). Fine.
+
+Also 0.03125 float exact, 1-λ exact in float32... convergence stable.
+
+Verdict: trust. Confidence ~0.85.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.85, "reason": "Candidates lie on a sphere of radius ≈1 around the query with radii differing only by ~0.004, but quantizing to a 1/8 grid perturbs each coordinate delta by up to 0.125, adding distance noise (~0.1-0.5) far larger than the true inter-candidate gaps (~0.004). The quantized route will thus select a different index than the float64 reference, returning a wrong random embedding whose relative error greatly exceeds 0.1."}
+{"verdict": "trust", "confidence": 0.85, "reason": "Richardson iteration with step 1 converges since all eigenvalues (0.03125–1.75) lie in (0,2); after 64 steps the slowest mode is damped by ~0.97^64≈0.13, and since that same small eigenvalue inflates ||x|| by 1/λ, the relative error is roughly 0.13·λ_min ≈ 0.004–0.02, well under 0.08, with float32 rounding accumulation negligible."}
 
 ## Verdict
 
 {
-  "verdict": "reject",
+  "verdict": "trust",
   "confidence": 0.85,
-  "reason": "Candidates lie on a sphere of radius ≈1 around the query with radii differing only by ~0.004, but quantizing to a 1/8 grid perturbs each coordinate delta by up to 0.125, adding distance noise (~0.1-0.5) far larger than the true inter-candidate gaps (~0.004). The quantized route will thus select a different index than the float64 reference, returning a wrong random embedding whose relative error greatly exceeds 0.1."
+  "reason": "Richardson iteration with step 1 converges since all eigenvalues (0.03125–1.75) lie in (0,2); after 64 steps the slowest mode is damped by ~0.97^64≈0.13, and since that same small eigenvalue inflates ||x|| by 1/λ, the relative error is roughly 0.13·λ_min ≈ 0.004–0.02, well under 0.08, with float32 rounding accumulation negligible."
 }
 
 ## Usage and stop reason
@@ -120,22 +128,22 @@ Quantized distance sum (delta+e)^2 = sum delta² + 2 sum delta e + sum e². sum 
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "reject",
+    "verdict": "trust",
     "confidence": 0.85,
-    "reason": "Candidates lie on a sphere of radius ≈1 around the query with radii differing only by ~0.004, but quantizing to a 1/8 grid perturbs each coordinate delta by up to 0.125, adding distance noise (~0.1-0.5) far larger than the true inter-candidate gaps (~0.004). The quantized route will thus select a different index than the float64 reference, returning a wrong random embedding whose relative error greatly exceeds 0.1."
+    "reason": "Richardson iteration with step 1 converges since all eigenvalues (0.03125–1.75) lie in (0,2); after 64 steps the slowest mode is damped by ~0.97^64≈0.13, and since that same small eigenvalue inflates ||x|| by 1/λ, the relative error is roughly 0.13·λ_min ≈ 0.004–0.02, well under 0.08, with float32 rounding accumulation negligible."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1046,
-    "output_tokens": 730
+    "input_tokens": 1028,
+    "output_tokens": 1011
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 9.878045707941055,
-  "kernel_sha256": "919858a5bb2fae01ee24c5119b86725fb846762cd77b1da88ad21243f212f3a7",
-  "problem_sha256": "f361b282f4f16d1350cf0306fc947a0c7ff633bacaed5289f89f9d2101d3a2dd",
+  "elapsed_s": 13.534892834024504,
+  "kernel_sha256": "af3375b965b8d1d71b5d4248eefc56e03a646e60954b69ca92c962691a804943",
+  "problem_sha256": "a68e5f82a2758101eba7df21e09f1f0bab62eb558bd6b43e3523a14336222cba",
   "prompt_variant": "original",
-  "estimated_usd": 0.00109588,
+  "estimated_usd": 0.0013999400000000001,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

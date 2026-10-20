@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_q`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_k`
+- Turns: 5
+- Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 22.723s across 5 calls | tokens: in=54569 out=1408 total=55977
+- LLM time: 19.24s across 4 calls | tokens: in=39260 out=1188 total=40448
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.97
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,151 +25,117 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_q",
+    "entry": "case_k",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_q"
+    "entry": "case_k"
   }
 
-### Turn 2 - `solo` (4.069010769000002s, in=7594 out=259)
+### Turn 2 - `solo` (6.519124594s, in=7510 out=450)
 
 Message:
 
 ```text
-I'll record the decisive claim — that the approximate quantized routing may select a different winner than the float64 reference on this fixed workload, violating the ≤0.1 relative-error contract — then run it on the actual inputs.
+The kernel uses 64 Richardson iterations with unit step; eigenvalues span 0.03125–1.75, so worst mode contraction is 0.96875 per step, leaving ~0.96875^64 ≈ 0.13 residual error in that mode. That could exceed the 0.08 tolerance. Let me record the claim and run it.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 error`
+- `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The kernel quantizes coordinates to a 1/8 grid before computing distances, while the reference uses unquantized float64 distances; candidates lie on a radius ~1 sphere around the query with near-tied true distances, so quantization could pick a wrong winner whose embedding is far from the reference.",
+    "rationale": "Richardson iteration with step 1 has per-mode factor (1-\u03bb); for \u03bb=0.03125 that is 0.96875, and 0.96875^64 \u2248 0.13, potentially leaving >0.08 relative error.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference computes float64 squared distances without quantization, picks smallest index tie-break, output must satisfy ||output-reference||_2 / ||reference||_2 <= 0.1 on the fixed make_inputs workload."
+        "summary": "Relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) must be at most 0.08 for the exact make_inputs() workload."
       }
     ],
-    "statement": "The quantized routing (floor(x*8+0.5)/8 grid, float32 distances) selects a different winner than the float64 reference on the fixed make_inputs workl
-  ...[truncated 44 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+    "scope_rationale": "Contract requires relative L2 error \u2264 0.08 vs float64 exact solution on the sole in-scope input from make_inputs().",
+    "statement": "run(*make_inputs()) produces output whose relative L2 error versus the float64 exact solution exceeds 0.08."
   }
-
-### Turn 3 - `solo` (3.900514487999999s, in=8297 out=278)
-
-Message:
-
-```text
-I need to re-record the claim with a scope rationale, then run it on the fixed workload.
-```
-
-Tool calls:
-
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "The kernel quantizes coordinates to a 1/8 grid before computing distances while the reference uses unquantized float64 distances; candidates sit on a radius-~1 sphere around the query with near-tied true distances, so quantization could pick a wrong winner whose embedding is far from the reference.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Reference computes float64 squared distances without quantization, picks smallest index tie-break, output must satisfy ||output-reference||_2 / ||reference||_2 <= 0.1 on the fixed make_inputs workload; only make_inputs() inputs are in scope."
-      }
-    ],
-    "scope_rationale": "The contract requires the output, on the fixed make_inputs() workload, to be within 0.1 relative L2 of t
-  ...[truncated 330 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel quantizes coordinates to a 1/8 grid before computing distances while the reference uses unquantized float64 distances; candidates sit on a radius-~1 sphere around the query with near-tied true distances, so quantization could pick a wrong winner whose embedding is far from the reference.",
+    "rationale": "Richardson iteration with step 1 has per-mode factor (1-\u03bb); for \u03bb=0.03125 that is 0.96875, and 0.96875^64 \u2248 0.13, potentially leaving >0.08 relative error.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Reference computes float64 squared distances without quantization, picks smallest index tie-break, output must satisfy ||output-reference||_2 / ||reference||_2 <= 0.1 on the fixed make_inputs workload; only make_inputs() inputs are in scope."
+        "summary": "Relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) must be at most 0.08 for the exact make_inputs() workload."
       }
     ],
-    "scope_rationale": "The contract requires the output, on the fixed make_inputs() workload, to be within 0.1 relative L2 of the float64 unquantized-reference winner's embedding; a quantization-induced wrong winner would violate that tolerance.",
-    "statement": "The quantized routing (floor(x*8+0.5)/8 grid, float32 distances) selects a different winner than the float64 reference on the fixed make_inputs workload, causing relative output error > 0.1.",
+    "scope_rationale": "Contract requires relative L2 error \u2264 0.08 vs float64 exact solution on the sole in-scope input from make_inputs().",
+    "statement": "run(*make_inputs()) produces output whose relative L2 error versus the float64 exact solution exceeds 0.08.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (5.571943781000002s, in=9618 out=312)
-
-Message:
-
-```text
-I'll run the decisive probe: compute the reference winner and error on the fixed workload.
-```
+### Turn 3 - `solo` (2.739600869s, in=8730 out=178)
 
 Tool calls:
 
-- `run_claim_probe -> t7 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import numpy as np, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/numerical_cases/case_q/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nq, c, e = k.make_inputs(\"cuda\")\nout = k.run(q, c, e)\nd = ((c.double() - q.double())**2).sum(dim=1)\nref_idx = int(np.argmin(d.cpu().numpy()))  # argmin picks smallest index on ties\nref = e[ref_idx]\nrel = (out - ref).norm().item() / max(ref.norm().item(), 1e-12)\n# kernel's winner for diagnosis\nqd = np.floor(q.double().cpu().numpy()*8+0.5)/8\ncd = np.floor(c.double().cpu().numpy()*8+0.5)/8\nkd = ((cd - qd)**2).sum(1)\nkidx = int(np.argmin(kd))\nprint({\"rel_err\": rel, \"ref_idx\": ref_idx, \"kernel_idx\": kidx,\n       \"true_d\": d.cpu(
-  ...[truncated 136 chars]
+    "code": "import numpy as np, torch, sys, os\nsys.path.insert(0, \"/root/numerical_cases/case_k\")\nfrom kernel import make_inputs, run\nm, r = make_inputs()\nout = run(m, r)\nx = np.linalg.solve(m.cpu().numpy().astype(np.float64), r.cpu().numpy().astype(np.float64))\no = out.cpu().numpy().astype(np.float64)\nerr = np.linalg.norm(o - x) / max(np.linalg.norm(x), 0.001*np.sqrt(16))\nprint({\"metric\":\"relative_L2_error\",\"value\":float(err),\"tol\":0.08,\"finite\":bool(np.all(np.isfinite(o))),\"shape\":list(out.shape),\"norm_x\":float(np.linalg.norm(x))})\n"
+  }
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "ac5b8b6dff99b250d3e1c70408217afd7967f0e8392893701e6b5f51b54430b4"
+        "path": "probes/t6_probe.py",
+        "sha256": "a0df2c090c8ceab0a5ee938500512e8a7785a834f2d5e324e52d933de8bd4328"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "011e06fcf33f126a05cb6113704e95caba228063638e3d49c4522e31f2ddffd9"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "baf7ae7b4b1639cadd29d880de12182fbe1a8ae31152a9ed6233a0a1eb48262a"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The quantized routing (floor(x*8+0.5)/8 grid, float32 distances) selects a different winner than the float64 reference on the fixed make_inputs workload, causing relative output error > 0.1.",
-    "duration_s": 6.372949,
-    "event_id": "t7",
+    "claim_statement": "run(*make_inputs()) produces output whose relative L2 error versus the float64 exact solution exceeds 0.08.",
+    "duration_s": 7.346155,
+    "event_id": "t6",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
@@ -177,32 +143,36 @@ Tool calls:
           {
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
-            "path": "probes/t7_
-  ...[truncated 2720 chars]
+            "path": "probes/t6_probe.py",
+            "sha256": "a0df2c090c8ceab0a5ee938500512e8a7785a834f2d5e324e52
+  ...[truncated 1496 chars]
 
-### Turn 5 - `solo` (5.066410519999998s, in=12447 out=247)
+### Turn 4 - `solo` (4.7963357030000004s, in=10240 out=265)
 
 Message:
 
 ```text
-The probe shows the kernel output exactly matches the reference (rel_err = 0.0, same winner index 6). I'll finalize the evidence and record the verdict.
+The probe ran successfully: relative L2 error is 0.0236, well under the 0.08 tolerance, with a finite (16,) output. The convergence concern was wrong — the small eigenvalue's mode contributes little to this rhs's spectrum. I'll finalize the evidence as rebutted and record a trust verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "kernel_idx": 6,
-      "quant_d_min": 0.953125,
-      "quant_gap_to_second_best": 0.03125,
-      "ref_idx": 6,
-      "rel_err": 0.0
+      "finite": true,
+      "metric": "relative_L2_error",
+      "norm_x": 3.930916535805517,
+      "shape": [
+        16
+      ],
+      "tol": 0.08,
+      "value": 0.023636854556236472
     },
-    "event_id": "t7",
+    "event_id": "t6",
     "status": "rebutted",
-    "summary": "On the fixed make_inputs() workload, the kernel output is bit-identical to the reference embedding: relative L2 error = 0.0. Reference winner index 6 (true float64 distance 0.99671, smallest) equals the kernel's quantized-route winner index 6 (quantized distance 0.953125, smallest with clear margin over next best 0.984375), so quantization did not change the selection.",
+    "summary": "run(*make_inputs()) on the actual artifact inputs produced relative L2 error 0.02364 vs the float64 exact solution, below the 0.08 tolerance; output is finite with shape (16,). The Richardson-with-64-steps concern did not materialize.",
     "supports": "rebutted"
   }
   Output summary:
@@ -210,38 +180,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload, the kernel output is bit-identical to the reference embedding: relative L2 error = 0.0. Reference winner index 6 (true float64 distance 0.99671, smallest) equals the kernel's quantized-route winner index 6 (quantized distance 0.953125, smallest with clear margin over next best 0.984375), so quantization did not change the selection.",
+    "summary": "run(*make_inputs()) on the actual artifact inputs produced relative L2 error 0.02364 vs the float64 exact solution, below the 0.08 tolerance; output is finite with shape (16,). The Richardson-with-64-steps concern did not materialize.",
     "supports": "rebutted",
-    "tool_event_id": "t7"
+    "tool_event_id": "t6"
   }
 
-### Turn 6 - `solo` (4.114678678000004s, in=16613 out=312)
+### Turn 5 - `solo` (5.184688956999999s, in=12780 out=295)
 
 Message:
 
 ```text
-The decisive claim is resolved: on the fixed in-scope workload, the kernel's quantized routing selects the same winner (index 6) as the float64 reference, and the output is bit-identical to the reference embedding (relative L2 error 0.0, well within the 0.1 tolerance). I'll record the verdict.
+The single in-scope claim is resolved: the kernel's Richardson solver with 64 steps achieved relative L2 error 0.0236 on the exact contractual workload, well under the 0.08 tolerance, with a finite (16,) output. The workload is deterministic, so one decisive probe suffices. I'll record the trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the only in-scope inputs (make_inputs(), seed 840104) via run_claim_probe (tool event t7). Reference: float64 unquantized squared distances, smallest-index tie-break, winner index 6 (d=0.99671, smallest, next-best 0.99894). Kernel's quantized route (floor(x*8+0.5)/8, float32 distances) also selected index 6 (quantized d=0.953125, clear margin 0.03125 over next best). Output equals embeddings[6] exactly: relative L2 error 0.0, far below the contract's 0.1 threshold; output is finite and shape (8,). The claimed quantization-induced wrong-winner failure was rebutted by runtime evidence (c1.e1), so the kernel satisfies the contract on this fixed workload.",
+    "reason": "I verified the only contractually in-scope case, run(*make_inputs()), on the real GPU. Probe t6 compared the kernel output against the float64 exact solution of matrix @ x = rhs for the seeded make_inputs() workload: relative L2 error = 0.023636854556236472 (tolerance 0.08), output finite with shape (16,). The raised concern that 64 Richardson steps with unit step would leave >0.08 residual error in the small-eigenvalue mode was rebutted (claim c1, evidence c1.e1). The input generator is deterministic, so this single decisive probe covers the full in-scope domain. The kernel satisfies the numerical contract.",
     "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the only in-scope inputs (make_inputs(), seed 840104) via run_claim_probe (tool event t7). Reference: float64 unquantized squared distances, smallest-index tie-break, winner index 6 (d=0.99671, smallest, next-best 0.99894). Kernel's quantized route (floor(x*8+0.5)/8, float32 distances) also selected index 6 (quantized d=0.953125, clear margin 0.03125 over next best). Output equals embeddings[6] exactly: relative L2 error 0.0, far below the contract's 0.1 threshold; output is finite and shape (8,). The claimed quantization-induced wrong-winner failure was rebutted by runtime evidence (c1.e1), so the kernel satisfies the contract on this fixed workload.",
+    "reason": "I verified the only contractually in-scope case, run(*make_inputs()), on the real GPU. Probe t6 compared the kernel output against the float64 exact solution of matrix @ x = rhs for the seeded make_inputs() workload: relative L2 error = 0.023636854556236472 (tolerance 0.08), output finite with shape (16,). The raised concern that 64 Richardson steps with unit step would leave >0.08 residual error in the small-eigenvalue mode was rebutted (claim c1, evidence c1.e1). The input generator is deterministic, so this single decisive probe covers the full in-scope domain. The kernel satisfies the numerical contract.",
     "verdict": "trust"
   }
 
@@ -253,97 +223,90 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: The quantized routing (floor(x*8+0.5)/8 grid, float32 distances) selects a different winner than the float64 reference on the fixed make_inputs workload, causing relative output error > 0.1.
+Statement: run(*make_inputs()) produces output whose relative L2 error versus the float64 exact solution exceeds 0.08.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires the output, on the fixed make_inputs() workload, to be within 0.1 relative L2 of the float64 unquantized-reference winner's embedding; a quantization-induced wrong winner would violate that tolerance.
+Scope rationale: Contract requires relative L2 error ≤ 0.08 vs float64 exact solution on the sole in-scope input from make_inputs().
 
 Scope evidence:
-- `problem.txt`: Reference computes float64 squared distances without quantization, picks smallest index tie-break, output must satisfy ||output-reference||_2 / ||reference||_2 <= 0.1 on the fixed make_inputs workload; only make_inputs() inputs are in scope.
+- `problem.txt`: Relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) must be at most 0.08 for the exact make_inputs() workload.
 
-Rationale: The kernel quantizes coordinates to a 1/8 grid before computing distances while the reference uses unquantized float64 distances; candidates sit on a radius-~1 sphere around the query with near-tied true distances, so quantization could pick a wrong winner whose embedding is far from the reference.
+Rationale: Richardson iteration with step 1 has per-mode factor (1-λ); for λ=0.03125 that is 0.96875, and 0.96875^64 ≈ 0.13, potentially leaving >0.08 relative error.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: On the fixed make_inputs() workload, the kernel output is bit-identical to the reference embedding: relative L2 error = 0.0. Reference winner index 6 (true float64 distance 0.99671, smallest) equals the kernel's quantized-route winner index 6 (quantized distance 0.953125, smallest with clear margin over next best 0.984375), so quantization did not change the selection.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: run(*make_inputs()) on the actual artifact inputs produced relative L2 error 0.02364 vs the float64 exact solution, below the 0.08 tolerance; output is finite with shape (16,). The Richardson-with-64-steps concern did not materialize.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_q"
+  "entry": "case_k"
 }
 
-### t5 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t6 - record_claim - ok
+### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel quantizes coordinates to a 1/8 grid before computing distances while the reference uses unquantized float64 distances; candidates sit on a radius-~1 sphere around the query with near-tied true distances, so quantization could pick a wrong winner whose embedding is far from the reference.",
+  "rationale": "Richardson iteration with step 1 has per-mode factor (1-\u03bb); for \u03bb=0.03125 that is 0.96875, and 0.96875^64 \u2248 0.13, potentially leaving >0.08 relative error.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Reference computes float64 squared distances without quantization, picks smallest index tie-break, output must satisfy ||output-reference||_2 / ||reference||_2 <= 0.1 on the fixed make_inputs workload; only make_inputs() inputs are in scope."
+      "summary": "Relative L2 error ||output - x||_2 / max(||x||_2, 0.001*sqrt(16)) must be at most 0.08 for the exact make_inputs() workload."
     }
   ],
-  "scope_rationale": "The contract requires the output, on the fixed make_inputs() workload, to be within 0.1 relative L2 of the float64 unquantized-reference winner's embedding; a quantization-induced wrong winner would violate that tolerance.",
-  "statement": "The quantized routing (floor(x*8+0.5)/8 grid, float32 distances) selects a different winner than the float64 reference on the fixed make_inputs workload, causing relative output error > 0.1.",
+  "scope_rationale": "Contract requires relative L2 error \u2264 0.08 vs float64 exact solution on the sole in-scope input from make_inputs().",
+  "statement": "run(*make_inputs()) produces output whose relative L2 error versus the float64 exact solution exceeds 0.08.",
   "status": "open"
 }
 
-### t7 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "ac5b8b6dff99b250d3e1c70408217afd7967f0e8392893701e6b5f51b54430b4"
+      "path": "probes/t6_probe.py",
+      "sha256": "a0df2c090c8ceab0a5ee938500512e8a7785a834f2d5e324e52d933de8bd4328"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "011e06fcf33f126a05cb6113704e95caba228063638e3d49c4522e31f2ddffd9"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "baf7ae7b4b1639cadd29d880de12182fbe1a8ae31152a9ed6233a0a1eb48262a"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The quantized routing (floor(x*8+0.5)/8 grid, float32 distances) selects a different winner than the float64 reference on the fixed make_inputs workload, causing relative output error > 0.1.",
-  "duration_s": 6.372949,
-  "event_id": "t7",
+  "claim_statement": "run(*make_inputs()) produces output whose relative L2 error versus the float64 exact solution exceeds 0.08.",
+  "duration_s": 7.346155,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -351,58 +314,61 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "ac5b8b6dff99b250d3e1c70408217afd7967f0e8392893701e6b5f51b54430b4"
+          "path": "probes/t6_probe.py",
+          "sha256": "a0df2c090c8ceab0a5ee938500512e8a7785a834f2d5e324e52d933de8bd4328"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "011e06fcf33f126a05cb6113704e95caba228063638e3d49c4522e31f2ddffd9"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "baf7ae7b4b1639cadd29d880de12182fbe1a8ae31152a9ed6233a0a1eb48262a"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
+          "path": "probes/t6_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ],
-      "duration_s": 6.372949,
+      "duration_s": 7.346155,
       "exit_code": 0,
       "expected_signal": null,
       "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
-...[truncated 1920 chars]
+      "json_result": null,
+      "stderr": "",
+      "stdout": "{'metric': 'relati
+...[truncated 696 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload, the kernel output is bit-identical to the reference embedding: relative L2 error = 0.0. Reference winner index 6 (true float64 distance 0.99671, smallest) equals the kernel's quantized-route winner index 6 (quantized distance 0.953125, smallest with clear margin over next best 0.984375), so quantization did not change the selection.",
+  "summary": "run(*make_inputs()) on the actual artifact inputs produced relative L2 error 0.02364 vs the float64 exact solution, below the 0.08 tolerance; output is finite with shape (16,). The Richardson-with-64-steps concern did not materialize.",
   "supports": "rebutted",
-  "tool_event_id": "t7"
+  "tool_event_id": "t6"
 }
 
-### t9 - record_verdict - ok
+### t8 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the only in-scope inputs (make_inputs(), seed 840104) via run_claim_probe (tool event t7). Reference: float64 unquantized squared distances, smallest-index tie-break, winner index 6 (d=0.99671, smallest, next-best 0.99894). Kernel's quantized route (floor(x*8+0.5)/8, float32 distances) also selected index 6 (quantized d=0.953125, clear margin 0.03125 over next best). Output equals embeddings[6] exactly: relative L2 error 0.0, far below the contract's 0.1 threshold; output is finite and shape (8,). The claimed quantization-induced wrong-winner failure was rebutted by runtime evidence (c1.e1), so the kernel satisfies the contract on this fixed workload.",
+  "reason": "I verified the only contractually in-scope case, run(*make_inputs()), on the real GPU. Probe t6 compared the kernel output against the float64 exact solution of matrix @ x = rhs for the seeded make_inputs() workload: relative L2 error = 0.023636854556236472 (tolerance 0.08), output finite with shape (16,). The raised concern that 64 Richardson steps with unit step would leave >0.08 residual error in the small-eigenvalue mode was rebutted (claim c1, evidence c1.e1). The input generator is deterministic, so this single decisive probe covers the full in-scope domain. The kernel satisfies the numerical contract.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-24T00:58:42Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T00:10:58Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the only in-scope inputs (make_inputs(), seed 840104) via run_claim_probe (tool event t7). Reference: float64 unquantized squared distances, smallest-index tie-break, winner index 6 (d=0.99671, smallest, next-best 0.99894). Kernel's quantized route (floor(x*8+0.5)/8, float32 distances) also selected index 6 (quantized d=0.953125, clear margin 0.03125 over next best). Output equals embeddings[6] exactly: relative L2 error 0.0, far below the contract's 0.1 threshold; output is finite and shape (8,). The claimed quantization-induced wrong-winner failure was rebutted by runtime evidence (c1.e1), so the kernel satisfies the contract on this fixed workload.",
+  "reason": "I verified the only contractually in-scope case, run(*make_inputs()), on the real GPU. Probe t6 compared the kernel output against the float64 exact solution of matrix @ x = rhs for the seeded make_inputs() workload: relative L2 error = 0.023636854556236472 (tolerance 0.08), output finite with shape (16,). The raised concern that 64 Richardson steps with unit step would leave >0.08 residual error in the small-eigenvalue mode was rebutted (claim c1, evidence c1.e1). The input generator is deterministic, so this single decisive probe covers the full in-scope domain. The kernel satisfies the numerical contract.",
   "verdict": "trust"
 }

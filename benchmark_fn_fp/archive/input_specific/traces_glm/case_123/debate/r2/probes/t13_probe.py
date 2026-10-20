@@ -1,34 +1,33 @@
 import numpy as np, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_y")
+sys.path.insert(0, "/root/numerical_cases/case_s")
 from kernel import make_inputs_numpy
 
-query, anchors, values = make_inputs_numpy()
-q = query.astype(np.float32)
-a = anchors.astype(np.float32)
-N, D = a.shape
+a, w, p = make_inputs_numpy()
+a64, w64, p64 = a.astype(np.float64), w.astype(np.float64), p.astype(np.float64)
+t = (np.arange(32, dtype=np.float64) + 0.5) / 32.0
 
-# replicate kernel float32 accumulation per anchor (expanded identity, fp32 rounding)
-f32 = np.float32
-computed = []
-for i in range(N):
-    an = f32(0.0); qn = f32(0.0); dot = f32(0.0)
-    for k in range(D):
-        av = f32(a[i,k]); qv = f32(q[k])
-        an = f32(an + f32(av*av))
-        qn = f32(qn + f32(qv*qv))
-        dot = f32(dot + f32(av*qv))
-    norm_sum = f32(an + qn)
-    twice_dot = f32(f32(2.0) * dot)
-    computed.append(f32(norm_sum - twice_dot))
-computed = np.array(computed, dtype=np.float32)
-
-d64 = ((a.astype(np.float64) - q.astype(np.float64))**2).sum(axis=1)
-clamped = int((computed < 0).sum())
+# per-term exact integral and per-term midpoint contribution
+exact_terms = a64 * (np.cos(p64) - np.cos(p64 + w64)) / w64          # (4,8)
+mid_terms = np.zeros((4, 8))
+for r in range(4):
+    for k in range(8):
+        mid_terms[r, k] = a64[r, k] * np.sin(w64[r, k] * t + p64[r, k]).mean()
+err = mid_terms - exact_terms
+abs_err = np.abs(err)
+dom = np.dstack(np.unravel_index(np.argsort(abs_err.ravel())[::-1][:5], (4, 8)))[0]
+rows = []
+for r, k in dom:
+    rows.append({"row": int(r), "term": int(k), "freq": float(w64[r, k]),
+                 "per_term_error": float(err[r, k]),
+                 "exact_term": float(exact_terms[r, k]),
+                 "ratio_abs_err_to_exact": float(abs(err[r, k]) / max(abs(exact_terms[r, k]), 1e-15))})
+total_l2 = np.linalg.norm(err)  # == total quadrature error L2 (rows independent)
 print(json.dumps({
-    "computed_fp32_distances": [float(x) for x in computed],
-    "true_fp64_distances": [float(x) for x in d64],
-    "negative_computed_count": clamped,
-    "clamped_to_zero_count": clamped,
-    "max_abs_distance_error": float(np.abs(computed.astype(np.float64) - d64).max()),
-    "true_distance_range": [float(d64.min()), float(d64.max())],
+    "metric": "per-term midpoint error decomposition on seeded inputs",
+    "top5_error_terms": rows,
+    "total_quadrature_l2": float(total_l2),
+    "n_terms_freq_above_50": int((w64 > 50).sum()),
+    "n_terms_freq_above_16": int((w64 > 16).sum()),
+    "max_abs_per_term_error": float(abs_err.max()),
+    "max_ratio_err_to_own_exact_term": max(x["ratio_abs_err_to_exact"] for x in rows),
 }))

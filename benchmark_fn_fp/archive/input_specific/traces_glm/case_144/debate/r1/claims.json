@@ -1,23 +1,23 @@
 [
   {
-    "created_at": "2026-09-24T07:18:36Z",
+    "created_at": "2026-09-24T06:56:58Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-24T07:20:10Z",
+        "created_at": "2026-09-24T06:57:57Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t12_probe.py",
-              "sha256": "c960d767ee49bf079fa8fc15aa64c3c5caf5abf2297b6f7b429508d08fcbe6aa"
+              "sha256": "40b94202e13e85169efa15b6b8ecdc327d5cf0162eec0b9d5c25f75f40805e85"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t12_stdout.txt",
-              "sha256": "0ff284b605ae3e0d963ed66fe64809e579aed20195411f41bf750c7da2908db3"
+              "sha256": "219467e49723a981b0328f8a35ce0f1e0388fbd3e3fad116659a77e106fac02f"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -29,90 +29,122 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t12_json_result.json",
-              "sha256": "6b6bee2bc0592b72fe25c57b8b4aa59144c95798ca801c45f60886963aa233f3"
+              "sha256": "557b558edb77bb601b873330ea48e2236f1421dea0c1ac94d60f15db7f7dc0e5"
             }
           ],
-          "duration_s": 5.570016,
+          "computed_exact_target": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "duration_s": 5.064608,
           "exit_code": 0,
-          "expected_signal": "output vs exact real target relative error; >1e-5 supports c1",
-          "flaw": "np.sum axis=1 in float64 on the full row: leading 2^80 absorbs all interior terms before -2^80 cancels, collapsing the 'exact_target' to 0.0 -- not the exact real-number sum",
+          "expected_signal": "kernel output 0.0 for all rows while exact target ~4, giving relative error ~1 (failure), or output matching target (benign branch)",
+          "flaw": "numpy pairwise sum absorbed small values into 2^80 magnitudes before -2^80 cancellation",
           "json_parse_error": null,
           "json_result": {
-            "dtype": "torch.float32",
-            "exact_target": [
+            "X_unmodified": true,
+            "c30_column": 10,
+            "emulated_fp32_chain_output": [
               0.0,
               0.0,
               0.0,
               0.0
             ],
-            "finite": true,
-            "input_unmodified": true,
-            "output": [
+            "exact_target_fp64": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "kernel_output": [
               0.0,
               0.0,
               0.0,
               0.0
             ],
             "passes_contract": true,
-            "relative_error": 0.0,
-            "shape": [
-              4
+            "permutation_order": [
+              8,
+              1,
+              6,
+              7,
+              5,
+              2,
+              3,
+              4,
+              9,
+              0
             ],
+            "relative_error_vs_exact": 0.0,
+            "small_value_columns": [
+              6,
+              7,
+              8,
+              5,
+              3,
+              4,
+              1,
+              9
+            ],
+            "small_values_before_c30": 8,
             "tolerance": 1e-05
           },
-          "output": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
+          "kernel_output": [
+            0,
+            0,
+            0,
+            0
           ],
-          "relative_error_reported": 0.0,
+          "rel_err_vs_flawed_target": 0.0,
+          "small_values_before_c30": 8,
           "stderr": "",
-          "stdout": "{\"output\": [0.0, 0.0, 0.0, 0.0], \"exact_target\": [0.0, 0.0, 0.0, 0.0], \"relative_error\": 0.0, \"tolerance\": 1e-05, \"input_unmodified\": true, \"shape\": [4], \"dtype\": \"torch.float32\", \"finite\": true, \"passes_contract\": true}\n",
+          "stdout": "{\"permutation_order\": [8, 1, 6, 7, 5, 2, 3, 4, 9, 0], \"c30_column\": 10, \"small_value_columns\": [6, 7, 8, 5, 3, 4, 1, 9], \"small_values_before_c30\": 8, \"exact_target_fp64\": [0.0, 0.0, 0.0, 0.0], \"kernel_output\": [0.0, 0.0, 0.0, 0.0], \"emulated_fp32_chain_output\": [0.0, 0.0, 0.0, 0.0], \"relative_error_vs_exact\": 0.0, \"tolerance\": 1e-05, \"X_unmodified\": true, \"passes_contract\": true}\n",
           "timed_out": false,
-          "timeout_s": 60
+          "timeout_s": 300
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "t12 cannot decide c1: its \"exact_target\" was computed with np.sum in float64 over the full row in stored order, which itself suffers 2^80 absorption and collapses to 0.0 \u2014 a probe artifact, not the exact real-number target (the sum of the 8 low values, ~2\u201314 per row). The output [0,0,0,0] and structural checks (shape (4,), fp32, finite, input unmodified) are valid, but the relative-error metric was computed against the wrong target. Marking inconclusive; a corrected probe with the proper exact target is required.",
+        "summary": "Kernel output is 0.0 and all 8 small values precede the +2^30 term (c30 at column 10, small columns 1-9), which is the loss-condition branch. However, the probe's \"exact target\" was computed with numpy .sum(), whose pairwise summation absorbed the ~4 of small values into the 2^80 magnitudes before -2^80 cancelled, yielding a bogus 0.0 target. The true exact target (~4/row) requires math.fsum; result is not decisive yet, though the 0.0 kernel output is consistent with the claimed failure.",
         "supports": "inconclusive",
         "tool_event_id": "t12"
       }
     ],
     "id": "c1",
     "raised_by": "skeptic",
-    "rationale": "The recorded T4 run shows output [0,0,0,0], but the exact real-number sum of each row is the sum of 8 uniform values in [0.25,1.75] (the \u00b12^80 and \u00b12^30 pairs cancel exactly), giving targets roughly 2\u201314 per row; 0.0 vs that target gives relative error ~1, far above the 1e-5 tolerance. The probe's float64 sequential reference also collapses to 0.0 due to 2^80 absorption, masking this failure.",
+    "rationale": "correction is a plain fp32 accumulator; adding +2^30 (ulp 128) to a correction holding ~4 rounds away the small values, then -2^30 leaves 0. The final total after -2^80 is exactly 0, so output is essentially correction. Whether this fires depends on the permutation order for seed 193602.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "'target[r] = sum from j=0 through 11 of X[r,j], where the sum means the exact real-number sum of those stored input values'; acceptance is relative-error <= 1e-5 against that mathematical target. Recorded probe output is [0,0,0,0]."
+        "summary": "The workload is exactly the stored array from make_inputs() (seed 193602, shape (4,12)); the target is the exact real-number row sum (~4 per row, the 8 small values, since \u00b12^80 and \u00b12^30 cancel), with tolerance 1e-5 on final row sums. A fixed-workload output of 0 vs target ~4 would violate this requirement."
       }
     ],
-    "scope_rationale": "problem.txt defines the target as the exact real-number sum of the stored values in the fixed make_inputs() workload and requires relative error <= 1e-5 against it; an output of 0.0 vs targets ~[2,14] would violate exactly this stated acceptance metric.",
-    "statement": "On the fixed contract workload (the (4,12) float32 array from make_inputs(), SEED 203604), run() returns 0.0 for every row, which differs from the exact real-number target (sum of the 8 low values, ~[2,14] per row) by relative error near 1.0, violating the stated 1e-5 acceptance metric.",
+    "scope_rationale": "problem.txt fixes the workload to make_inputs() (seed 193602) and requires the final row sums to match the exact real-number sum (~4) within 1e-5; a permutation-order-dependent loss of the small values in the uncompensated correction accumulator would make the fixed-workload output 0, directly violating this stated requirement.",
+    "statement": "For the fixed workload (seed 193602), if the permutation places any of the 8 small values in the correction accumulator before the +2^30 term, the kernel's output per row is 0 while the exact target is the sum of the 8 small values (~4), giving relative error ~1 and violating the 1e-5 tolerance.",
     "status": "inconclusive",
-    "updated_at": "2026-09-24T07:20:10Z"
+    "updated_at": "2026-09-24T06:57:57Z"
   },
   {
-    "created_at": "2026-09-24T07:18:36Z",
+    "created_at": "2026-09-24T06:56:58Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-24T07:19:54Z",
+        "created_at": "2026-09-24T06:57:57Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t13_probe.py",
-              "sha256": "c08566e6fe08ffe308f1ed5fc24e803a83cd5ba4301c6d72dd7869d0387db5c8"
+              "sha256": "f4e67f928ffbfdb419b02fbb51c5e0a52b7094c80b1e47915400c80760952855"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t13_stdout.txt",
-              "sha256": "cc7caf5163dd6d64f54f34638b90a5e9e0888ef9df3869fa168e7fbcf6f379d8"
+              "sha256": "541ba5809256dd3e70da35b5b52a94e63fde8b4ff811345924a7e7d4f0a1a97b"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -124,102 +156,75 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t13_json_result.json",
-              "sha256": "37ca1d9912b6d48f5dd5499301d16979dbeb7331580d9cc530956c6d39b9031e"
+              "sha256": "e7fbdbb3a58a44396fe1f9013b398b5c99f38895e57c202cd6d729d419884f33"
             }
           ],
-          "duration_s": 0.256483,
-          "emulated_final_correction": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "emulated_output": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ],
+          "duration_s": 0.197429,
           "exit_code": 0,
-          "expected_signal": "smalls lost while correction holds 2^30; output 0.0 supports c2",
-          "fp32_ulp_at_2p30": 128.0,
+          "expected_signal": "sequential fp64 reference yields exactly 0.0 while exact fp64 target is ~4 per row",
+          "flawed_exact": [
+            0,
+            0,
+            0,
+            0
+          ],
           "json_parse_error": null,
           "json_result": {
-            "emulated_final_correction": [
+            "conclusion": "probe reference equals target",
+            "exact_target_fp64": [
               0.0,
               0.0,
               0.0,
               0.0
             ],
-            "emulated_output": [
+            "max_abs_difference": 0.0,
+            "reference_equals_target": true,
+            "sequential_fp64_reference": [
               0.0,
               0.0,
               0.0,
               0.0
             ],
-            "exact_target": [
+            "small_value_sum_per_row": [
               0.0,
               0.0,
               0.0,
               0.0
-            ],
-            "fp32_ulp_at_2p30": 128.0,
-            "num_smalls_between_plus_and_minus_2p30": 0,
-            "permutation_order": [
-              3,
-              4,
-              7,
-              8,
-              6,
-              2,
-              5,
-              9,
-              0,
-              1
-            ],
-            "pos_minus_2p30_in_interior": 9,
-            "pos_plus_2p30_in_interior": 8
+            ]
           },
-          "num_smalls_between_plus_and_minus_2p30": 0,
-          "permutation_order": [
-            3,
-            4,
-            7,
-            8,
-            6,
-            2,
-            5,
-            9,
+          "max_abs_difference": 0.0,
+          "reference_equals_target": true,
+          "sequential_reference": [
             0,
-            1
+            0,
+            0,
+            0
           ],
-          "pos_minus_2p30_in_interior": 9,
-          "pos_plus_2p30_in_interior": 8,
           "stderr": "",
-          "stdout": "{\"permutation_order\": [3, 4, 7, 8, 6, 2, 5, 9, 0, 1], \"pos_plus_2p30_in_interior\": 8, \"pos_minus_2p30_in_interior\": 9, \"num_smalls_between_plus_and_minus_2p30\": 0, \"emulated_final_correction\": [0.0, 0.0, 0.0, 0.0], \"emulated_output\": [0.0, 0.0, 0.0, 0.0], \"exact_target\": [0.0, 0.0, 0.0, 0.0], \"fp32_ulp_at_2p30\": 128.0}\n",
+          "stdout": "{\"sequential_fp64_reference\": [0.0, 0.0, 0.0, 0.0], \"exact_target_fp64\": [0.0, 0.0, 0.0, 0.0], \"reference_equals_target\": true, \"max_abs_difference\": 0.0, \"small_value_sum_per_row\": [0.0, 0.0, 0.0, 0.0], \"conclusion\": \"probe reference equals target\"}\n",
           "timed_out": false,
-          "timeout_s": 60
+          "timeout_s": 120
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "Exact fp32 emulation of the kernel's Neumaier loop on the actual SEED-203604 workload: permutation places +2^30 at interior index 8 and -2^30 at index 9 with ZERO smalls between them, so all 8 low values accumulate into `correction` first; when +2^30's lost-term arrives, correction (=~small sum) + 2^30 rounds to exactly 2^30 (absorbing the smalls, fp32 ulp 128 at that magnitude); the -2^30 lost-term then resets correction to exactly 0.0. Final total+correction = 0.0 for every row \u2014 the smalls are permanently lost, matching the actual GPU output [0,0,0,0]. This confirms c2's stated mechanism on the fixed contract workload.",
-        "supports": "confirmed",
+        "summary": "The probe's \"exact\" comparison used numpy .sum() (pairwise), which produced 0.0 \u2014 not a mathematically exact sum. numpy's pairwise reduction absorbed the small values into 2^80, so the claim that the sequential reference differs from the exact target was not actually tested. Inconclusive pending a math.fsum-based recomputation.",
+        "supports": "inconclusive",
         "tool_event_id": "t13"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "With total=2^80, every interior value is absorbed into total so all interior lost-terms flow into `correction`. When +2^30's lost-term (2^30) enters, correction jumps to 2^30 where fp32 spacing is 128, so small values (~1) added afterward round away; when -2^30's lost-term (-2^30) then zeroes correction, those smalls are permanently lost. Neumaier's variant never folds correction into the running total, so there is no later recovery step.",
+    "rationale": "The recorded initial_probe 'passed' verdict is measured against 0.0 rather than the contract's exact target; an output of exactly 0.0 is itself consistent with the small values being lost, which would be a hard failure against the exact target.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The workload is exactly the stored array from make_inputs(), whose interior rows contain +2^30, -2^30 and 8 values in [0.25,1.75] in a fixed permuted order; the contract requires the final row sums to match the exact real-number sum within 1e-5."
+        "summary": "problem.txt states the metric is against the mathematical exact sum evaluated in float64 or better, and that initial_probe is evidence only, not a specification."
       }
     ],
-    "scope_rationale": "The mechanism operates directly on the fixed contract workload (the permuted interior containing \u00b12^30 and the low values) and would make the final row sums deviate from the exact real-number target beyond the contract's 1e-5 tolerance.",
-    "statement": "The kernel's Neumaier correction accumulator itself loses small values: low values (0.25\u20131.75) whose lost-terms are added while `correction` holds \u00b12^30 (fp32 ulp at 2^30 is 2^7 = 128) are absorbed and then erased when the -2^30 lost-term resets correction to 0, so smalls positioned before -2^30 in the permutation contribute nothing to the final total+correction.",
-    "status": "confirmed",
-    "updated_at": "2026-09-24T07:19:54Z"
+    "scope_rationale": "problem.txt explicitly states initial_probe is evidence, not a specification, and that the acceptance metric is against the exact real-number sum in float64 or better; the probe's 0.0 reference is a sequential order-dependent sum, not that target.",
+    "statement": "The initial probe's sequential fp64 reference (exactly 0.0 per row) is not the contract target: it absorbs the small values into 2^80 (ulp 2^56) before -2^80 cancels, so the probe's 'passed' result does not demonstrate contract compliance even if the kernel output matches it.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-24T06:57:57Z"
   }
 ]

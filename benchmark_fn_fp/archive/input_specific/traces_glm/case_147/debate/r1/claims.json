@@ -1,0 +1,231 @@
+[
+  {
+    "created_at": "2026-09-24T07:15:39Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:16:32Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "e1034a6777adffd7588ee4e801d7149d94e248111db9a6cb7fc7c5c0af6f5111"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "5a68073df5f4a38811bec7fc25ef42894b00cd753e646ea415337faac8b5155d"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "33e0045de3e845f8d9a2742a494b988d69260835f09aa3057a8f99a5d0284e3a"
+            }
+          ],
+          "duration_s": 0.257353,
+          "exit_code": 0,
+          "expected_signal": "number of small values between the \u00b12^30 interior positions and whether the simulated fp32 correction loses them",
+          "json_parse_error": null,
+          "json_result": {
+            "n_small_between": 0,
+            "order": [
+              1,
+              0,
+              3,
+              6,
+              8,
+              7,
+              5,
+              9,
+              4,
+              2
+            ],
+            "pos30_col": 2,
+            "posm30_col": 1,
+            "sim_correction_sum": [
+              7.923600196838379,
+              7.551350116729736,
+              7.474208831787109,
+              8.696605682373047
+            ],
+            "sim_kernel_out": [
+              1.2089258196146292e+24,
+              1.2089258196146292e+24,
+              1.2089258196146292e+24,
+              1.2089258196146292e+24
+            ],
+            "small_between": []
+          },
+          "n_small_between": 0,
+          "order": [
+            1,
+            0,
+            3,
+            6,
+            8,
+            7,
+            5,
+            9,
+            4,
+            2
+          ],
+          "pos30_col": 2,
+          "posm30_col": 1,
+          "sim_correction_sum": [
+            7.923600196838379,
+            7.551350116729736,
+            7.474208831787109,
+            8.696605682373047
+          ],
+          "sim_kernel_out": [
+            1.2089258196146292e+24,
+            1.2089258196146292e+24,
+            1.2089258196146292e+24,
+            1.2089258196146292e+24
+          ],
+          "stderr": "",
+          "stdout": "{\"order\": [1, 0, 3, 6, 8, 7, 5, 9, 4, 2], \"pos30_col\": 2, \"posm30_col\": 1, \"n_small_between\": 0, \"small_between\": [], \"sim_correction_sum\": [7.923600196838379, 7.551350116729736, 7.474208831787109, 8.696605682373047], \"sim_kernel_out\": [1.2089258196146292e+24, 1.2089258196146292e+24, 1.2089258196146292e+24, 1.2089258196146292e+24]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Reproduced the fixed seed-203795 permutation: the -2^30 entry is at interior position 0 (column 1) and +2^30 at position 1 (column 2) \u2014 adjacent, with n_small_between = 0. No small value lies between the two 2^30-magnitude terms in the correction accumulation order, so the hypothesized absorption/loss mechanism never triggers on the fixed workload. The simulated plain fp32 correction sums (7.9236, 7.5514, 7.4742, 8.6966) match the actual kernel outputs exactly, confirming the reduction model but showing no small values are lost. Note: the \"sim_kernel_out\" host simulation produced ~1.2e24 because np.float32(total+corr) overflowed the 2^80-scale total (the GPU kernel's total drops to 0 at the terminal column before storing), but this does not affect the c1 conclusion; the sim_correction_sum values equal the real kernel output.",
+        "supports": "rebutted",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The Neumaier total stays at 2^80 (all interior values fully absorbed, recovered exactly as `lost`), so correction is a plain fp32 sum whose terms include +2^30 and -2^30. If the fixed permutation places any small [0.25,1.75] values between the +2^30 and -2^30 positions, those values are absorbed into the 2^30-magnitude partial and vanish from the final output, since correction has no compensation of its own.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Target is the exact real-number row sum of the fixed stored (4,12) make_inputs() array; acceptance requires ||output-target||/||target|| <= 1e-5. The interior contains exactly one +2^30, one -2^30 and eight values in [0.25,1.75] in a seed-fixed permutation, so losing even one small value (~1) against a ~8 target exceeds the 1e-5 tolerance."
+      }
+    ],
+    "scope_rationale": "The contract (problem.txt) fixes the workload to make_inputs()'s stored array whose interior contains +2^30, -2^30, and eight small values in a seed-fixed permutation, and requires the final row sums to match the exact real-number sum within 1e-5 relative; absorbing a ~1 value into the 2^30-scale correction partial would violate that tolerance on this exact fixed input.",
+    "statement": "If the fixed seed-203795 permutation places any of the eight small values (0.25\u20131.75) between the +2^30 and -2^30 entries in the correction accumulation order, those values are absorbed into the 2^30-magnitude fp32 correction partial and lost entirely, so run()'s output differs from the exact real-number row target by far more than the 1e-5 relative tolerance (each lost value is ~1 vs a ~8 target).",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T07:16:32Z"
+  },
+  {
+    "created_at": "2026-09-24T07:15:39Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-24T07:16:32Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t13_probe.py",
+              "sha256": "c01f2f3d8a6c443b0c2f339e6e6243542280d4b7615cd32238f8d29b7b748990"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t13_stdout.txt",
+              "sha256": "99d899c8d647eeb3fc028a22599de1859c06d969ce94c484f1df167a1a9fa08f"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t13_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t13_json_result.json",
+              "sha256": "6a463619ba21f4bd3f95915317b68cf5e6c69b04240591cc6b9a898f54a05b2a"
+            }
+          ],
+          "duration_s": 4.280899,
+          "exit_code": 0,
+          "expected_signal": "relative L2 error of kernel output vs exact Fraction targets, compared to 1e-5",
+          "json_parse_error": null,
+          "json_result": {
+            "output": [
+              7.923600196838379,
+              7.551350116729736,
+              7.474208831787109,
+              8.696605682373047
+            ],
+            "per_row_rel": [
+              3.7612097449709855e-09,
+              1.5786487130105832e-08,
+              3.588619182315495e-08,
+              5.140337220308983e-08
+            ],
+            "relative_l2": 3.3787355339815074e-08,
+            "targets": [
+              7.923600226640701,
+              7.551349997520447,
+              7.474209100008011,
+              8.696605235338211
+            ],
+            "tolerance": 1e-05,
+            "within_tol": true
+          },
+          "output": [
+            7.923600196838379,
+            7.551350116729736,
+            7.474208831787109,
+            8.696605682373047
+          ],
+          "per_row_rel": [
+            3.7612097449709855e-09,
+            1.5786487130105832e-08,
+            3.588619182315495e-08,
+            5.140337220308983e-08
+          ],
+          "relative_l2": 3.3787355339815074e-08,
+          "stderr": "",
+          "stdout": "{\"targets\": [7.923600226640701, 7.551349997520447, 7.474209100008011, 8.696605235338211], \"output\": [7.923600196838379, 7.551350116729736, 7.474208831787109, 8.696605682373047], \"relative_l2\": 3.3787355339815074e-08, \"tolerance\": 1e-05, \"per_row_rel\": [3.7612097449709855e-09, 1.5786487130105832e-08, 3.588619182315495e-08, 5.140337220308983e-08], \"within_tol\": true}\n",
+          "targets": [
+            7.923600226640701,
+            7.551349997520447,
+            7.474209100008011,
+            8.696605235338211
+          ],
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-05,
+          "within_tol": true
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Computed exact real-number row targets via Fraction summation of the stored float32 values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) and ran the actual GPU kernel via make_inputs('cuda')/run(). Relative L2 error is 3.379e-8, far below the 1e-5 tolerance; max per-row relative error 5.14e-8. The hypothesized above-tolerance error does not occur \u2014 the plain fp32 correction accumulation plus final fp32 store stays well within tolerance on the fixed workload (a fp32 ulp at ~8 is ~1e-6 absolute, consistent with the observed ~1e-7 errors).",
+        "supports": "rebutted",
+        "tool_event_id": "t13"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The exact targets must be computed by exact (e.g. fraction/float128) arithmetic of the stored float32 values; observed outputs 7.92/7.55/7.47/8.70 look right in magnitude, but magnitude agreement is not evidence at the 1e-5 level \u2014 the probe's own reference (0.0) is provably wrong (float64 cannot retain ~1 values against 2^80 partials), so no valid error measurement exists yet.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract requires ||output-target||_2/max(||target||_2,1e-12) <= 1e-5 against the exact real-number sum evaluated in float64 or better; the recorded probe measured error against a 0.0 reference, so the decisive quantity (error vs true target) is undetermined and must be measured."
+      }
+    ],
+    "scope_rationale": "problem.txt defines acceptance as error against the exact real-number row sum (evaluated in float64 or better) on the fixed workload; the recorded probe computed error against a 0.0 float64-sequential reference, which is not the contract target, so the decisive measurement on the fixed input is in scope and outstanding.",
+    "statement": "Even if no small value is fully lost, the plain fp32 accumulation of the correction term plus the fp32 store of total+correction may produce a relative error above 1e-5 against the exact real-number target; the decisive test is computing the exact targets (e.g. via exact integer/fraction summation of the stored float32 values) and comparing them to the kernel's outputs on the fixed workload.",
+    "status": "rebutted",
+    "updated_at": "2026-09-24T07:16:32Z"
+  }
+]

@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_p`
+- Entry: `case_j`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 20.809s across 5 calls | tokens: in=48664 out=1163 total=49827
+- LLM time: 29.195s across 5 calls | tokens: in=49940 out=1602 total=51542
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.98
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_p",
+    "entry": "case_j",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 
-### Turn 2 - `solo` (3.489145085s, in=7383 out=228)
+### Turn 2 - `solo` (9.818595440000001s, in=7115 out=516)
 
 Message:
 
 ```text
-I'll record the core correctness claim and test it directly against the fixed workload.
+The contract is a single fixed input with a numeric tolerance test. The kernel computes mean/variance in fp32 (not fp64), which is the one plausible failure mode. I'll record that claim and run it directly.
 ```
 
 Tool calls:
@@ -73,28 +73,28 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise, the residual is tiny and float32 cancellation could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
+    "rationale": "The kernel accumulates total and squares in float32 while the reference is evaluated in float64; x has mean ~64 and variance ~0.0156, so E[x\u00b2]\u2212mean\u00b2 involves cancellation of terms ~4096 vs 0.0156, which could inflate variance error beyond the 0.02 relative-L2 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
+        "summary": "Reference is evaluated in float64 with the stated formulas; output relative L2 error must be <= 0.02 for the fixed input from make_inputs()."
       }
     ],
-    "statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.
-  ...[truncated 3 chars]
+    "statement": "The kernel's float32 accumulation of sum and sum-of-squares causes relative L2 error > 0.02 on the fixed workload."
+  }
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (4.519424767s, in=8049 out=261)
+### Turn 3 - `solo` (4.057656874999999s, in=7790 out=276)
 
 Message:
 
 ```text
-I need to re-record the claim with scope_rationale, then run the probe.
+I need to re-record the claim with scope_rationale included, then run the probe.
 ```
 
 Tool calls:
@@ -102,39 +102,38 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
+    "rationale": "The kernel accumulates total and squares in float32 while the reference is evaluated in float64; x has mean ~64 and variance ~0.0156, so squares/N - mean*mean involves catastrophic cancellation of terms ~4096 vs ~0.0156, which could inflate variance error beyond the 0.02 relative-L2 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
+        "summary": "The reference uses the original float32 input values evaluated in float64 with mean = sum/128, variance = sum((x-mean)^2)/128, and requires relative L2 error <= 0.02 on the fixed make_inputs() workload."
       }
     ],
-    "scope_rationale": "The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.",
-    "stat
-  ...[truncated 200 chars]
+    "scope_rationale": "The contract specifies the exact reference computation (float64 evaluation of mean and population variance) and requires relative L2 error <= 0.02 for 
+  ...[truncated 269 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
+    "rationale": "The kernel accumulates total and squares in float32 while the reference is evaluated in float64; x has mean ~64 and variance ~0.0156, so squares/N - mean*mean involves catastrophic cancellation of terms ~4096 vs ~0.0156, which could inflate variance error beyond the 0.02 relative-L2 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
+        "summary": "The reference uses the original float32 input values evaluated in float64 with mean = sum/128, variance = sum((x-mean)^2)/128, and requires relative L2 error <= 0.02 on the fixed make_inputs() workload."
       }
     ],
-    "scope_rationale": "The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.",
-    "statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
+    "scope_rationale": "The contract specifies the exact reference computation (float64 evaluation of mean and population variance) and requires relative L2 error <= 0.02 for the fixed make_inputs() input; any kernel whose fp32 accumulation causes that error to exceed 0.02 violates this numeric requirement.",
+    "statement": "The kernel's float32 accumulation of sum and sum-of-squares causes relative L2 error > 0.02 on the fixed workload.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (4.883966625999999s, in=9323 out=250)
+### Turn 4 - `solo` (4.716606201000001s, in=9109 out=274)
 
 Message:
 
 ```text
-I'll run the probe on the fixed workload, comparing the kernel's float32 output to a float64 reference.
+I'll run the claim probe on the actual kernel with the fixed input, computing the contract's exact relative L2 metric.
 ```
 
 Tool calls:
@@ -143,8 +142,9 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import numpy as np, torch, sys, os\nsys.path.insert(0, \"/root/numerical_cases/case_p\")\nfrom kernel import run, make_inputs_numpy\n\nu_np, b_np = make_inputs_numpy()\nu = torch.from_numpy(u_np).to(\"cuda\")\nb = torch.from_numpy(b_np).to(\"cuda\")\nout = run(u, b).cpu().numpy().astype(np.float64)\n\n# float64 reference on actual stored inputs, with recentring (b stored = round(1.125u + eps))\nu64 = u_np.astype(np.float64); b64 = b_np.astype(np.float64)\nalpha = (u64*b64).sum() / (u64*u64).sum()\nres = b64 - alpha*u64\nref = res / np.linalg.norm(res)\nrel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(np.round(float(rel), 6), bool(np.isfinite(out).all()))\n"
-  }
+    "code": "\nimport numpy as np, torch, math, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/numerical_cases/case_j/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nx, = k.make_inputs(device=\"cuda\")\nout = k.run(x)\nx64 = x.cpu().numpy().astype(np.float64)\nmean = x64.sum()/128\nvar = ((x64-mean)**2).sum()/128\nref = (x64-mean)/np.sqrt(var+1e-5)\no = out.cpu().numpy().astype(np.float64)\nnum = np.linalg.norm(o-ref)\nden = max(np.linalg.norm(ref), 0.001*math.sqrt(128))\nrel = num/den\nprint(json.dumps({\"rel_l2\": float(rel), \"mean\": mean, \"var\": var, \"num\": float(num),\n                  \"finite\": bool(np.isfinite(o).all()), \"shape\": list(out.shape)}))\n",
+    "expected_signal": 
+  ...[truncated 18 chars]
   Output summary:
   {
     "artifacts": [
@@ -152,41 +152,42 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "2b0a36d548f4ea2afb024ccf732cc2e9a80ef68eabdcda997128c6e97c07e918"
+        "sha256": "4aeef57b4307305370eacb0de6df744c9ff16d3f054705fa6f67f2fd0f4b38fe"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "a32c9305ddc7aa6779f006fbe477aacd899475ec5a7f84c9daa0b9f78c87de75"
+        "sha256": "d03850ab65b187524e8f7397e582b6eb8dcb78002bd77179a3b3722e72024e86"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t7_json_result.json",
+        "sha256": "0876e0e26df981e01a6d7df16a17ec6a911b18e2089d886cb66aedbb2bc6382a"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
-    "duration_s": 7.231288,
+    "claim_statement": "The kernel's float32 accumulation of sum and sum-of-squares causes relative L2 error > 0.02 on the fixed workload.",
+    "duration_s": 6.679098,
     "event_id": "t7",
     "evidence_draft": {
       "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t7_pr
-  ...[truncated 1255 chars]
+      "d
+  ...[truncated 2364 chars]
 
-### Turn 5 - `solo` (3.194758402999998s, in=10845 out=190)
+### Turn 5 - `solo` (6.387695764s, in=11178 out=300)
 
 Message:
 
 ```text
-The probe shows relative L2 error ≈ 0.0605 against the float64 reference, far above the 0.01 tolerance — the claim is confirmed.
+The probe confirmed the hypothesis: rel_l2 ≈ 0.1448, far above the 0.02 tolerance, because of float32 catastrophic cancellation in `squares/N - mean*mean`. I'll finalize the evidence and reject.
 ```
 
 Tool calls:
@@ -195,13 +196,15 @@ Tool calls:
   Args:
   {
     "data": {
-      "finite_output": true,
-      "relative_l2_error": 0.060455,
-      "tolerance": 0.01
+      "kernel_variance_cause": "fp32 E[x^2]-mean^2 cancellation",
+      "mean": 64.00110465288162,
+      "reference_var": 0.014721887763837316,
+      "rel_l2": 0.14481964583989307,
+      "tolerance": 0.02
     },
     "event_id": "t7",
     "status": "confirmed",
-    "summary": "On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).",
+    "summary": "On the exact contract input (make_inputs with seed 782406, mean\u224864.0, reference variance\u22480.0147), the kernel output has relative L2 error 0.1448 vs the float64 reference \u2014 7x over the 0.02 tolerance. Finite output, correct shape, but the fp32 E[x\u00b2]\u2212mean\u00b2 computation loses the variance to catastrophic cancellation (terms ~4096 vs ~0.015).",
     "supports": "confirmed"
   }
   Output summary:
@@ -209,17 +212,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).",
+    "summary": "On the exact contract input (make_inputs with seed 782406, mean\u224864.0, reference variance\u22480.0147), the kernel output has relative L2 error 0.1448 vs the float64 reference \u2014 7x over the 0.02 tolerance. Finite output, correct shape, but the fp32 E[x\u00b2]\u2212mean\u00b2 computation loses the variance to catastrophic cancellation (terms ~4096 vs ~0.015).",
     "supports": "confirmed",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (4.7215708549999995s, in=13064 out=234)
+### Turn 6 - `solo` (4.214509024000002s, in=14748 out=236)
 
 Message:
 
 ```text
-The single in-scope claim is confirmed by runtime probe: relative L2 error 0.0605 vs the 0.01 tolerance on the exact fixed workload. I'll record the verdict.
+The single in-scope claim is confirmed with runtime evidence (rel_l2 = 0.1448 vs the required ≤ 0.02). Recording the verdict.
 ```
 
 Tool calls:
@@ -227,20 +230,20 @@ Tool calls:
 - `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
+    "reason": "Probe t7 ran the exact contract input (make_inputs(), seed 782406) on the real kernel and computed the contract's own relative L2 metric against the float64 reference (mean\u224864.0011, population variance\u22480.0147). The kernel output is finite with correct shape but has rel_l2 \u2248 0.1448, ~7x over the required \u22640.02 tolerance. Root cause: the kernel computes variance as squares/N \u2212 mean\u00b2 in fp32, where x has mean \u224864 so E[x\u00b2]\u22484096 cancels down to \u22480.015, destroying the variance. This violates the explicitly stated numeric requirement in problem.txt, so the kernel is rejected.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
+    "reason": "Probe t7 ran the exact contract input (make_inputs(), seed 782406) on the real kernel and computed the contract's own relative L2 metric against the float64 reference (mean\u224864.0011, population variance\u22480.0147). The kernel output is finite with correct shape but has rel_l2 \u2248 0.1448, ~7x over the required \u22640.02 tolerance. Root cause: the kernel computes variance as squares/N \u2212 mean\u00b2 in fp32, where x has mean \u224864 so E[x\u00b2]\u22484096 cancels down to \u22480.015, destroying the variance. This violates the explicitly stated numeric requirement in problem.txt, so the kernel is rejected.",
     "verdict": "reject"
   }
 
@@ -252,44 +255,44 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.
+Statement: The kernel's float32 accumulation of sum and sum-of-squares causes relative L2 error > 0.02 on the fixed workload.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.
+Scope rationale: The contract specifies the exact reference computation (float64 evaluation of mean and population variance) and requires relative L2 error <= 0.02 for the fixed make_inputs() input; any kernel whose fp32 accumulation causes that error to exceed 0.02 violates this numeric requirement.
 
 Scope evidence:
-- `problem.txt`: Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.
+- `problem.txt`: The reference uses the original float32 input values evaluated in float64 with mean = sum/128, variance = sum((x-mean)^2)/128, and requires relative L2 error <= 0.02 on the fixed make_inputs() workload.
 
-Rationale: The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b ≈ 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.
+Rationale: The kernel accumulates total and squares in float32 while the reference is evaluated in float64; x has mean ~64 and variance ~0.0156, so squares/N - mean*mean involves catastrophic cancellation of terms ~4096 vs ~0.0156, which could inflate variance error beyond the 0.02 relative-L2 budget.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: On the exact contract input (make_inputs with seed 782406, mean≈64.0, reference variance≈0.0147), the kernel output has relative L2 error 0.1448 vs the float64 reference — 7x over the 0.02 tolerance. Finite output, correct shape, but the fp32 E[x²]−mean² computation loses the variance to catastrophic cancellation (terms ~4096 vs ~0.015).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t5 - record_claim - error
@@ -303,16 +306,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
+  "rationale": "The kernel accumulates total and squares in float32 while the reference is evaluated in float64; x has mean ~64 and variance ~0.0156, so squares/N - mean*mean involves catastrophic cancellation of terms ~4096 vs ~0.0156, which could inflate variance error beyond the 0.02 relative-L2 budget.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
+      "summary": "The reference uses the original float32 input values evaluated in float64 with mean = sum/128, variance = sum((x-mean)^2)/128, and requires relative L2 error <= 0.02 on the fixed make_inputs() workload."
     }
   ],
-  "scope_rationale": "The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.",
-  "statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
+  "scope_rationale": "The contract specifies the exact reference computation (float64 evaluation of mean and population variance) and requires relative L2 error <= 0.02 for the fixed make_inputs() input; any kernel whose fp32 accumulation causes that error to exceed 0.02 violates this numeric requirement.",
+  "statement": "The kernel's float32 accumulation of sum and sum-of-squares causes relative L2 error > 0.02 on the fixed workload.",
   "status": "open"
 }
 
@@ -324,24 +327,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "2b0a36d548f4ea2afb024ccf732cc2e9a80ef68eabdcda997128c6e97c07e918"
+      "sha256": "4aeef57b4307305370eacb0de6df744c9ff16d3f054705fa6f67f2fd0f4b38fe"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "a32c9305ddc7aa6779f006fbe477aacd899475ec5a7f84c9daa0b9f78c87de75"
+      "sha256": "d03850ab65b187524e8f7397e582b6eb8dcb78002bd77179a3b3722e72024e86"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t7_json_result.json",
+      "sha256": "0876e0e26df981e01a6d7df16a17ec6a911b18e2089d886cb66aedbb2bc6382a"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
-  "duration_s": 7.231288,
+  "claim_statement": "The kernel's float32 accumulation of sum and sum-of-squares causes relative L2 error > 0.02 on the fixed workload.",
+  "duration_s": 6.679098,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -351,28 +360,23 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "2b0a36d548f4ea2afb024ccf732cc2e9a80ef68eabdcda997128c6e97c07e918"
+          "sha256": "4aeef57b4307305370eacb0de6df744c9ff16d3f054705fa6f67f2fd0f4b38fe"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "a32c9305ddc7aa6779f006fbe477aacd899475ec5a7f84c9daa0b9f78c87de75"
+          "sha256": "d03850ab65b187524e8f7397e582b6eb8dcb78002bd77179a3b3722e72024e86"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        }
-      ],
-      "duration_s": 7.231288,
-      "exit_code": 0,
-      "expected_signal": null,
-      "json_parse_error": "last stdout line is not JSON: Extra data",
-      "json_result": null,
-      "stderr
-...[truncated 455 chars]
+        },
+        {
+          "descr
+...[truncated 1564 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
@@ -380,7 +384,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).",
+  "summary": "On the exact contract input (make_inputs with seed 782406, mean\u224864.0, reference variance\u22480.0147), the kernel output has relative L2 error 0.1448 vs the float64 reference \u2014 7x over the 0.02 tolerance. Finite output, correct shape, but the fp32 E[x\u00b2]\u2212mean\u00b2 computation loses the variance to catastrophic cancellation (terms ~4096 vs ~0.015).",
   "supports": "confirmed",
   "tool_event_id": "t7"
 }
@@ -388,22 +392,22 @@ Evidence:
 ### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.98,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
+  "reason": "Probe t7 ran the exact contract input (make_inputs(), seed 782406) on the real kernel and computed the contract's own relative L2 metric against the float64 reference (mean\u224864.0011, population variance\u22480.0147). The kernel output is finite with correct shape but has rel_l2 \u2248 0.1448, ~7x over the required \u22640.02 tolerance. Root cause: the kernel computes variance as squares/N \u2212 mean\u00b2 in fp32, where x has mean \u224864 so E[x\u00b2]\u22484096 cancels down to \u22480.015, destroying the variance. This violates the explicitly stated numeric requirement in problem.txt, so the kernel is rejected.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-24T00:58:13Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-24T00:11:06Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
+  "reason": "Probe t7 ran the exact contract input (make_inputs(), seed 782406) on the real kernel and computed the contract's own relative L2 metric against the float64 reference (mean\u224864.0011, population variance\u22480.0147). The kernel output is finite with correct shape but has rel_l2 \u2248 0.1448, ~7x over the required \u22640.02 tolerance. Root cause: the kernel computes variance as squares/N \u2212 mean\u00b2 in fp32, where x has mean \u224864 so E[x\u00b2]\u22484096 cancels down to \u22480.015, destroying the variance. This violates the explicitly stated numeric requirement in problem.txt, so the kernel is rejected.",
   "verdict": "reject"
 }

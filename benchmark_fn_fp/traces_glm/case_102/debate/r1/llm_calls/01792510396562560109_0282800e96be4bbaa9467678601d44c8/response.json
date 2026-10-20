@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-8dff33cf",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two runtime probes: c1 does an exhaustive sweep of all finite FP16 values against the FP64 reference (decisive for the domain-wide 1e-6 tolerance), and c2 directly tests whether `tl.div_rn` produces correctly-rounded FP32 division on this environment.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a0f788e8f45f1556",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, json, sys, glob\\nsys.path.insert(0, glob.glob('/root/cases/case_102')[0] if glob.glob('/root/cases/case_102') else '/root/cases/case_102')\\nimport kernel as K\\n\\ndev = 'cuda'\\n# Exhaustive sweep of ALL finite FP16 bit patterns in chunks <=131072\\nbits = np.arange(0x0000, 0x10000, dtype=np.uint16)\\nvals = torch.from_numpy(bits.view(np.float16).copy())\\nfinite = torch.isfinite(vals)\\nfv = vals[finite].to(dev)\\nprint(\\\"total patterns\\\", bits.size, \\\"finite\\\", int(finite.sum().item()))\\n\\nn = fv.numel()\\nprint(\\\"n =\\\", n)  # should be ~64512-65504 depending\\nchunks = [fv[i:i+131072] for i in range(0, n, 131072)]\\nout_parts = [K.run(c) for c in chunks]\\nout = torch.cat(out_parts)\\nref = K.reference(fv).to(dev)  # FP64\\nrel = ((out.to(torch.float64) - ref).abs() / ref.abs())\\nmax_rel = rel.max().item()\\nbad = (rel > 1e-6)\\nprint(\\\"max_rel\\\", max_rel, \\\"num_bad\\\", int(bad.sum().item()), \\\"tol\\\", 1e-6)\\nidx = torch.argsort(rel, descending=True)[:5]\\nprint(\\\"worst x:\\\", [float(fv[i]) for i in idx.tolist()])\\nprint(\\\"worst rel:\\\", [float(rel[i]) for i in idx.tolist()])\\nprint(json.dumps({\\\"max_rel\\\": max_rel, \\\"tolerance\\\": 1e-6, \\\"num_bad\\\": int(bad.sum().item()), \\\"n_inputs\\\": n,\\n                  \\\"worst_x\\\": [float(fv[i]) for i in idx.tolist()], \\\"worst_rel\\\": [float(rel[i]) for i in idx.tolist()]}))\", \"expected_signal\": \"max relative error vs FP64 reference over exhaustive finite FP16 domain, compared to 1e-6\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b2f30c6982611bb8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, triton, triton.language as tl, numpy as np, json\\n\\n@triton.jit\\ndef div_kernel(A, B, O, N: tl.constexpr, BLOCK: tl.constexpr):\\n    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    m = i < N\\n    a = tl.load(A + i, mask=m, other=1.0)\\n    b = tl.load(B + i, mask=m, other=1.0)\\n    tl.store(O + i, tl.div_rn(a, b), mask=m)\\n\\n# mantissa-like values in [1,2) crossed with estimate^2-like values\\ng = torch.Generator().manual_seed(1)\\na = torch.rand(1 << 20, generator=g) + 1.0     # [1,2)\\ne = torch.rand(1 << 20, generator=g) * 0.1 + 1.0\\nb = (e * e).to(torch.float32)\\na = a.to(torch.float32)\\na, b = a.cuda(), b.cuda()\\nout = torch.empty_like(a)\\nN = a.numel()\\ndiv_kernel[(triton.cdiv(N, 256),)](a, b, out, N=N, BLOCK=256, num_warps=4, enable_fp_fusion=False)\\n# correctly-rounded FP32 division reference (numpy division is round-to-nearest)\\nref = (a.cpu().double() / b.cpu().double()).to(torch.float32).cuda()\\nexact = (out == ref)\\nmismatch = (~exact).sum().item()\\nrel = ((out.double() - ref.double()).abs() / ref.double().abs())\\nprint(json.dumps({\\\"n\\\": N, \\\"bit_exact_matches\\\": int(exact.sum().item()), \\\"mismatches\\\": int(mismatch),\\n                 \\\"max_rel_dev_from_correct_rounding\\\": float(rel.max().item()),\\n                 \\\"max_abs_dev\\\": float((out-ref).abs().max().item()),\\n                 \\\"div_rn_correctly_rounded\\\": mismatch == 0}))\", \"expected_signal\": \"tl.div_rn output bit-exact with correctly-rounded FP32 division on >1M random [1,2)x[~1,~1.44] operands\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Both claims need runtime probes on GPU. Check GPU availability first, then run a probe covering all finite FP16 values (3 blocks of 16K-ish? All finite FP16 values: 65536 total bit patterns minus NaN/Inf: 65504... actually 65536 patterns; ~64512 finite). Test all finite values against FP64 reference — exhaustive, decisive for both c1 and c2 jointly, though c2 asks specifically about div_rn correctness. An exhaustive test covers the final outputs; if errors exceed 1e-6, confirm c1; div_rn correctness can be inferred by comparing against an FP64-emulated pipeline with exactly-rounded division.\n\nLaunch both probes: c1 exhaustive FP16 domain test vs FP64 reference; c2 compare div_rn result against correctly rounded division — emulated: run kernel but also compute emulated pipeline in float64/float32 exact? Simplest: c2 probe checks whether tl.div_rn output matches numpy correctly-rounded division in a small Triton test kernel with mantissa values. I'll write a second mini Triton kernel that computes div_rn(a,b) for a set of FP32 values and compare to np.float32 division (round-to-nearest). Need to import kernel.py from session dir.\n\nWrite both probes in one response."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510398,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1308,
+    "prompt_tokens": 20125,
+    "total_tokens": 21433,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 272,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

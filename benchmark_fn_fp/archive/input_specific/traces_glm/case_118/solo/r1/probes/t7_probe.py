@@ -1,14 +1,24 @@
+import json, torch, numpy as np, sys
+sys.path.insert(0, "/root/numerical_cases/case_n")
+import kernel
 
-import json, sys, math
-sys.path.insert(0, "/root/numerical_cases/case_t")
-import numpy as np, torch
-from kernel import make_inputs, run
+coeff, pts = kernel.make_inputs("cuda")
+out = kernel.run(coeff, pts)
+torch.cuda.synchronize()
+out = out.cpu().numpy()
 
-a, f, p = make_inputs()
-out = run(a, f, p).cpu().numpy()
-A, F, P = a.cpu().numpy().astype(np.float64), f.cpu().numpy().astype(np.float64), p.cpu().numpy().astype(np.float64)
-ref = 1.0 + (A*(np.cos(P)-np.cos(P+F))/F)).sum(axis=1)
-rel = np.linalg.norm(out.astype(np.float64)-ref)/max(np.linalg.norm(ref),1e-12)
-print(json.dumps({"output": out.tolist(), "reference": ref.tolist(),
-                  "rel_l2": float(rel), "finite": bool(np.all(np.isfinite(out))),
-                  "tolerance": 0.035, "passes": bool(rel<=0.035)}))
+c64 = coeff.cpu().numpy().astype(np.float64)
+p64 = pts.cpu().numpy().astype(np.float64)
+ref = np.array([sum(c64[i,k]*p64[i]**k for k in range(49)) for i in range(8)])
+
+denom = max(np.linalg.norm(ref), 0.001*np.sqrt(8))
+err = np.linalg.norm(out.astype(np.float64)-ref)/denom
+print(json.dumps({
+  "metric": "relative L2 error vs float64 reference",
+  "output": out.tolist(),
+  "reference": ref.tolist(),
+  "reference_norm": float(np.linalg.norm(ref)),
+  "rel_l2_error": float(err),
+  "contract_limit": 0.0002,
+  "passes": bool(err <= 0.0002 and np.all(np.isfinite(out)))
+}))

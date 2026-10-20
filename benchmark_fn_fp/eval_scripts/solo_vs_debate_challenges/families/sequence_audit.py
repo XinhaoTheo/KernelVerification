@@ -12,7 +12,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_127", "case_128")
+CASES = ("case_133", "case_134")
 SEARCH_SEEDS = tuple(range(941200, 941264))
 N, D = 8, 32
 TOLERANCE = 1e-5
@@ -259,9 +259,9 @@ def build(root):
 
     root = archived_collection(root)
     candidates = [_candidate(seed) for seed in SEARCH_SEEDS]
-    selected = {"case_127": next(row for row in candidates if row["cpu_ground_truth"] == "trust"
+    selected = {"case_133": next(row for row in candidates if row["cpu_ground_truth"] == "trust"
                                 and row["permutations_distinct"]),
-                "case_128": next(row for row in candidates if row["cpu_ground_truth"] == "reject")}
+                "case_134": next(row for row in candidates if row["cpu_ground_truth"] == "reject")}
     answer = {"family": "sequence_audit", "tolerance": TOLERANCE, "cases": {}}
     for name, row in selected.items():
         assert row["initial_probe_all_passed"]

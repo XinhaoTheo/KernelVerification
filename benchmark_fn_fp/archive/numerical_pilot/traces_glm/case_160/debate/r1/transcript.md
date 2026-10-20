@@ -1,13 +1,13 @@
 # Agentic Verification Transcript
 
-- Entry: `case_97`
-- Turns: 10
-- Tool events: 13
+- Entry: `case_91`
+- Turns: 11
+- Tool events: 14
 - Claims: 1
 - Description updates: 2
-- LLM time: 97.339s across 9 calls | tokens: in=174939 out=5038 total=179977
+- LLM time: 96.788s across 10 calls | tokens: in=191253 out=4670 total=195923
 - Stop reason: `verdict_recorded`
-- Verdict: `trust`
+- Verdict: `reject`
 - Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_97"
+    "entry": "case_91"
   }
   Output summary:
   {
-    "entry": "case_97"
+    "entry": "case_91"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_97"
+    "entry": "case_91"
   }
   Output summary:
   {
-    "entry": "case_97"
+    "entry": "case_91"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_97"
+    "entry": "case_91"
   }
   Output summary:
   {
-    "entry": "case_97"
+    "entry": "case_91"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_97",
+    "entry": "case_91",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_97"
+    "entry": "case_91"
   }
 
-### Turn 2 - `describer` (19.860298399000044s, in=5683 out=1100)
+### Turn 2 - `describer` (17.93137730400008s, in=5562 out=971)
 
 Message:
 
 ```text
-I have the full kernel and problem context. Key observation: the recurrence kernel deliberately rounds every hidden state to fp16 each step (line 13), a lossy choice the contract explicitly permits if E ≤ 0.003. The workload is a decay 0.99 recurrence over t=896 with small inputs, so the fixed point h ≈ b/(1−a) ≈ 1.0 — well within fp16 range. I'll record the description model now.
+I have full context from the loaded artifact. This is a symmetric 7-level per-row uniform-quantized matvec; the contract permits the quantization loss if relative error E stays within 0.12 on the single fixed workload. I'll record the description model now.
 ```
 
 Tool calls:
@@ -75,39 +75,36 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Single fixed workload: recurrence family, seed 454, t=896, d=32, decay=0.99, noise=0.001, bias=0.01; a is constant 0.99, b ~ N(0.01, 0.001^2).",
-      "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all T*D=28672 states returned.",
-      "Reference is float64 evaluation on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)); compliance iff finite and E <= 0.003.",
-      "Reduced precision is explicitly permitted; presence of fp16 rounding alone is neither defect nor proof.",
-      "Target T4, PyTorch 2.8.0, Triton 3.4.0; finite-workload compliance only, not universal correctness."
+      "Single fixed workload: make_inputs() with CONFIG quantization family, seed 1224, m=32 rows, k=256, mix=0.75, residual=1.0; x and w are CPU-generated float32 tensors.",
+      "Operation is y = W @ x treating the original binary32 weights and x as real values.",
+      "Reference is the operation computed in float64 on the same float32 inputs.",
+      "Compliance metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); pass iff all outputs finite and E <= 0.12.",
+      "Reduced precision / approximate arithmetic (e.g., quantization) is explicitly permitted if the budget is met; this is finite-workload compliance, not all-input correctness."
     ],
     "kernel_model": [
-      "Triton kernel loops t=0..T-1 over a D=32-wide vector, computing h = a*h + b in fp32, then explicitly rounds h to fp16 and back to fp3
-  ...[truncated 2685 chars]
+      "Triton kernel runs one program per output row; loads full x (K=256) and one row of 
+  ...[truncated 3009 chars]
   Output summary:
   {
     "contract_model": [
-      "Single fixed workload: recurrence family, seed 454, t=896, d=32, decay=0.99, noise=0.001, bias=0.01; a is constant 0.99, b ~ N(0.01, 0.001^2).",
-      "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all T*D=28672 states returned.",
-      "Reference is float64 evaluation on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)); compliance iff finite and E <= 0.003.",
-      "Reduced precision is explicitly permitted; presence of fp16 rounding alone is neither defect nor proof.",
-      "Target T4, PyTorch 2.8.0, Triton 3.4.0; finite-workload compliance only, not universal correctness."
+      "Single fixed workload: make_inputs() with CONFIG quantization family, seed 1224, m=32 rows, k=256, mix=0.75, residual=1.0; x and w are CPU-generated float32 tensors.",
+      "Operation is y = W @ x treating the original binary32 weights and x as real values.",
+      "Reference is the operation computed in float64 on the same float32 inputs.",
+      "Compliance metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); pass iff all outputs finite and E <= 0.12.",
+      "Reduced precision / approximate arithmetic (e.g., quantization) is explicitly permitted if the budget is met; this is finite-workload compliance, not all-input correctness."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel loops t=0..T-1 over a D=32-wide vector, computing h = a*h + b in fp32, then explicitly rounds h to fp16 and back to fp32 before each store (kernel.py line 13).",
-      "Grid is (1,) with a single program; D must be a power of two for tl.arange (D=32 satisfies this).",
-      "run() allocates out = empty_like(b) (float32, shape (896,32)) and launches with enable_fp_fusion=False to avoid a*b+... reassociation concerns.",
-      "Init h = 0.0 in fp32 matches h[0] = a[0]*0 + b[0].",
-      "fp16 has ~2^
-  ...[truncated 2375 chars]
+      "Triton kernel runs one program per output row; loads full x (K=256) and one row of W, computes per-row scale = max|w|/7, quantizes w to integer levels via floor(w/scale + 0.5) clamped to [-7, 7], dequantizes (qi*scale), and computes y = sum(x * dequantized w), all in the tensor dtype (float32), storing one float32 output per row.",
+      "run() allocates an m-element float32 output and launches grid (m,) with K=256 as constexpr; enable_fp_fusion=False set
+  ...[truncated 2699 chars]
 
-### Turn 3 - `skeptic` (9.582377827999949s, in=13841 out=479)
+### Turn 3 - `skeptic` (7.674746712000001s, in=13088 out=352)
 
 Message:
 
 ```text
-I'll record the central testable hypothesis: whether the per-step fp16 rounding accumulates beyond the 0.003 relative-L2 budget on the exact contract workload.
+The decisive question here is purely numerical: does the per-row 7-level quantization error, amplified by the adversarially chosen x, exceed the E ≤ 0.12 budget? I'll record that as the primary testable claim.
 ```
 
 Tool calls:
@@ -115,28 +112,29 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "Each step injects up to ~2^-11 relative (~4.9e-4 absolute at h~1) fp16 quantization error, which is filtered through the recurrence with gain 1/(1-0.99)=100, so steady-state per-element deviation could reach ~1e-3 or more; whether the RMS stays under 0.003 relative to ||ref||~169 is not obvious and requires a runtime measurement.",
+    "rationale": "make_inputs deliberately constructs x with a full unit-weight component along the aggregate quantization-residual direction, so the per-row 7-level quantization error is directly amplified in the output; with m=32 rows the norm of the error could exceed the 0.12 relative budget. This is the sole decisive compliance test per the contract.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Compliance iff all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (recurrence, t=896, d=32, decay=0.99, noise=0.001, bias=0.01); reduced precision permitted only if the budget is met."
-      }
-    ],
-    "statement": "The kernel's per-step fp16 rounding (kernel.py line 13
-  ...[truncated 131 chars]
+        "summary": "Reference is y = W @ x in float64 on the same float32 inputs; compliance iff outputs finite and E <= 0.12; reduced precision is permitted only if this budget is met."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "make_inputs() is the exact single workload (CONFIG seed 1224, m=32, k=256, mix=0.75, residual=1.0), and it adds c
+  ...[truncated 312 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (6.942275861999974s, in=14684 out=396)
+### Turn 4 - `skeptic` (6.634251248000055s, in=13963 out=388)
 
 Message:
 
 ```text
-The prior claim attempt failed for a missing scope_rationale; I'm re-recording the central hypothesis with all required fields.
+The prior claim attempt was rejected for missing `scope_rationale`; I'll re-record it correctly with the scope rationale tied to the contract.
 ```
 
 Tool calls:
@@ -144,38 +142,42 @@ Tool calls:
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Each step injects up to ~2^-11 relative (~4.9e-4 absolute at h~1) fp16 quantization error, which is filtered through the recurrence with gain 1/(1-0.99)=100, so steady-state per-element deviation could approach ~1e-3; whether the RMS stays under 0.003 relative to ||ref||~169 is not obvious and needs a runtime measurement of E on the exact workload.",
+    "rationale": "make_inputs deliberately constructs x with a full unit-weight component along the aggregate quantization-residual direction, so the per-row 7-level quantization error is directly amplified in the output; with m=32 rows the error norm could exceed the 0.12 relative budget. This is the sole decisive compliance test per the contract.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Compliance iff all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (recurrence, t=896, d=32, decay=0.99, noise=0.001, bias=0.01); reduced precision is permitted only if this budget is met."
-      }
-    ],
-    "scope_rationale": "problem.txt requires E <=
-  ...[truncated 361 chars]
+        "summary": "Reference is y = W @ x in float64 on the same float32 inputs; compliance iff outputs finite and E <= 0.12; reduced precision permitted only if this budget is met."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "make_inputs() is the exact single workload (CONFIG seed 1224, m=32, k=256, mix=0.75, residual=1.0) and adds cfg['residual']
+  ...[truncated 600 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Each step injects up to ~2^-11 relative (~4.9e-4 absolute at h~1) fp16 quantization error, which is filtered through the recurrence with gain 1/(1-0.99)=100, so steady-state per-element deviation could approach ~1e-3; whether the RMS stays under 0.003 relative to ||ref||~169 is not obvious and needs a runtime measurement of E on the exact workload.",
+    "rationale": "make_inputs deliberately constructs x with a full unit-weight component along the aggregate quantization-residual direction, so the per-row 7-level quantization error is directly amplified in the output; with m=32 rows the error norm could exceed the 0.12 relative budget. This is the sole decisive compliance test per the contract.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Compliance iff all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (recurrence, t=896, d=32, decay=0.99, noise=0.001, bias=0.01); reduced precision is permitted only if this budget is met."
+        "summary": "Reference is y = W @ x in float64 on the same float32 inputs; compliance iff outputs finite and E <= 0.12; reduced precision permitted only if this budget is met."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "make_inputs() is the exact single workload (CONFIG seed 1224, m=32, k=256, mix=0.75, residual=1.0) and adds cfg['residual']*residual, the aggregate quantization-error direction, to x."
       }
     ],
-    "scope_rationale": "problem.txt requires E <= 0.003 on the exact make_inputs() workload (t=896, d=32, decay=0.99, noise=0.001, bias=0.01); a budget violation on that exact workload is a contract breach.",
-    "statement": "The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003.",
-    "status": "open"
-  }
+    "scope_rationale": "problem.txt fixes the workload to exactly make_inputs() and defines compliance as E <= 0.12 with E measured against the exact float64 W @ x reference; the kernel's per-row 7-level weight quantization is the only error source large enough to breach that budget on this workload.",
+    "statemen
+  ...[truncated 234 chars]
 
-### Turn 5 - `describer` (21.050646615000005s, in=14672 out=1093)
+### Turn 5 - `describer` (21.05930003399999s, in=13954 out=981)
 
 Message:
 
 ```text
-The description model is already recorded and complete; the open claim c1 needs runtime evidence rather than description work. What I can still contribute is a sharper analytical bound on the fp16 error accumulation to guide the Experimenter's measurement design, so I'll record that refinement.
+The description model is already recorded and no description tasks are open. The one remaining open item is claim c1 (whether quantization error exceeds the E ≤ 0.12 budget), which is squarely an Experimenter runtime question. I'll add one refinement: a back-of-envelope magnitude estimate of the expected quantization error versus the reference norm, to help Skeptic/Experimenter size the gap and decide if a single E measurement is decisive.
 ```
 
 Tool calls:
@@ -183,35 +185,36 @@ Tool calls:
 - `record_description_update -> t8 ok`
   Args:
   {
-    "kernel_model": [
-      "Analytical refinement for c1: per-step fp16 quantization of h (kernel.py line 13) has step u=2^-11\u22484.88e-4 for h in [0.5,1) (steady state h* = b/(1-a) \u2248 0.01/0.01 \u2248 1.0), giving quantization noise RMS \u2248 u/sqrt(12) \u2248 1.4e-4 per step.",
-      "Error propagation: e[t] = 0.99*e[t-1] + q[t], steady-state RMS \u2248 q_rms / sqrt(1-0.99^2) \u2248 1.4e-4/sqrt(0.0199) \u2248 1.0e-3 per element, i.e. E \u2248 1e-3 relative \u2014 plausibly under the 0.003 budget but only a ~3x margin, so the bound is not decisive on its own."
+    "contract_model": [
+      "Compliance is decided solely by measured E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) on the single seeded workload, with all-finite outputs.",
+      "Quantization is permitted by contract; only the E <= 0.12 budget decides trust vs reject."
     ],
-    "open_questions": [
-      "Does the measured E land near the analytical estimate ~1e-3, or does correlation between quantization errors (b's small noise is also quantized through h) or fp32-vs-fp16 grid effects push it past
-  ...[truncated 1130 chars]
+    "kernel_model": [
+      "Quantization step per row is scale = max|w_row|/7; with standard-normal rows of length 256, max|w| is ~3.3-4.3, so scale ~0.47-0.62 and per-element quantization error is uniform in +/-scale/2 (RMS ~ scale/sqrt(12) ~ 0.14-0.18).",
+      "Expected per-row error projection onto a unit-norm random direction: e_row ~ RMS_err * sqrt(k) ~ 0.16*16 ~ 2.5, but ||ref per row|| ~ ||w_row|| ~ sqrt(k) ~ 16 times the x-dependent gain, so relative error per row is expected O(0.1-0.2) even before t
+  ...[truncated 1537 chars]
   Output summary:
   {
-    "contract_model": [],
+    "contract_model": [
+      "Compliance is decided solely by measured E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) on the single seeded workload, with all-finite outputs.",
+      "Quantization is permitted by contract; only the E <= 0.12 budget decides trust vs reject."
+    ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Analytical refinement for c1: per-step fp16 quantization of h (kernel.py line 13) has step u=2^-11\u22484.88e-4 for h in [0.5,1) (steady state h* = b/(1-a) \u2248 0.01/0.01 \u2248 1.0), giving quantization noise RMS \u2248 u/sqrt(12) \u2248 1.4e-4 per step.",
-      "Error propagation: e[t] = 0.99*e[t-1] + q[t], steady-state RMS \u2248 q_rms / sqrt(1-0.99^2) \u2248 1.4e-4/sqrt(0.0199) \u2248 1.0e-3 per element, i.e. E \u2248 1e-3 relative \u2014 plausibly under the 0.003 budget but only a ~3x margin, so the bound is not decisive on its own."
+      "Quantization step per row is scale = max|w_row|/7; with standard-normal rows of length 256, max|w| is ~3.3-4.3, so scale ~0.47-0.62 and per-element quantization error is uniform in +/-scale/2 (RMS ~ scale/sqrt(12) ~ 0.14-0.18).",
+      "Expected per-row error projection onto a unit-norm random direction: e_row ~ RMS_err * sqrt(k) ~ 0.16*16 ~ 2.5, but ||ref per row|| ~ ||w_row|| ~ sqrt(k) ~ 16 times the x-dependent gain, so relative error per row is expected O(0.1-0.2) even before the deliberate residual-direction alignment in x.",
+      "The residual=1.0 component of x points exactly along the aggregate quantization-error direction, systematically concentrating (rather than averaging) the per-row errors, making E on the high side of this estimate."
     ],
     "open_questions": [
-      "Does the measured E land near the analytical estimate ~1e-3, or does correlation between quantization errors (b's small noise is also quantized through h) or fp32-vs-fp16 grid effects push it past 0.003? Only a runtime measurement on the exact workload resolves c1."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Analytical steady-state per-element relative error ~1e-3 vs budget 3e-3: comfortable-looking but within ~3x, so this case is genuinely borderline and c1 requires a runtime E measurement, not a source-only dismissal or confirmatio
-  ...[truncated 865 chars]
+      "Measured E on the fixed workload (Experimenter); the estimate suggests 
+  ...[truncated 1227 chars]
 
-### Turn 6 - `skeptic` (7.082146986999987s, in=21132 out=332)
+### Turn 6 - `skeptic` (8.444724551000036s, in=20325 out=338)
 
 Message:
 
 ```text
-The single contract-relevant risk (per-step fp16 rounding vs the E≤0.003 budget) is already captured as in-scope claim c1, and the description model's analytical refinement already covers the correlated-error borderline case; everything else in the kernel (layout, dtypes, initialization) is either trivially correct or out of scope. No additional distinct, testable in-scope claims are warranted.
+The only decisive compliance question here is the measured E on the fixed seeded workload, which claim c1 already captures precisely. Other potential issues (zero-row division, stride handling, alternate shapes) are outside the contract's single-workload scope, and second-order effects (float32 vs float64 scale, level-boundary ties) are subsumed by c1 since they only shift E slightly. I find no additional high-quality in-scope claims to raise.
 ```
 
 Tool calls:
@@ -219,28 +222,27 @@ Tool calls:
 - `record_no_new_claims -> t9 ok`
   Args:
   {
-    "reason": "The only material, contract-relevant failure mode \u2014 per-step fp16 rounding (kernel.py line 13) possibly pushing E above 0.003 on the exact make_inputs() workload \u2014 is already recorded as in-scope claim c1, with the analytical borderline refinement (~1e-3 to ~2e-3 margin) noted in the description model. The kernel is otherwise a faithful fp32 implementation of the stated recurrence with correct initialization, layout, and output dtype for the fixed workload, so no additional distinct testable claims exist.",
+    "reason": "Claim c1 already captures the sole decisive in-scope test: measured E = ||kernel_out - float64(W@x)|| / max(||ref||, 0.001*sqrt(32)) on the exact seed-1224 make_inputs() workload versus the 0.12 budget. All other identified risks (zero rows causing scale=0, non-contiguous inputs, alternate shapes/dtypes, float32-vs-float64 scale and rounding-half-up level shifts) are either out of the contract's single fixed workload scope or second-order effects fully subsumed by c1's E measurement. No additional testable in-scope claim adds decisive value.",
     "reviewed_claims": [
-      "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
-    ]
-  }
+      "c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budg
+  ...[truncated 10 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The only material, contract-relevant failure mode \u2014 per-step fp16 rounding (kernel.py line 13) possibly pushing E above 0.003 on the exact make_inputs() workload \u2014 is already recorded as in-scope claim c1, with the analytical borderline refinement (~1e-3 to ~2e-3 margin) noted in the description model. The kernel is otherwise a faithful fp32 implementation of the stated recurrence with correct initialization, layout, and output dtype for the fixed workload, so no additional distinct testable claims exist.",
+    "reason": "Claim c1 already captures the sole decisive in-scope test: measured E = ||kernel_out - float64(W@x)|| / max(||ref||, 0.001*sqrt(32)) on the exact seed-1224 make_inputs() workload versus the 0.12 budget. All other identified risks (zero rows causing scale=0, non-contiguous inputs, alternate shapes/dtypes, float32-vs-float64 scale and rounding-half-up level shifts) are either out of the contract's single fixed workload scope or second-order effects fully subsumed by c1's E measurement. No additional testable in-scope claim adds decisive value.",
     "reviewed_claims": [
-      "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+      "c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget."
     ],
     "reviewed_tool_event_count": 8,
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (8.706390158999966s, in=22481 out=448)
+### Turn 7 - `experimenter` (7.228360597999995s, in=21760 out=314)
 
 Message:
 
 ```text
-The only open claim, c1, needs a runtime measurement of E on the exact workload. I'll run the kernel on the exact make_inputs() tensors and compare against a float64 reference, computing E, finiteness, and per-element error stats.
+I'll run the decisive measurement for c1: reproduce make_inputs() exactly on GPU, run the kernel, and compute E against the float64 reference.
 ```
 
 Tool calls:
@@ -249,8 +251,9 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json, numpy as np, torch\nsys.path.insert(0, \"/root/pilot_cases/case_97\")\nimport kernel as K\n\na, b = K.make_inputs(device=\"cuda\")\nout = K.run(a, b)\n\n# float64 reference on same float32 inputs\na64 = a.cpu().numpy().astype(np.float64)\nb64 = b.cpu().numpy().astype(np.float64)\nt, d = a64.shape\nref = np.empty_like(b64)\nh = np.zeros(d)\nfor i in range(t):\n    h = a64[i] * h + b64[i]\n    ref[i] = h\n\no = out.cpu().numpy().astype(np.float64)\nN = o.size\nnum = np.linalg.norm((o - ref).ravel())\nden = max(np.linalg.norm(ref.ravel()), 0.001 * np.sqrt(N))\nE = num / den\nfinite = bool(np.isfinite(o).all())\ndiff = (o - ref).ravel()\nprint(json.dumps({\n    \"E\": float(E),\n    \"budget\": 0.003,\n    \"finite\": finite,\n    \"rel_E_vs_b
-  ...[truncated 460 chars]
+    "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/pilot_cases/case_91\")\nimport kernel as K\nx, w = K.make_inputs(\"cuda\")\nout = K.run(x, w)\nref = w.cpu().numpy().astype(np.float64) @ x.cpu().numpy().astype(np.float64)\no = out.cpu().numpy().astype(np.float64)\nn = ref.size\nE = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(n))\nprint(json.dumps({\"E\": float(E), \"budget\": 0.12, \"all_finite\": bool(np.all(np.isfinite(o))),\n                  \"ref_norm\": float(np.linalg.norm(ref)), \"max_abs_err\": float(np.abs(o-ref).max()),\n                  \"m\": 32, \"k\": 256, \"passes\": bool(E <= 0.12)}))\n",
+    "expected_signal": "Measured E on the fixed seed-1224 workload vs the 0.12 budget; E > 0.12 confirms c1, E <= 0.
+  ...[truncated 16 chars]
   Output summary:
   {
     "artifacts": [
@@ -258,13 +261,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "c662ef763f469f68b960be5c731e2e77c9aade27b0fdde3dabdc67812ae103ad"
+        "sha256": "822295e8f2fab2a60377b9b8bf51ded829e3c7cdb84b24918b3e9249454593b8"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "64ba768a2df85ea679287c7d973f0392c0fc641b31cbb793fb245534482485d8"
+        "sha256": "fb1569c2ff43ccd0d3f027b690bb187a9347de732a3feefa453be4b4f6d7f69e"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -276,20 +279,20 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "1e215248e83897dc3f7b09f0493efcc684f8a57ff21932e5eeedcab68a56985c"
+        "sha256": "09a6106b4af7fa4afdf095b22def6d6f3a553c39d72ffd1dc8571500a9766cba"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003.",
-    "duration_s": 4.304299
-  ...[truncated 3246 chars]
+    "claim_statement": "On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget.",
+  
+  ...[truncated 2724 chars]
 
-### Turn 8 - `experimenter` (8.783708151999917s, in=25105 out=452)
+### Turn 8 - `experimenter` (6.107953219000024s, in=23793 out=280)
 
 Message:
 
 ```text
-The probe result is in: on the exact workload, E = 0.00125 (≈42% of the 0.003 budget), outputs finite, matching the analytical ~1e-3 estimate. The claim that fp16 rounding pushes E past budget is contradicted.
+The decisive measurement for c1 is complete: E = 0.1737 > 0.12 on the exact seeded workload, confirming the budget violation. I'll finalize the evidence now.
 ```
 
 Tool calls:
@@ -298,37 +301,36 @@ Tool calls:
   Args:
   {
     "data": {
-      "E": 0.0012467599869342171,
-      "budget": 0.003,
-      "denominator_applied": "max(ref_norm, floor)=154.786 (floor inactive)",
-      "finite": true,
-      "floor": 0.1693280839081338,
-      "max_abs_err": 0.006696030580835899,
-      "n_elements": 28672,
-      "ref_norm": 154.78605493259178,
-      "rel_E_vs_budget": 0.41558666231140573,
-      "rms_abs_err": 0.0011396872590258324,
-      "tail_rms_abs_err": 0.0015023584342767232
+      "E": 0.17374539600054448,
+      "all_finite": true,
+      "budget": 0.12,
+      "k": 256,
+      "m": 32,
+      "max_abs_err": 1.0766464052925309,
+      "passes": false,
+      "ref_norm": 12.813415717740064
     },
     "event_id": "t10",
-    "summary": "Runtime measurement on the exact make_inputs() workload (t=896, d=32, decay=0.99) gives E = 0.001247, well under the 0.003 budget (42% of budget), with all 28672 outputs finite and the denominator floor inactive (||ref||=154.79 vs floor 0.169). Steady-state per-element RMS error 1.14e-3 (tail 1.50e-3), max abs error 6.7e-3, cons
-  ...[truncated 153 chars]
+    "status": "confirmed",
+    "summary": "On the exact contract workload (seed-1224 make_inputs, m=32, k=256), the kernel output vs the float64 W@x reference gives E = 0.1737, exceeding the 0.12 budget (all outputs finite, ref norm 12.81, max abs error 1.08). The 7-level per-row weight quantization error projected onto the adversarially constructed x breaches the contract.",
+    "supports": "confirmed"
+  }
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "rebutted",
+    "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Runtime measurement on the exact make_inputs() workload (t=896, d=32, decay=0.99) gives E = 0.001247, well under the 0.003 budget (42% of budget), with all 28672 outputs finite and the denominator floor inactive (||ref||=154.79 vs floor 0.169). Steady-state per-element RMS error 1.14e-3 (tail 1.50e-3), max abs error 6.7e-3, consistent with the analytical fp16 accumulation estimate. The fp16 rounding does not violate the contract budget, rebutting c1.",
-    "supports": "rebutted",
+    "summary": "On the exact contract workload (seed-1224 make_inputs, m=32, k=256), the kernel output vs the float64 W@x reference gives E = 0.1737, exceeding the 0.12 budget (all outputs finite, ref norm 12.81, max abs error 1.08). The 7-level per-row weight quantization error projected onto the adversarially constructed x breaches the contract.",
+    "supports": "confirmed",
     "tool_event_id": "t10"
   }
 
-### Turn 9 - `skeptic` (7.258563525999989s, in=28318 out=333)
+### Turn 9 - `skeptic` (7.206069329999991s, in=26223 out=321)
 
 Message:
 
 ```text
-The single in-scope claim c1 has been decisively tested on the exact contract workload: E = 0.00125 (42% of the 0.003 budget), all outputs finite, denominator floor inactive, matching the analytical fp16 estimate. The evidence is consistent and complete; no new material claims are warranted.
+The decisive runtime probe is complete and confirms claim c1: measured E = 0.1737 on the exact contract workload, exceeding the 0.12 budget with all outputs finite. The probe directly replicated make_inputs() (seed 1224) and compared against the float64 W@x reference exactly as the contract specifies — no metric or interpretation ambiguity remains, and the existing claim fully covers the material, in-scope problem.
 ```
 
 Tool calls:
@@ -336,148 +338,165 @@ Tool calls:
 - `record_no_new_claims -> t12 ok`
   Args:
   {
-    "reason": "Final review: the sole in-scope claim c1 (fp16 rounding exceeding the E<=0.003 budget) was rebutted by a direct runtime measurement on the exact make_inputs() workload \u2014 E = 0.001247 (42% of budget), all 28672 outputs finite, floor inactive (||ref||=154.79 vs 0.169), consistent with the analytical ~1e-3 steady-state error estimate. The measured tail RMS (1.50e-3) is also comfortably within budget, addressing the correlated-error borderline scenario from the description model. No other failure modes are in scope for this single fixed workload; nothing in the new evidence exposes a material, testable, in-scope problem not covered by c1.",
+    "reason": "Final review: claim c1 is the sole decisive in-scope issue and is confirmed by the t10 runtime probe (E = 0.1737 > 0.12 budget on the exact seed-1224 make_inputs() workload, all outputs finite, reference computed in float64 exactly per problem.txt). The evidence cleanly addresses the claim's expected signal with no metric artifacts or interpretation ambiguity. All other identified risks (zero rows, alternate shapes, float32-vs-float64 scale effects, level-boundary ties) are out of the contract's single fixed-workload scope or subsumed by c1's measured E. No additional in-scope claim is warranted.",
     "reviewed_claims": [
-      "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inpu
-  ...[truncated 86 chars]
+      "c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produce
+  ...[truncated 66 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the sole in-scope claim c1 (fp16 rounding exceeding the E<=0.003 budget) was rebutted by a direct runtime measurement on the exact make_inputs() workload \u2014 E = 0.001247 (42% of budget), all 28672 outputs finite, floor inactive (||ref||=154.79 vs 0.169), consistent with the analytical ~1e-3 steady-state error estimate. The measured tail RMS (1.50e-3) is also comfortably within budget, addressing the correlated-error borderline scenario from the description model. No other failure modes are in scope for this single fixed workload; nothing in the new evidence exposes a material, testable, in-scope problem not covered by c1.",
+    "reason": "Final review: claim c1 is the sole decisive in-scope issue and is confirmed by the t10 runtime probe (E = 0.1737 > 0.12 budget on the exact seed-1224 make_inputs() workload, all outputs finite, reference computed in float64 exactly per problem.txt). The evidence cleanly addresses the claim's expected signal with no metric artifacts or interpretation ambiguity. All other identified risks (zero rows, alternate shapes, float32-vs-float64 scale effects, level-boundary ties) are out of the contract's single fixed-workload scope or subsumed by c1's measured E. No additional in-scope claim is warranted.",
     "reviewed_claims": [
-      "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+      "c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget."
     ],
     "reviewed_tool_event_count": 11,
     "turn": 9
   }
 
-### Turn 10 - `judge` (8.072448097999995s, in=29023 out=405)
+### Turn 10 - `judge` (7.649244337000027s, in=26614 out=393)
 
 Message:
 
 ```text
-The sole in-scope claim (fp16 rounding pushing E over the 0.003 budget) was directly tested on the exact contract workload and rebutted: E = 0.001247 (42% of budget), all outputs finite, floor inactive, matching analytical estimates. Skeptic has signed off with no new claims. Recording the trust verdict.
+The evidence is decisive: claim c1 is confirmed by a runtime probe on the exact contract workload, measuring E = 0.1737 > 0.12 budget (all outputs finite, max abs error 1.08 vs reference norm 12.81). The contract explicitly permits quantization only within the 0.12 budget, so this is a clear budget violation on the sole in-scope workload. Skeptic signed off with no new claims.
 ```
 
 Tool calls:
 
-- `record_verdict -> t13 ok`
+- `record_verdict -> t13 error`
   Args:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+      "c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget."
     ],
-    "reason": "The contract (problem.txt) is single-workload compliance: all outputs finite and E <= 0.003, with reduced precision explicitly permitted if the budget is met. A direct runtime probe (t10) on the exact make_inputs() workload (t=896, d=32, decay=0.99, noise=0.001, bias=0.01) measured E = 0.001247, ~42% of the 0.003 budget, with all 28672 outputs finite, the denominator floor inactive (||ref||=154.79 vs floor 0.169), and per-element RMS error (1.14e-3, tail 1.50e-3) consistent with the analytical fp16-accumulation estimate \u2014 including
-  ...[truncated 343 chars]
+    "reason": "The contract (problem.txt) fixes the workload to exactly make_inputs() (seed 1224, m=32, k=256) and requires all outputs finite and E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.12, explicitly permitting reduced precision only within that budget. Runtime probe t10 reproduced the exact seeded workload, ran the kernel, and measured E = 0.1737 (max abs error 1.08, ref norm 12.81, all finite), confirming in-scope claim c1: the per-row 7-level weight quantization error, amplified by make_inputs' d
+  ...[truncated 314 chars]
+  Output summary:
+  {
+    "error_type": "ValueError",
+    "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget.: unknown claim"
+  }
+
+### Turn 11 - `judge` (6.8519711989999905s, in=25971 out=332)
+
+Message:
+
+```text
+The prior record_verdict failed because decisive_claims passed the full claim text instead of the claim id "c1". Retrying with the id.
+```
+
+Tool calls:
+
+- `record_verdict -> t14 ok`
+  Args:
+  {
+    "confidence": 0.95,
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract (problem.txt) fixes the workload to exactly make_inputs() (seed 1224, m=32, k=256) and requires all outputs finite and E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.12, permitting reduced precision only within that budget. Runtime probe t10 reproduced the exact seeded workload, ran the kernel, and measured E = 0.1737 (all outputs finite, ref norm 12.81, max abs error 1.08), confirming in-scope claim c1: the per-row 7-level weight quantization error, amplified by make_inputs' deliberate alignment of x with the quantization-residual direction, breaches the budget by ~45%. This is a direct violation of the contract's explicit numeric budget clause \u2014 the clause permitting approximat
+  ...[truncated 240 chars]
   Output summary:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+      "c1"
     ],
-    "reason": "The contract (problem.txt) is single-workload compliance: all outputs finite and E <= 0.003, with reduced precision explicitly permitted if the budget is met. A direct runtime probe (t10) on the exact make_inputs() workload (t=896, d=32, decay=0.99, noise=0.001, bias=0.01) measured E = 0.001247, ~42% of the 0.003 budget, with all 28672 outputs finite, the denominator floor inactive (||ref||=154.79 vs floor 0.169), and per-element RMS error (1.14e-3, tail 1.50e-3) consistent with the analytical fp16-accumulation estimate \u2014 including the correlated-error borderline scenario flagged in the description model. This rebuts the only in-scope claim (c1). The Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain without evidence. The per-step fp16 rounding is therefore contract-compliant reduced precision, not a defect.",
-    "verdict": "trust"
+    "reason": "The contract (problem.txt) fixes the workload to exactly make_inputs() (seed 1224, m=32, k=256) and requires all outputs finite and E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.12, permitting reduced precision only within that budget. Runtime probe t10 reproduced the exact seeded workload, ran the kernel, and measured E = 0.1737 (all outputs finite, ref norm 12.81, max abs error 1.08), confirming in-scope claim c1: the per-row 7-level weight quantization error, amplified by make_inputs' deliberate alignment of x with the quantization-residual direction, breaches the budget by ~45%. This is a direct violation of the contract's explicit numeric budget clause \u2014 the clause permitting approximate arithmetic only if E <= 0.12 is what makes this deviation a defect rather than an acceptable approximation. No open claims remain; the Skeptic reviewed the latest evidence (t10) and signed off with no new claims.",
+    "verdict": "reject"
   }
 
 ## Description Model
 
 {
   "contract_model": [
-    "Single fixed workload: recurrence family, seed 454, t=896, d=32, decay=0.99, noise=0.001, bias=0.01; a is constant 0.99, b ~ N(0.01, 0.001^2).",
-    "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all T*D=28672 states returned.",
-    "Reference is float64 evaluation on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)); compliance iff finite and E <= 0.003.",
-    "Reduced precision is explicitly permitted; presence of fp16 rounding alone is neither defect nor proof.",
-    "Target T4, PyTorch 2.8.0, Triton 3.4.0; finite-workload compliance only, not universal correctness."
+    "Single fixed workload: make_inputs() with CONFIG quantization family, seed 1224, m=32 rows, k=256, mix=0.75, residual=1.0; x and w are CPU-generated float32 tensors.",
+    "Operation is y = W @ x treating the original binary32 weights and x as real values.",
+    "Reference is the operation computed in float64 on the same float32 inputs.",
+    "Compliance metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); pass iff all outputs finite and E <= 0.12.",
+    "Reduced precision / approximate arithmetic (e.g., quantization) is explicitly permitted if the budget is met; this is finite-workload compliance, not all-input correctness.",
+    "Compliance is decided solely by measured E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) on the single seeded workload, with all-finite outputs.",
+    "Quantization is permitted by contract; only the E <= 0.12 budget decides trust vs reject."
   ],
   "kernel_model": [
-    "Triton kernel loops t=0..T-1 over a D=32-wide vector, computing h = a*h + b in fp32, then explicitly rounds h to fp16 and back to fp32 before each store (kernel.py line 13).",
-    "Grid is (1,) with a single program; D must be a power of two for tl.arange (D=32 satisfies this).",
-    "run() allocates out = empty_like(b) (float32, shape (896,32)) and launches with enable_fp_fusion=False to avoid a*b+... reassociation concerns.",
-    "Init h = 0.0 in fp32 matches h[0] = a[0]*0 + b[0].",
-    "fp16 has ~2^-11 relative precision (~4.9e-4), so each state carries up to ~5e-4 relative rounding error that propagates (but decays by 0.99) through the recurrence.",
-    "Analytical refinement for c1: per-step fp16 quantization of h (kernel.py line 13) has step u=2^-11\u22484.88e-4 for h in [0.5,1) (steady state h* = b/(1-a) \u2248 0.01/0.01 \u2248 1.0), giving quantization noise RMS \u2248 u/sqrt(12) \u2248 1.4e-4 per step.",
-    "Error propagation: e[t] = 0.99*e[t-1] + q[t], steady-state RMS \u2248 q_rms / sqrt(1-0.99^2) \u2248 1.4e-4/sqrt(0.0199) \u2248 1.0e-3 per element, i.e. E \u2248 1e-3 relative \u2014 plausibly under the 0.003 budget but only a ~3x margin, so the bound is not decisive on its own."
-  ],
-  "open_questions": [
-    "Does the actual measured E on the exact workload stay under 0.003? Requires a runtime exp
-...[truncated 2860 chars]
+    "Triton kernel runs one program per output row; loads full x (K=256) and one row of W, computes per-row scale = max|w|/7, quantizes w to integer levels via floor(w/scale + 0.5) clamped to [-7, 7], dequantizes (qi*scale), and computes y = sum(x * dequantized w), all in the tensor dtype (float32), storing one float32 output per row.",
+    "run() allocates an m-element float32 output and launches grid (m,) with K=256 as constexpr; enable_fp_fusion=False set to keep arithmetic from fusing.",
+    "The kernel therefore replaces exact W@x with W_hat @ x where W_hat is a symmetric 7-level per-row quantization; input x itself is used unquantized.",
+    "make_inputs deliberately constructs x (mix=0.75 plus residual=1.0 along the aggregate quantization-residual direction) so that quantization error is amplified in the output, i.e., the input is adversarial to per-row weight quantization.",
+    "Quantization step per row is scale = max|w_row|/7; with standard-normal rows of length 256, max|w| is ~3.3-4.3, so scale ~0.
+...[truncated 3394 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Description of case_97: a linear decay recurrence kernel that stores fp16-rounded intermediate states every step, evaluated against a single fixed workload with a relative-L2 error budget of 0.003.
-- `du2` tasks=`initial`: Analytical refinement of the fp16 rounding error bound for c1: per-element steady-state RMS error ~1e-3, plausibly within the 0.003 budget but borderline (~3x margin, up to ~2e-3 if h sits near 1.0 exactly), so c1 remains runtime-measurement-dependent.
+- `du1` tasks=`initial`: Described case_91: Triton per-row symmetric 7-level weight quantization matvec (y = quant(W) @ x) with m=32, k=256; contract allows quantization if relative error E <= 0.12 on the single seeded adversarial workload where x is aligned with the quantization-residual direction.
+- `du2` tasks=`initial`: Refined case_91 description with magnitude analysis: expected 7-level per-row quantization relative error is O(0.1-0.2), straddling the 0.12 budget, and the deliberate residual-direction alignment of x pushes it upward; runtime E measurement on the fixed seed-1224 workload remains the only decisive evidence for claim c1.
 
 ## Claims
 
-### c1 - `rebutted`
+### c1 - `confirmed`
 
-Statement: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003.
+Statement: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt requires E <= 0.003 on the exact make_inputs() workload (t=896, d=32, decay=0.99, noise=0.001, bias=0.01); a budget violation on that exact workload is a contract breach.
+Scope rationale: problem.txt fixes the workload to exactly make_inputs() and defines compliance as E <= 0.12 with E measured against the exact float64 W @ x reference; the kernel's per-row 7-level weight quantization is the only error source large enough to breach that budget on this workload.
 
 Scope evidence:
-- `problem.txt`: Compliance iff all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (recurrence, t=896, d=32, decay=0.99, noise=0.001, bias=0.01); reduced precision is permitted only if this budget is met.
+- `problem.txt`: Reference is y = W @ x in float64 on the same float32 inputs; compliance iff outputs finite and E <= 0.12; reduced precision permitted only if this budget is met.
+- `kernel.py`: make_inputs() is the exact single workload (CONFIG seed 1224, m=32, k=256, mix=0.75, residual=1.0) and adds cfg['residual']*residual, the aggregate quantization-error direction, to x.
 
-Rationale: Each step injects up to ~2^-11 relative (~4.9e-4 absolute at h~1) fp16 quantization error, which is filtered through the recurrence with gain 1/(1-0.99)=100, so steady-state per-element deviation could approach ~1e-3; whether the RMS stays under 0.003 relative to ||ref||~169 is not obvious and needs a runtime measurement of E on the exact workload.
+Rationale: make_inputs deliberately constructs x with a full unit-weight component along the aggregate quantization-residual direction, so the per-row 7-level quantization error is directly amplified in the output; with m=32 rows the error norm could exceed the 0.12 relative budget. This is the sole decisive compliance test per the contract.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t10: Runtime measurement on the exact make_inputs() workload (t=896, d=32, decay=0.99) gives E = 0.001247, well under the 0.003 budget (42% of budget), with all 28672 outputs finite and the denominator floor inactive (||ref||=154.79 vs floor 0.169). Steady-state per-element RMS error 1.14e-3 (tail 1.50e-3), max abs error 6.7e-3, consistent with the analytical fp16 accumulation estimate. The fp16 rounding does not violate the contract budget, rebutting c1.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t10: On the exact contract workload (seed-1224 make_inputs, m=32, k=256), the kernel output vs the float64 W@x reference gives E = 0.1737, exceeding the 0.12 budget (all outputs finite, ref norm 12.81, max abs error 1.08). The 7-level per-row weight quantization error projected onto the adversarially constructed x breaches the contract.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_97"
+  "entry": "case_91"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_97"
+  "entry": "case_91"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_97"
+  "entry": "case_91"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_97"
+  "entry": "case_91"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Single fixed workload: recurrence family, seed 454, t=896, d=32, decay=0.99, noise=0.001, bias=0.01; a is constant 0.99, b ~ N(0.01, 0.001^2).",
-    "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all T*D=28672 states returned.",
-    "Reference is float64 evaluation on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)); compliance iff finite and E <= 0.003.",
-    "Reduced precision is explicitly permitted; presence of fp16 rounding alone is neither defect nor proof.",
-    "Target T4, PyTorch 2.8.0, Triton 3.4.0; finite-workload compliance only, not universal correctness."
+    "Single fixed workload: make_inputs() with CONFIG quantization family, seed 1224, m=32 rows, k=256, mix=0.75, residual=1.0; x and w are CPU-generated float32 tensors.",
+    "Operation is y = W @ x treating the original binary32 weights and x as real values.",
+    "Reference is the operation computed in float64 on the same float32 inputs.",
+    "Compliance metric: E = ||output - reference||_2 / max(||reference||_2, 0.001*sqrt(32)); pass iff all outputs finite and E <= 0.12.",
+    "Reduced precision / approximate arithmetic (e.g., quantization) is explicitly permitted if the budget is met; this is finite-workload compliance, not all-input correctness."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel loops t=0..T-1 over a D=32-wide vector, computing h = a*h + b in fp32, then explicitly rounds h to fp16 and back to fp32 before each store (kernel.py line 13).",
-    "Grid is (1,) with a single program; D must be a power of two for tl.arange (D=32 satisfies this).",
-    "run() allocates out = empty_like(b) (float32, shape (896,32)) and launches with enable_fp_fusion=False to avoid a*b+... reassociation concerns.",
-    "Init h = 0.0 in fp32 matches h[0] = a[0]*0 + b[0].",
-    "fp16 has ~2^-11 relative precision (~4.9e-4), so each state carries up to ~5e-4 relative rounding error that propagates (but decays by 0.99) through the recurrence."
+    "Triton kernel runs one program per output row; loads full x (K=256) and one row of W, computes per-row scale = max|w|/7, quantizes w to integer levels via floor(w/scale + 0.5) clamped to [-7, 7], dequantizes (qi*scale), and computes y = sum(x * dequantized w), all in the tensor dtype (float32), storing one float32 output per row.",
+    "run() allocates an m-element float32 output and launches grid (m,) with K=256 as constexpr; enable_fp_fusion=False set to keep arithmetic from fusing.",
+    "The kernel therefore replaces exact W@x with W_hat @ x where W_hat is a symmetric 7-level per-row quantization; input x itself is used unquantized.",
+    "make_inputs deliberately constructs x (mix=0.75 plus residual=1.0 along the aggregate quantization-residual direction) so that quantization error is amplified in the output, i.e., the input is adversarial to per-row weight quantization."
   ],
   "open_questions": [
-    "Does the actual measured E on the exact workload stay under 0.003? Requires a runtime experiment (Experimenter's job) computing the fp64 reference and comparing.",
-    "Does Triton 3.4's h.to(tl.float16) use RTNE rounding (yes, standard cast) \u2014 no further ambiguity here.",
-    "Confirm no NaN/Inf possible: b ~ 0.01 scale, fixed point ~1.0; fp16 max 65504, so finiteness is near-certain but unverified at runtime."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Per-step fp16 rounding is the deliberate error source; whether accumulated quantization error over 896 steps stays within E<=0.003 is the centr
-...[truncated 1575 chars]
+    "Actual measured E on the fixed workload (kernel output vs float64 reference) \u2014 Experimenter needed; the description cannot decide compliance.",
+    "Whether tl.max/tl.floor semantics exactly reproduce the float64 generator quantization is irrelevant to the contract (reference is exact), but relevant to predicting error structure
+...[truncated 1899 chars]
 
 ### t6 - record_claim - error
 
@@ -490,48 +509,56 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Each step injects up to ~2^-11 relative (~4.9e-4 absolute at h~1) fp16 quantization error, which is filtered through the recurrence with gain 1/(1-0.99)=100, so steady-state per-element deviation could approach ~1e-3; whether the RMS stays under 0.003 relative to ||ref||~169 is not obvious and needs a runtime measurement of E on the exact workload.",
+  "rationale": "make_inputs deliberately constructs x with a full unit-weight component along the aggregate quantization-residual direction, so the per-row 7-level quantization error is directly amplified in the output; with m=32 rows the error norm could exceed the 0.12 relative budget. This is the sole decisive compliance test per the contract.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Compliance iff all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (recurrence, t=896, d=32, decay=0.99, noise=0.001, bias=0.01); reduced precision is permitted only if this budget is met."
+      "summary": "Reference is y = W @ x in float64 on the same float32 inputs; compliance iff outputs finite and E <= 0.12; reduced precision permitted only if this budget is met."
+    },
+    {
+      "source": "kernel.py",
+      "summary": "make_inputs() is the exact single workload (CONFIG seed 1224, m=32, k=256, mix=0.75, residual=1.0) and adds cfg['residual']*residual, the aggregate quantization-error direction, to x."
     }
   ],
-  "scope_rationale": "problem.txt requires E <= 0.003 on the exact make_inputs() workload (t=896, d=32, decay=0.99, noise=0.001, bias=0.01); a budget violation on that exact workload is a contract breach.",
-  "statement": "The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003.",
+  "scope_rationale": "problem.txt fixes the workload to exactly make_inputs() and defines compliance as E <= 0.12 with E measured against the exact float64 W @ x reference; the kernel's per-row 7-level weight quantization is the only error source large enough to breach that budget on this workload.",
+  "statement": "On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget.",
   "status": "open"
 }
 
 ### t8 - record_description_update - ok
 
 {
-  "contract_model": [],
+  "contract_model": [
+    "Compliance is decided solely by measured E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) on the single seeded workload, with all-finite outputs.",
+    "Quantization is permitted by contract; only the E <= 0.12 budget decides trust vs reject."
+  ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Analytical refinement for c1: per-step fp16 quantization of h (kernel.py line 13) has step u=2^-11\u22484.88e-4 for h in [0.5,1) (steady state h* = b/(1-a) \u2248 0.01/0.01 \u2248 1.0), giving quantization noise RMS \u2248 u/sqrt(12) \u2248 1.4e-4 per step.",
-    "Error propagation: e[t] = 0.99*e[t-1] + q[t], steady-state RMS \u2248 q_rms / sqrt(1-0.99^2) \u2248 1.4e-4/sqrt(0.0199) \u2248 1.0e-3 per element, i.e. E \u2248 1e-3 relative \u2014 plausibly under the 0.003 budget but only a ~3x margin, so the bound is not decisive on its own."
+    "Quantization step per row is scale = max|w_row|/7; with standard-normal rows of length 256, max|w| is ~3.3-4.3, so scale ~0.47-0.62 and per-element quantization error is uniform in +/-scale/2 (RMS ~ scale/sqrt(12) ~ 0.14-0.18).",
+    "Expected per-row error projection onto a unit-norm random direction: e_row ~ RMS_err * sqrt(k) ~ 0.16*16 ~ 2.5, but ||ref per row|| ~ ||w_row|| ~ sqrt(k) ~ 16 times the x-dependent gain, so relative error per row is expected O(0.1-0.2) even before the deliberate residual-direction alignment in x.",
+    "The residual=1.0 component of x points exactly along the aggregate quantization-error direction, systematically concentrating (rather than averaging) the per-row errors, making E on the high side of this estimate."
   ],
   "open_questions": [
-    "Does the measured E land near the analytical estimate ~1e-3, or does correlation between quantization errors (b's small noise is also quantized through h) or fp32-vs-fp16 grid effects push it past 0.003? Only a runtime measurement on the exact workload resolves c1."
+    "Measured E on the fixed workload (Experimenter); the estimate suggests E is plausibly near or above 0.12 but source reasoning alone cannot settle it.",
+    "Whether float32 scale in the kernel shifts any level vs the generator's float64 scale (minor second-order effect on E)."
   ],
   "resolved_tasks": [],
   "risk_map": [
-    "Analytical steady-state per-element relative error ~1e-3 vs budget 3e-3: comfortable-looking but within ~3x, so this case is genuinely borderline and c1 requires a runtime E measurement, not a source-only dismissal or confirmation.",
-    "Subtle secondary risk for the Experimenter to check: the quantization noise q[t] is not independent across t because h[t] follows the same trajectory; if h hovers exactly at 1.0 (ulp 2^-10 there), per-step error doubles to ~1e-3 RMS and steady-state error could approach ~2e-3, close to the 0.003 limit.",
-    "Also check per-element deviation pattern: if the measured per-element RMS is near 2-3e-3, verify the denominator max(||ref||,0.001*sqrt(N)) is being applied correctly (floor inactive since ||ref||\u2248169)."
+    "Expected relative quantization error is O(0.1-0.2) per row, straddling the 0.12 budget; the residual=1.0 alignment pushes it upward, so c1 (E > 0.12) is plausible but a runtime E measurement is the only decisive evidence.",
+    "Second-order: float32 vs float64 scale computation and floor(+0.5) rounding-half-up may change individual quantization levels; these shift E only slightly."
   ],
-  "scope_notes": [],
-  "summary": "Analytical refinement of the fp16 rounding error bound for c1: per-element steady-state RMS error ~1e-3, plausibly within the 0.003 budget but borderline (~3x margin, up to ~2e-3 if h sits near 1.0 exactly), so c1 remains runtime-
-...[truncated 65 chars]
+  "scope_notes": [
+    "E can be computed exactly on CPU by replicating make_inputs (seed 1224) and comparing kernel output to numpy float64 W@x; no adv
+...[truncated 427 chars]
 
 ### t9 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "The only material, contract-relevant failure mode \u2014 per-step fp16 rounding (kernel.py line 13) possibly pushing E above 0.003 on the exact make_inputs() workload \u2014 is already recorded as in-scope claim c1, with the analytical borderline refinement (~1e-3 to ~2e-3 margin) noted in the description model. The kernel is otherwise a faithful fp32 implementation of the stated recurrence with correct initialization, layout, and output dtype for the fixed workload, so no additional distinct testable claims exist.",
+  "reason": "Claim c1 already captures the sole decisive in-scope test: measured E = ||kernel_out - float64(W@x)|| / max(||ref||, 0.001*sqrt(32)) on the exact seed-1224 make_inputs() workload versus the 0.12 budget. All other identified risks (zero rows causing scale=0, non-contiguous inputs, alternate shapes/dtypes, float32-vs-float64 scale and rounding-half-up level shifts) are either out of the contract's single fixed workload scope or second-order effects fully subsumed by c1's E measurement. No additional testable in-scope claim adds decisive value.",
   "reviewed_claims": [
-    "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+    "c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget."
   ],
   "reviewed_tool_event_count": 8,
   "turn": 6
@@ -545,13 +572,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "c662ef763f469f68b960be5c731e2e77c9aade27b0fdde3dabdc67812ae103ad"
+      "sha256": "822295e8f2fab2a60377b9b8bf51ded829e3c7cdb84b24918b3e9249454593b8"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "64ba768a2df85ea679287c7d973f0392c0fc641b31cbb793fb245534482485d8"
+      "sha256": "fb1569c2ff43ccd0d3f027b690bb187a9347de732a3feefa453be4b4f6d7f69e"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -563,12 +590,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "1e215248e83897dc3f7b09f0493efcc684f8a57ff21932e5eeedcab68a56985c"
+      "sha256": "09a6106b4af7fa4afdf095b22def6d6f3a553c39d72ffd1dc8571500a9766cba"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003.",
-  "duration_s": 4.304299,
+  "claim_statement": "On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget.",
+  "duration_s": 5.074012,
   "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c1",
@@ -578,29 +605,29 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "c662ef763f469f68b960be5c731e2e77c9aade27b0fdde3dabdc67812ae103ad"
+          "sha256": "822295e8f2fab2a60377b9b8bf51ded829e3c7cdb84b24918b3e9249454593b8"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t10_stdout.txt",
-          "sha256": "64ba768a2df85ea679287c7d973f0392c0fc641b31cbb793fb245534482485d8"
+          "sha256": "fb1569c2ff43ccd0d3f027b690bb187a9347de732a3feefa453be4b4f6d7f69e"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t10_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996
-...[truncated 2446 chars]
+          "sha256": "e3b
+...[truncated 1924 chars]
 
 ### t11 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "rebutted",
+  "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Runtime measurement on the exact make_inputs() workload (t=896, d=32, decay=0.99) gives E = 0.001247, well under the 0.003 budget (42% of budget), with all 28672 outputs finite and the denominator floor inactive (||ref||=154.79 vs floor 0.169). Steady-state per-element RMS error 1.14e-3 (tail 1.50e-3), max abs error 6.7e-3, consistent with the analytical fp16 accumulation estimate. The fp16 rounding does not violate the contract budget, rebutting c1.",
-  "supports": "rebutted",
+  "summary": "On the exact contract workload (seed-1224 make_inputs, m=32, k=256), the kernel output vs the float64 W@x reference gives E = 0.1737, exceeding the 0.12 budget (all outputs finite, ref norm 12.81, max abs error 1.08). The 7-level per-row weight quantization error projected onto the adversarially constructed x breaches the contract.",
+  "supports": "confirmed",
   "tool_event_id": "t10"
 }
 
@@ -608,33 +635,40 @@ Evidence:
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the sole in-scope claim c1 (fp16 rounding exceeding the E<=0.003 budget) was rebutted by a direct runtime measurement on the exact make_inputs() workload \u2014 E = 0.001247 (42% of budget), all 28672 outputs finite, floor inactive (||ref||=154.79 vs 0.169), consistent with the analytical ~1e-3 steady-state error estimate. The measured tail RMS (1.50e-3) is also comfortably within budget, addressing the correlated-error borderline scenario from the description model. No other failure modes are in scope for this single fixed workload; nothing in the new evidence exposes a material, testable, in-scope problem not covered by c1.",
+  "reason": "Final review: claim c1 is the sole decisive in-scope issue and is confirmed by the t10 runtime probe (E = 0.1737 > 0.12 budget on the exact seed-1224 make_inputs() workload, all outputs finite, reference computed in float64 exactly per problem.txt). The evidence cleanly addresses the claim's expected signal with no metric artifacts or interpretation ambiguity. All other identified risks (zero rows, alternate shapes, float32-vs-float64 scale effects, level-boundary ties) are out of the contract's single fixed-workload scope or subsumed by c1's measured E. No additional in-scope claim is warranted.",
   "reviewed_claims": [
-    "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+    "c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget."
   ],
   "reviewed_tool_event_count": 11,
   "turn": 9
 }
 
-### t13 - record_verdict - ok
+### t13 - record_verdict - error
+
+{
+  "error_type": "ValueError",
+  "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: On the fixed seeded workload (m=32, k=256, mix=0.75, residual=1.0), the kernel's 7-level per-row weight quantization error projected onto x produces relative error E > 0.12, violating the contract's budget.: unknown claim"
+}
+
+### t14 - record_verdict - ok
 
 {
   "confidence": 0.95,
   "decisive_claims": [
-    "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+    "c1"
   ],
-  "reason": "The contract (problem.txt) is single-workload compliance: all outputs finite and E <= 0.003, with reduced precision explicitly permitted if the budget is met. A direct runtime probe (t10) on the exact make_inputs() workload (t=896, d=32, decay=0.99, noise=0.001, bias=0.01) measured E = 0.001247, ~42% of the 0.003 budget, with all 28672 outputs finite, the denominator floor inactive (||ref||=154.79 vs floor 0.169), and per-element RMS error (1.14e-3, tail 1.50e-3) consistent with the analytical fp16-accumulation estimate \u2014 including the correlated-error borderline scenario flagged in the description model. This rebuts the only in-scope claim (c1). The Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain without evidence. The per-step fp16 rounding is therefore contract-compliant reduced precision, not a defect.",
-  "verdict": "trust"
+  "reason": "The contract (problem.txt) fixes the workload to exactly make_inputs() (seed 1224, m=32, k=256) and requires all outputs finite and E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.12, permitting reduced precision only within that budget. Runtime probe t10 reproduced the exact seeded workload, ran the kernel, and measured E = 0.1737 (all outputs finite, ref norm 12.81, max abs error 1.08), confirming in-scope claim c1: the per-row 7-level weight quantization error, amplified by make_inputs' deliberate alignment of x with the quantization-residual direction, breaches the budget by ~45%. This is a direct violation of the contract's explicit numeric budget clause \u2014 the clause permitting approximate arithmetic only if E <= 0.12 is what makes this deviation a defect rather than an acceptable approximation. No open claims remain; the Skeptic reviewed the latest evidence (t10) and signed off with no new claims.",
+  "verdict": "reject"
 }
 
 ## Verdict
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-30T09:05:39Z",
+  "created_at": "2026-09-30T09:02:19Z",
   "decisive_claims": [
-    "c1: The kernel's per-step fp16 rounding (kernel.py line 13) may cause the measured E on the exact make_inputs() workload (t=896, d=32, decay=0.99) to exceed the contract budget of 0.003."
+    "c1"
   ],
-  "reason": "The contract (problem.txt) is single-workload compliance: all outputs finite and E <= 0.003, with reduced precision explicitly permitted if the budget is met. A direct runtime probe (t10) on the exact make_inputs() workload (t=896, d=32, decay=0.99, noise=0.001, bias=0.01) measured E = 0.001247, ~42% of the 0.003 budget, with all 28672 outputs finite, the denominator floor inactive (||ref||=154.79 vs floor 0.169), and per-element RMS error (1.14e-3, tail 1.50e-3) consistent with the analytical fp16-accumulation estimate \u2014 including the correlated-error borderline scenario flagged in the description model. This rebuts the only in-scope claim (c1). The Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain without evidence. The per-step fp16 rounding is therefore contract-compliant reduced precision, not a defect.",
-  "verdict": "trust"
+  "reason": "The contract (problem.txt) fixes the workload to exactly make_inputs() (seed 1224, m=32, k=256) and requires all outputs finite and E = ||out - float64(W@x)||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.12, permitting reduced precision only within that budget. Runtime probe t10 reproduced the exact seeded workload, ran the kernel, and measured E = 0.1737 (all outputs finite, ref norm 12.81, max abs error 1.08), confirming in-scope claim c1: the per-row 7-level weight quantization error, amplified by make_inputs' deliberate alignment of x with the quantization-residual direction, breaches the budget by ~45%. This is a direct violation of the contract's explicit numeric budget clause \u2014 the clause permitting approximate arithmetic only if E <= 0.12 is what makes this deviation a defect rather than an acceptable approximation. No open claims remain; the Skeptic reviewed the latest evidence (t10) and signed off with no new claims.",
+  "verdict": "reject"
 }

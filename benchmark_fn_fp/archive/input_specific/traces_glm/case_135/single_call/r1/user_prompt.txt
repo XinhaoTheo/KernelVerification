@@ -1,38 +1,46 @@
 ## Problem statement (contract + reference behavior)
 
-Validate pruning of a rare-activation ReLU residual over a continuous input box.
+Validate the joint dropout law of a small finite-seed generator.
 
-The fixed parameters W (6,12), b (6,), and c (6,) are the actual float32
-arrays generated in make_inputs_numpy(). They do not change between calls.
-The legal input is ANY contiguous finite float32 matrix X of shape (n,12),
-1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole
-box, not just the smoke inputs returned by make_inputs_numpy().
+make_inputs_numpy() constructs the complete workload: seeds is each integer
+from 0 through 1023 exactly once, X is a strictly positive float32 vector of
+eight activations, and masks/offsets are the fixed generated integer tables.
+Every seed is equally likely. There is no runtime randomness, sampling
+uncertainty, or requirement to handle other tables or activation vectors.
 
-For each row x the mathematical target, over its actual stored float32
-values and the stored parameters, is
-  target(x) = 0.25*x[0] + 0.5*x[1]
-              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).
-The candidate omits the small residual module, retaining the linear base.
-It is acceptable iff EVERY legal x has absolute output error <= 1.0 against
-this mathematical target (evaluate the reference in float64 or better).
-No relative-error test or independent per-neuron error threshold applies.
+run(seeds, X, masks, offsets) must return a finite float32 array Y with shape
+(1024, 8), without modifying its inputs. Each Y[s,j] must be exactly either
+0 or 2*X[j]. Define B[s,j] = 1 when Y[s,j] is 2*X[j], and 0 otherwise.
 
-run(X,W,b,c) must return a finite float32 vector of shape (n,) without
-modifying any input. There is no requirement on parameters from other seeds.
-make_inputs() supplies the fixed parameters and a convenient smoke batch;
-other legal X may be constructed to establish or refute the whole-box bound.
+This generator is used for a model with interactions among up to four
+channels. Its contract is the joint law of independent dropout with keep
+probability one half through order four: for every four distinct channel
+indices j0<j1<j2<j3 and every binary pattern b in {0,1}^4,
+  abs(count_s[(B[s,j0],...,B[s,j3]) == b] / 1024 - 1/16) <= 1/1024.
+This is an exact finite-domain requirement, not a statistical significance
+test and not a requirement that outputs for different seeds be independent.
+No specific ordering of the 16 patterns across seed rows is prescribed.
 
 kernel.py includes initial_probe(), an executable prior experiment. Its
-code and observed result are evidence to assess, not an authoritative verdict
-or a replacement for the universal-domain requirement. All evaluation
-systems receive the same code, contract, and initial observations.
+code and observed result are evidence to assess, not an alternative contract
+or an authoritative verdict. All evaluation systems receive this material.
 
 Recorded initial-probe execution on NVIDIA T4 (not an oracle verdict):
 {
-  "scope": "41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples",
-  "max_absolute_error": 2.9802322387695312e-08,
-  "tolerance": 1.0,
-  "shape_dtype_finite_and_inputs_unmodified": true,
+  "scope": "all 1024 seeds; eight marginal and 28 pair histograms",
+  "marginal_keep_probabilities": [
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5
+  ],
+  "max_marginal_probability_error": 0.0,
+  "max_pair_pattern_probability_error": 0.0,
+  "shape_dtype_finite_and_allowed_values": true,
   "all_passed": true
 }
 
@@ -40,42 +48,48 @@ Recorded initial-probe execution on NVIDIA T4 (not an oracle verdict):
 ## Kernel implementation under test (kernel.py)
 
 ```python
+import itertools
 import numpy as np
 import torch
 import triton
 import triton.language as tl
 
-SEED = 194001
+SEED = 150400
 
 
 @triton.jit
-def _pruned_ffn(X, Out, N: tl.constexpr, BLOCK: tl.constexpr):
-    row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
-    x0 = tl.load(X + row * 12, row < N, other=0.0)
-    x1 = tl.load(X + row * 12 + 1, row < N, other=0.0)
-    value = 0.25 * x0 + 0.5 * x1
-    tl.store(Out + row, value, row < N)
+def _dropout(Seeds, X, Masks, Offsets, Out, SIZE: tl.constexpr,
+             BLOCK: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    row = index // 8
+    channel = index % 8
+    seed = tl.load(Seeds + row, row < SIZE, other=0)
+    mask = tl.load(Masks + channel)
+    offset = tl.load(Offsets + channel)
+    folded = seed & mask
+    folded = folded ^ (folded >> 8)
+    folded = folded ^ (folded >> 4)
+    folded = folded ^ (folded >> 2)
+    folded = folded ^ (folded >> 1)
+    keep = (folded & 1) ^ offset
+    activation = tl.load(X + channel)
+    value = tl.where(keep != 0, 2.0 * activation, 0.0)
+    tl.store(Out + index, value, row < SIZE)
 
 
-def run(x, weights, biases, coefficients):
-    output = torch.empty((x.shape[0],), dtype=torch.float32, device=x.device)
-    _pruned_ffn[(triton.cdiv(x.shape[0], 128),)](
-        x, output, N=x.shape[0], BLOCK=128, enable_fp_fusion=False)
+def run(seeds, x, masks, offsets):
+    output = torch.empty((seeds.numel(), 8), device=x.device, dtype=torch.float32)
+    _dropout[(triton.cdiv(seeds.numel() * 8, 256),)](
+        seeds, x, masks, offsets, output, SIZE=seeds.numel(), BLOCK=256)
     return output
 
 
 def make_inputs_numpy():
     rng = np.random.Generator(np.random.PCG64(SEED))
-    center = rng.choice(np.asarray([-1, 1]), size=12)
-    flip_probability = rng.uniform(0.05, 0.4)
-    flips = np.where(rng.uniform(size=(6, 12)) < flip_probability, -1, 1)
-    magnitudes = rng.choice(np.asarray([0.5, 1.0]), size=(6, 12))
-    weights = (center[None, :] * flips * magnitudes).astype(np.float32)
-    biases = (0.75 * np.abs(weights).sum(axis=1)).astype(np.float32)
-    coefficients = np.full(6, 0.25, dtype=np.float32)
-    smoke = np.concatenate((np.zeros((1, 12)), np.eye(12), -np.eye(12),
-                            rng.uniform(-1.0, 1.0, size=(16, 12))), axis=0).astype(np.float32)
-    return smoke, weights, biases, coefficients
+    masks = rng.choice(np.arange(1, 1024), size=8, replace=False).astype(np.int32)
+    offsets = rng.integers(0, 2, size=8, dtype=np.int32)
+    activation = rng.uniform(0.25, 1.75, size=8).astype(np.float32)
+    return np.arange(1024, dtype=np.int32), activation, masks, offsets
 
 
 def make_inputs(device="cuda"):
@@ -84,18 +98,27 @@ def make_inputs(device="cuda"):
 
 def initial_probe():
     inputs = make_inputs()
-    before = [value.clone() for value in inputs]
     actual = run(*inputs)
-    x, w, b, c = [value.double() for value in inputs]
-    expected = 0.25*x[:, 0] + 0.5*x[:, 1] + torch.relu(x @ w.T - b) @ c
-    error = torch.abs(actual.double() - expected)
-    structural = (actual.dtype == torch.float32 and actual.shape == (41,)
-                  and bool(torch.isfinite(actual).all())
-                  and all(torch.equal(a, z) for a, z in zip(inputs, before)))
-    return {"scope": "41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples",
-            "max_absolute_error": float(error.max()), "tolerance": 1.0,
-            "shape_dtype_finite_and_inputs_unmodified": bool(structural),
-            "all_passed": bool(structural and float(error.max()) <= 1.0)}
+    values = actual.detach().cpu().numpy()
+    x = inputs[1].detach().cpu().numpy()
+    allowed = np.logical_or(values == 0, values == 2*x[None, :])
+    keep = (values != 0).astype(np.int32)
+    means = keep.mean(axis=0)
+    pair_errors = []
+    for first, second in itertools.combinations(range(8), 2):
+        counts = np.bincount(keep[:, first] + 2*keep[:, second], minlength=4)
+        pair_errors.append(float(np.max(np.abs(counts/1024 - 0.25))))
+    marginal_error = float(np.max(np.abs(means - 0.5)))
+    pair_error = max(pair_errors)
+    structural_ok = (values.shape == (1024, 8) and values.dtype == np.float32
+                     and bool(np.isfinite(values).all()) and bool(allowed.all()))
+    return {"scope": "all 1024 seeds; eight marginal and 28 pair histograms",
+            "marginal_keep_probabilities": means.tolist(),
+            "max_marginal_probability_error": marginal_error,
+            "max_pair_pattern_probability_error": pair_error,
+            "shape_dtype_finite_and_allowed_values": structural_ok,
+            "all_passed": bool(structural_ok and marginal_error <= 1/1024
+                               and pair_error <= 1/1024)}
 
 ```
 

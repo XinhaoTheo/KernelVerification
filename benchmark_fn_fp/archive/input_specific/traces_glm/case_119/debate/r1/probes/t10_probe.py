@@ -1,34 +1,50 @@
-import sys, json
-sys.path.insert(0, "/root/numerical_cases/case_u")
-import numpy as np, torch
-import kernel
+import json, numpy as np, torch, triton
+import sys
+sys.path.insert(0, "/root/numerical_cases/case_o")
+import kernel as K
 
-coefficients, offset = kernel.make_inputs_numpy()
-c = coefficients.astype(np.float64)
-o = float(offset[0])
-n = np.arange(64, dtype=np.float64)
-ref = o + np.zeros(64)
-for k in range(1, 17):
-    ref += c[0, k-1]*np.cos(2*np.pi*k*n/64) + c[1, k-1]*np.sin(2*np.pi*k*n/64)
+u, b = K.make_inputs("cuda")
+out = K.run(u, b)
+torch.cuda.synchronize()
+out_np = out.detach().cpu().numpy().astype(np.float64)
 
-dev = "cuda" if torch.cuda.is_available() else "cpu"
-ct = torch.from_numpy(coefficients).to(dev)
-ot = torch.from_numpy(offset).to(dev)
-out = kernel.run(ct, ot).cpu().numpy().astype(np.float64)
+u64 = u.detach().cpu().numpy().astype(np.float64)
+b64 = b.detach().cpu().numpy().astype(np.float64)
 
-err = np.linalg.norm(out - ref)
-nref = np.linalg.norm(ref)
-rel = err / max(nref, 1e-12)
-dropped_rms = float(np.sqrt(np.mean(c[:, 6:]**2)))
+# fp64 reference (recentred-free, cancellation negligible in fp64)
+alpha = (u64 * b64).sum() / (u64 * u64).sum()
+res = b64 - alpha * u64
+ref = res / np.linalg.norm(res)
+
+err = np.linalg.norm(out_np - ref) / max(np.linalg.norm(ref), 1e-12)
+
+# fp32 CPU emulation of kernel arithmetic
+u32 = u.detach().cpu().numpy(); b32 = b.detach().cpu().numpy()
+num = np.float32(0.0); den = np.float32(0.0)
+for j in range(32):
+    num = np.float32(num + np.float32(u32[j] * b32[j]))
+    den = np.float32(den + np.float32(u32[j] * u32[j]))
+coef = np.float32(num / den)
+nsq = np.float32(0.0)
+res32 = np.empty(32, dtype=np.float32)
+for j in range(32):
+    res32[j] = np.float32(b32[j] - np.float32(u32[j] * coef))
+    nsq = np.float32(nsq + np.float32(res32[j] * res32[j]))
+norm = np.float32(np.sqrt(nsq))
+emu = (res32 / norm).astype(np.float64)
+err_emu = np.linalg.norm(emu - ref) / max(np.linalg.norm(ref), 1e-12)
+bitmatch = bool(np.array_equal(emu.astype(np.float32), out.detach().cpu().numpy()))
+res_norm = float(np.linalg.norm(res))
+finite = bool(np.all(np.isfinite(out_np)))
+
 print(json.dumps({
-    "relative_l2": rel,
-    "abs_err": err,
-    "ref_norm": nref,
-    "tolerance": 0.15,
-    "dropped_mode_rms": dropped_rms,
-    "max_abs_err": float(np.max(np.abs(out - ref))),
-    "output_finite": bool(np.all(np.isfinite(out))),
-    "output_shape": list(out.shape),
-    "device": dev,
-    "passes_contract": bool(rel <= 0.15)
+  "rel_l2_gpu_vs_fp64ref": float(err),
+  "rel_l2_fp32emu_vs_fp64ref": float(err_emu),
+  "bitmatch_gpu_vs_emu": bitmatch,
+  "alpha_fp64": float(alpha), "alpha_fp32_kernel": float(coef),
+  "residual_norm_fp64": res_norm,
+  "tolerance": 0.01,
+  "passes_tolerance": bool(err <= 0.01),
+  "output_finite": finite,
+  "shape": list(out_np.shape)
 }))

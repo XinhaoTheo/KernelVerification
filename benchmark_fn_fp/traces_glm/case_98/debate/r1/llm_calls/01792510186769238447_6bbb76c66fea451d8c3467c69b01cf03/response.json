@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-96827b90",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent runtime probes: c1 scans legal FP16 gridpoints near ±ln2/2 (worst-|r| regime) against the FP64 reference, and c2 tests a contiguous view with nonzero storage offset.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-acfd58546d3c739b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, math\\nimport kernel as K\\n\\n# candidate FP16 gridpoints near +/- ln2/2 (k=0 boundary, worst |r|)\\ncands = []\\nfor target in [0.346680908203125, -0.346680908203125, 0.346588134765625, -0.346588134765625,\\n               0.34649658203125, -0.34649658203125, 0.346771240234375, -0.346771240234375,\\n               0.347, -0.347, 0.35, -0.35, 0.3, -0.3]:\\n    t = torch.tensor(target, dtype=torch.float16)\\n    cands.append(t.item())\\n# also every FP16 gridpoint in [0.30, 0.36] and negatives\\nvals = set(cands)\\nv = torch.tensor(0.29, dtype=torch.float16)\\nimport struct\\nstart = torch.tensor(0.30, dtype=torch.float16).view(torch.int16).item()\\nend = torch.tensor(0.36, dtype=torch.float16).view(torch.int16).item()\\nfor bits in range(start, end+1):\\n    vals.add(torch.tensor(bits, dtype=torch.int16).view(torch.float16).item())\\nfor bits in range(-end, -start+1):\\n    vals.add(torch.tensor(bits, dtype=torch.int16).view(torch.float16).item())\\nxs = torch.tensor(sorted(vals), dtype=torch.float16).cuda()\\nout = K.run(xs)\\nref = torch.expm1(xs.double().cpu()).cuda()\\nerr = (out.double() - ref).abs()\\ntol = 1e-7 + 1e-6 * ref.abs()\\nratio = err / tol\\ni = int(torch.argmax(ratio).item())\\nn_fail = int((err > tol).sum().item())\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"abs_err / contract_tol vs FP64 expm1 over FP16 gridpoints near +/-0.3466\\\",\\n    \\\"n_tested\\\": xs.numel(), \\\"n_fail\\\": n_fail,\\n    \\\"worst_x\\\": float(xs[i].item()), \\\"worst_abs_err\\\": float(err[i].item()),\\n    \\\"tol_at_worst\\\": float(tol[i].item()), \\\"ratio\\\": float(ratio[i].item()),\\n    \\\"top5\\\": [[float(xs[j].item()), float(err[j].item()), float(ratio[j].item())]\\n             for j in torch.topk(ratio, 5).indices.tolist()],\\n}))\\n\", \"expected_signal\": \"any legal FP16 gridpoint near |x|~0.3466 has abs_err > 1e-7+1e-6|target|\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-bcfeff26ef9531b2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json\\nimport kernel as K\\n\\nbase = (torch.rand(3 + 1000, generator=torch.Generator().manual_seed(1)) * 20 - 10).to(torch.float16).cuda()\\nx = base[3:3+1000]  # contiguous view, storage_offset=3\\nassert x.is_contiguous() and x.storage_offset() == 3\\nout = K.run(x)\\nref = torch.expm1(x.double().cpu())\\nerr = (out.double().cpu() - ref).abs()\\ntol = 1e-7 + 1e-6 * ref.abs()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"abs_err / contract_tol for contiguous view with storage_offset=3\\\",\\n    \\\"n\\\": x.numel(), \\\"n_fail\\\": int((err > tol).sum().item()),\\n    \\\"max_abs_err\\\": float(err.max().item()),\\n    \\\"max_ratio\\\": float((err/tol).max().item()),\\n    \\\"storage_offset\\\": x.storage_offset(),\\n}))\\n\", \"expected_signal\": \"view with storage offset produces output matching FP64 reference within tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 (scan FP16 gridpoints near ±0.3466 and compute error via kernel vs FP64) and c2 (view with offset)."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510189,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 963,
+    "prompt_tokens": 20039,
+    "total_tokens": 21002,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 36,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

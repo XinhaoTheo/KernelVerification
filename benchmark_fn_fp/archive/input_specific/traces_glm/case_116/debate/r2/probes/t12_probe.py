@@ -1,37 +1,36 @@
-import numpy as np, torch, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_r")
-import kernel
 
-query, candidates, embeddings = kernel.make_inputs()
-out = kernel.run(query, candidates, embeddings).cpu().numpy()
+import json
+import numpy as np
+import torch
+import sys
+sys.path.insert(0, "/root/numerical_cases/case_l")
+import kernel as K
 
-q64 = query.cpu().numpy().astype(np.float64)
-c64 = candidates.cpu().numpy().astype(np.float64)
-e64 = embeddings.cpu().numpy().astype(np.float64)
-d = ((c64 - q64[None, :]) ** 2).sum(axis=1)
-ref_idx = int(np.argmin(d))
-ref = e64[ref_idx]
+matrix, rhs = K.make_inputs()
+out = K.run(matrix, rhs)
+out_np = out.detach().cpu().numpy().astype(np.float64)
 
-def q(x): return np.floor(x.astype(np.float64) * 8.0 + 0.5) * 0.125
-dq = ((q(c64) - q(q64)[None, :]) ** 2).sum(axis=1)
-emu_idx = int(np.argmin(dq))
+A = matrix.cpu().numpy().astype(np.float64)
+b = rhs.cpu().numpy().astype(np.float64)
+x = np.linalg.solve(A, b)
 
-diffs = np.abs(e64 - out[None, :]).sum(axis=1)
-kernel_idx = int(np.argmin(diffs))
+denom = max(np.linalg.norm(x), 0.001*np.sqrt(16))
+rel = np.linalg.norm(out_np - x) / denom
 
-rel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)
-d_sorted = np.sort(d)
-print(json.dumps({
-    "reference_winner": ref_idx,
-    "kernel_winner_inferred": kernel_idx,
-    "emulated_winner": emu_idx,
-    "winner_mismatch": bool(kernel_idx != ref_idx),
-    "relative_l2_error": float(rel),
-    "tolerance": 0.1,
-    "contract_pass": bool(rel <= 0.1),
-    "true_dist_min": float(d_sorted[0]),
-    "true_dist_second": float(d_sorted[1]),
-    "true_dist_gap": float(d_sorted[1] - d_sorted[0]),
-    "true_dist_max": float(d_sorted[-1]),
-    "output_finite": bool(np.isfinite(out).all()),
-}))
+# per-mode diagnostics
+w, V = np.linalg.eigh(A)
+c = V.T @ b
+# error in eigenbasis
+err_e = V.T @ (out_np - x)
+x_e = V.T @ x
+res = {"rel_l2_error": float(rel),
+       "tolerance": 0.08,
+       "exceeds_tolerance": bool(rel > 0.08),
+       "norm_x": float(np.linalg.norm(x)),
+       "c_min_abs": float(np.abs(c)[0]),
+       "c_second_abs": float(np.abs(c)[1]),
+       "err_eig_min": float(err_e[0]),
+       "x_eig_min": float(x_e[0]),
+       "lambdas_first3": [float(v) for v in w[:3]],
+       "output_finite": bool(np.all(np.isfinite(out_np)))}
+print(json.dumps(res))

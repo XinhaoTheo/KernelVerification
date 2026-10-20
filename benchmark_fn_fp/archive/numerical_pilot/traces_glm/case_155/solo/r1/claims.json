@@ -1,70 +1,79 @@
 [
   {
-    "created_at": "2026-09-30T09:01:03Z",
+    "created_at": "2026-09-30T08:56:43Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T09:01:29Z",
+        "created_at": "2026-09-30T08:57:00Z",
         "data": {
-          "E": 0.006828079903557325,
-          "all_finite": true,
+          "E": 0.07925391550951344,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t7_probe.py",
-              "sha256": "f22f84419c7535b649f773de3e992e34799bba34a193a157b902d1d85a0b9850"
+              "sha256": "75186eb0e51725b2606bd2d5a3d92fa7f4a2b45262e67388f97792c6b20c1478"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t7_stdout.txt",
-              "sha256": "00d67ceabc8d1a0aab55919e605e0a5a145b84d85a62c06cd40e47070066feba"
+              "sha256": "b715f538a12b85f5289382af4f3de862c0cd9a3de0d7b577b8f247f1f41f085a"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
               "path": "probes/t7_stderr.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "7691f99c765408f4da899df7e738bf7ce1f03541563a4d9a00a4d97a5a3faa77"
             }
           ],
-          "dtype": "torch.float32",
-          "duration_s": 4.369495,
+          "den": 7.034748157604961,
+          "duration_s": 5.094511,
           "exit_code": 0,
-          "expected_signal": "E <= 0.003 and all finite means the claim is rebutted (kernel compliant); E > 0.003 or non-finite confirms it.",
-          "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
-          "json_result": null,
-          "max_abs_err": 0.0532769692090187,
-          "ref_norm": 315.5689434750021,
-          "shape": [
-            512,
-            32
-          ],
+          "expected_signal": "E <= 0.12 and finite outputs means the claim is rebutted",
+          "finite": true,
+          "json_parse_error": null,
+          "json_result": {
+            "E": 0.07925391550951344,
+            "den": 7.034748157604961,
+            "finite": true,
+            "num": 0.5575313361135289,
+            "shape": [
+              32
+            ]
+          },
+          "num": 0.5575313361135289,
           "stderr": "",
-          "stdout": "{'finite': True, 'E': 0.006828079903557325, 'ref_norm': 315.5689434750021, 'max_abs_err': 0.0532769692090187, 'shape': (512, 32), 'dtype': 'torch.float32'}\n",
+          "stdout": "{\"E\": 0.07925391550951344, \"finite\": true, \"num\": 0.5575313361135289, \"den\": 7.034748157604961, \"shape\": [32]}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "Running the exact make_inputs() workload and kernel on the real GPU, comparing against the float64 reference on the same float32 inputs: outputs are finite but the contract metric E = 0.00683 exceeds the 0.003 budget (max absolute error 0.0533 on states whose norm is 315.6). The per-step fp16 rounding of the recurrent state accumulates past the allowed relative error.",
-        "supports": "confirmed",
+        "summary": "On the exact make_inputs() workload (m=32, k=128), the kernel output vs the float64 reference gave E = 0.0793 <= 0.12 with all outputs finite, so the budget-violation hypothesis is rebutted.",
+        "supports": "rebutted",
         "tool_event_id": "t7"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "The kernel rounds h to float16 every step; over t=512 steps with bias 0.01 states approach ~10, and repeated fp16 quantization may accumulate error exceeding the budget.",
+    "rationale": "The kernel quantizes each row of W to 7 levels with per-row max scaling, which introduces error that may or may not stay within the E <= 0.12 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003 on the exact make_inputs workload, with float64 reference on the same float32 inputs."
+        "summary": "Implementation satisfies the contract iff all outputs finite and E <= 0.12, with reference float64 W@x on the exact make_inputs workload."
       }
     ],
-    "scope_rationale": "The contract requires all outputs finite and E <= 0.003 on exactly this workload; a per-step fp16 rounding of the recurrent state could violate that budget.",
-    "statement": "The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload.",
-    "status": "confirmed",
-    "updated_at": "2026-09-30T09:01:29Z"
+    "scope_rationale": "The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; exceeding that budget is the only defined violation.",
+    "statement": "The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T08:57:00Z"
   }
 ]

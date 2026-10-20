@@ -1,11 +1,26 @@
-import json, torch, numpy as np, sys
-sys.path.insert(0, "/root/pilot_cases/case_100")
-import kernel
-x, w = kernel.make_inputs()
-out = kernel.run(x, w)
-ref = w.cpu().numpy().astype(np.float64) @ x.cpu().numpy().astype(np.float64)
+import sys, json
+sys.path.insert(0, "/root/pilot_cases/case_94")
+import numpy as np, torch, math
+import kernel as K
+
+q, k, v = K.make_inputs("cuda")
+out = K.run(q, k, v)
+
+# float64 reference on the SAME float32 input values
+q64 = q.cpu().numpy().astype(np.float64)
+k64 = k.cpu().numpy().astype(np.float64)
+v64 = v.cpu().numpy().astype(np.float64)
+z = k64 @ q64 / math.sqrt(q64.shape[0])
+z = z - z.max()
+p = np.exp(z); p /= p.sum()
+ref = p @ v64
+
 o = out.cpu().numpy().astype(np.float64)
-num = o.size
-E = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(num))
-print(json.dumps({"E": float(E), "finite": bool(np.isfinite(o).all()),
-  "ref_norm": float(np.linalg.norm(ref)), "err_norm": float(np.linalg.norm(o-ref))}))
+finite = bool(np.all(np.isfinite(o)))
+num = np.linalg.norm(o - ref)
+den = max(np.linalg.norm(ref), 0.001 * math.sqrt(ref.size))
+E = num / den
+print(json.dumps({"E": E, "finite": finite, "num": num,
+                  "ref_norm": float(np.linalg.norm(ref)),
+                  "out_norm": float(np.linalg.norm(o)),
+                  "shape": list(o.shape)}))

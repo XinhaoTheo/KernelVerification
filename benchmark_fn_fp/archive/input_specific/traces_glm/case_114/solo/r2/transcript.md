@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_p`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_j`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 15.819s across 4 calls | tokens: in=41001 out=1115 total=42116
+- LLM time: 23.464s across 5 calls | tokens: in=52783 out=1462 total=54245
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.98
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_p",
+    "entry": "case_j",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_p"
+    "entry": "case_j"
   }
 
-### Turn 2 - `solo` (4.165881178999999s, in=7383 out=290)
+### Turn 2 - `solo` (2.9334413089999996s, in=7115 out=210)
 
 Message:
 
 ```text
-I'll record a claim that the float32 kernel meets the ≤0.01 relative-error tolerance on the fixed workload, then run a probe against a float64 reference.
+I'll record the contract claim and run the kernel against the float64 reference on the fixed workload.
 ```
 
 Tool calls:
@@ -73,39 +73,39 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The kernel does all arithmetic in float32 with sequential accumulation; b is nearly parallel to u (residual is a tiny perturbation), so cancellation in b - alpha*u and the float32 norm could amplify error. The tolerance is generous (0.01), so the question is whether float32 suffices on this fixed workload.",
+    "rationale": "The kernel uses an E[x\u00b2]-mean\u00b2 variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only the two float32 vectors from make_inputs() are in scope; output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 against a float64 reference."
+        "summary": "Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload."
       }
     ],
-    "scope_rationale": "The contract requires the output on the fixed make_inputs() workload to be within 0.01 relative L2 error of the float64 reference and be finite.",
-    "statement": "The 
-  ...[truncated 171 chars]
+    "scope_rationale": "Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().",
+    "statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference."
+  }
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel does all arithmetic in float32 with sequential accumulation; b is nearly parallel to u (residual is a tiny perturbation), so cancellation in b - alpha*u and the float32 norm could amplify error. The tolerance is generous (0.01), so the question is whether float32 suffices on this fixed workload.",
+    "rationale": "The kernel uses an E[x\u00b2]-mean\u00b2 variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only the two float32 vectors from make_inputs() are in scope; output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 against a float64 reference."
+        "summary": "Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload."
       }
     ],
-    "scope_rationale": "The contract requires the output on the fixed make_inputs() workload to be within 0.01 relative L2 error of the float64 reference and be finite.",
-    "statement": "The kernel's float32 output on the fixed make_inputs() workload fails the contract's 0.01 relative L2 error bound versus a float64 reference (or is non-finite/wrong shape).",
+    "scope_rationale": "Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().",
+    "statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (3.6254215430000007s, in=8641 out=292)
+### Turn 3 - `solo` (4.174159713000001s, in=8124 out=311)
 
 Message:
 
 ```text
-I'll run the fixed workload on the real GPU and compare against a float64 reference.
+I'll run the kernel on the fixed workload and compute the relative L2 error against the float64 reference.
 ```
 
 Tool calls:
@@ -114,8 +114,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import json, sys, numpy as np, torch\nsys.path.insert(0, \"/root/numerical_cases/case_p\")\nimport kernel\n\nu, b = kernel.make_inputs(\"cuda\")\nout = kernel.run(u, b)\ntorch.cuda.synchronize()\n\nu64 = u.cpu().numpy().astype(np.float64)\nb64 = b.cpu().numpy().astype(np.float64)\nalpha = (u64*b64).sum() / (u64*u64).sum()\nres = b64 - alpha*u64\nref = res / np.linalg.norm(res)\n\no = out.cpu().numpy().astype(np.float64)\nerr = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"shape\": list(out.shape),\n  \"finite\": bool(np.isfinite(o).all()),\n  \"relative_l2\": float(err),\n  \"tolerance\": 0.01,\n  \"passes\": bool(err <= 0.01 and out.shape == (32,) and np.isfinite(o).all()),\n  \"alpha\": float(alpha),\n  \"resid_norm\":
-  ...[truncated 81 chars]
+    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_j\")\nimport torch, numpy as np\nfrom kernel import make_inputs, run\n\nx = make_inputs()[0]\nout = run(x)\n\nxf = x.to(torch.float64)\nmean = xf.sum() / 128\nvar = ((xf - mean) ** 2).sum() / 128\nref = (xf - mean) / np.sqrt(var + 1e-5)\n\nnum = (out.to(torch.float64) - ref).norm().item()\nden = max(ref.norm().item(), 0.001 * np.sqrt(128))\nerr = num / den\nres = {\"shape\": list(out.shape), \"dtype\": str(out.dtype), \"finite\": bool(torch.isfinite(out).all().item()),\n       \"rel_l2_error\": err, \"bound\": 0.02, \"passes\": bool(err <= 0.02),\n       \"max_abs_err\": (out.to(torch.float64) - ref).abs().max().item(),\n       \"max_rel_err\": ((out.to(torch.float64) - ref).abs() / ref.abs
+  ...[truncated 100 chars]
   Output summary:
   {
     "artifacts": [
@@ -123,56 +123,116 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "254adfb1b4e2fc848b1494727ced485ca4835904843bcbd343989d4abbc3fd6b"
+        "sha256": "25b1dee6f214465e6fb6f5f003fe71f4d7a23935f011ef6e8fa4d2ba66cb64f2"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "5416b7ca3b899341aa27f9c804df4da583a353489f67847072e5b816f319f5dc"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t6_stderr.txt",
+        "sha256": "1a20f8e361a2aad85dfb7b8e9c5083f681336398e0688149cf73f01862f86736"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
+    "duration_s": 8.19683,
+    "event_id": "t6",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "25b1dee6f214465e6
+  ...[truncated 2235 chars]
+
+### Turn 4 - `solo` (3.8636690799999975s, in=10072 out=299)
+
+Message:
+
+```text
+The probe hit a trivial host/device bug in my reference code (np.sqrt on a CUDA tensor). I'll rerun with a pure-torch reference computation.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t7 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_j\")\nimport torch, numpy as np\nfrom kernel import make_inputs, run\n\nx = make_inputs()[0]\nout = run(x)\n\nxf = x.to(torch.float64)\nmean = xf.sum() / 128\nvar = ((xf - mean) ** 2).sum() / 128\nref = (xf - mean) / torch.sqrt(var + 1e-5)\n\nnum = (out.to(torch.float64) - ref).norm().item()\nden = max(ref.norm().item(), 0.001 * np.sqrt(128))\nerr = num / den\nres = {\"shape\": list(out.shape), \"dtype\": str(out.dtype), \"finite\": bool(torch.isfinite(out).all().item()),\n       \"rel_l2_error\": err, \"bound\": 0.02, \"passes\": bool(err <= 0.02),\n       \"max_abs_err\": (out.to(torch.float64) - ref).abs().max().item()}\nprint(json.dumps(res))\n",
+    "expected_signal": "rel_l2_error"
+  }
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t7_probe.py",
+        "sha256": "cde1dabe258898af652106cbd3f430cb456ee742d51115bad6ca4786d9d5d090"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t7_stdout.txt",
+        "sha256": "a0a73f196c0f1b3f7da0b172ec8f93e7df32a14790d2145d80b316dd95b13ea8"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "e3841423ae0888669ec4fe2ee53dce532a356aaf145623fe4aa5c52e3ea14db9"
+        "path": "probes/t7_json_result.json",
+        "sha256": "dae3c01e23e5209186328331f72708339b249404fe12c304ced57eea61b1ea70"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's float32 output on the fixed make_inputs() workload fails the contract's 0.01 relative L2 error bound versus a float64 reference (or is non-finite/wrong shape).",
-    "duration_s": 6.721688,
-    "event_id"
-  ...[truncated 2540 chars]
+    "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
+    "duration_s": 4.812259,
+    "event_id": "t7",
+    "evidence_draft": {
+  
+  ...[truncated 2472 chars]
 
-### Turn 4 - `solo` (4.339402610999997s, in=10807 out=294)
+### Turn 5 - `solo` (7.8949022169999985s, in=12113 out=384)
 
 Message:
 
 ```text
-The probe (t6) ran the fixed workload on GPU: output is finite, shape (32,), but relative L2 error is 0.0605, exceeding the 0.01 tolerance — b is nearly parallel to u (residual norm ~4.8e-5), so float32 cancellation in b − αu destroys accuracy. This confirms the claim.
+The probe (t7) shows the kernel's relative L2 error is 0.1448 — far above the 0.02 bound. The cause is clear from the source: with x ≈ 64, E[x²] ≈ 4096 while variance ≈ 0.015, so the fp32 `squares/N − mean²` computation suffers catastrophic cancellation. I'll record the evidence and close the claim.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "finite": true,
+      "max_abs_err": 0.3743162406125893,
+      "metric": "relative L2 error vs float64 reference",
       "passes": false,
-      "relative_l2": 0.06045526452776961,
-      "resid_norm": 4.771874883549904e-05,
-      "tolerance": 0.01
+      "reason": "matches contract's declared error metric",
+      "rel_l2_error": 0.14481964583989307,
+      "shape": [
+        128
+      ],
+      "shape_and_finiteness_ok": true
     },
-    "event_id": "t6",
+    "event_id": "t7",
     "status": "confirmed",
-    "summary": "On the fixed make_inputs() workload (b \u2248 1.125u + 1e-5 noise, residual norm 4.77e-5), the kernel's float32 output has relative L2 error 0.0605 vs a float64 reference, well above the 0.01 tolerance, due to cancellation in b - alpha*u computed in float32. Shape and finiteness are fine.",
+    "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 \u2014 only the numeric bound fails.",
     "supports": "confirmed"
   }
   Output summary:
@@ -180,38 +240,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload (b \u2248 1.125u + 1e-5 noise, residual norm 4.77e-5), the kernel's float32 output has relative L2 error 0.0605 vs a float64 reference, well above the 0.01 tolerance, due to cancellation in b - alpha*u computed in float32. Shape and finiteness are fine.",
+    "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 \u2014 only the numeric bound fails.",
     "supports": "confirmed",
-    "tool_event_id": "t6"
+    "tool_event_id": "t7"
   }
 
-### Turn 5 - `solo` (3.687981378s, in=14170 out=239)
+### Turn 6 - `solo` (4.598102220000001s, in=15359 out=258)
 
 Message:
 
 ```text
-The claim is confirmed with in-scope evidence from the fixed workload probe: relative L2 error 0.0605 vs the required ≤ 0.01. I'll record the reject verdict.
+The single in-scope claim is confirmed with runtime evidence: the kernel's fp32 E[x²]−mean² variance suffers catastrophic cancellation on the fixed workload (x ≈ 64), giving relative L2 error 0.1448 vs the 0.02 bound. I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 ran the exact fixed workload from kernel.make_inputs() on the real GPU and compared the kernel's output to a float64 reference of the contract's formulas. Output was finite and shape (32,), but relative L2 error was 0.06045526452776961, far above the contract's 0.01 tolerance (residual norm ~4.77e-5; b is nearly parallel to u, so float32 evaluation of b - alpha*u suffers catastrophic cancellation). This is an in-scope, confirmed contract violation per problem.txt, so the kernel is rejected.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 ran the exact fixed workload from kernel.make_inputs() on the real GPU and compared the kernel's output to a float64 reference of the contract's formulas. Output was finite and shape (32,), but relative L2 error was 0.06045526452776961, far above the contract's 0.01 tolerance (residual norm ~4.77e-5; b is nearly parallel to u, so float32 evaluation of b - alpha*u suffers catastrophic cancellation). This is an in-scope, confirmed contract violation per problem.txt, so the kernel is rejected.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
     "verdict": "reject"
   }
 
@@ -223,60 +283,60 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel's float32 output on the fixed make_inputs() workload fails the contract's 0.01 relative L2 error bound versus a float64 reference (or is non-finite/wrong shape).
+Statement: The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires the output on the fixed make_inputs() workload to be within 0.01 relative L2 error of the float64 reference and be finite.
+Scope rationale: Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().
 
 Scope evidence:
-- `problem.txt`: Only the two float32 vectors from make_inputs() are in scope; output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 against a float64 reference.
+- `problem.txt`: Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload.
 
-Rationale: The kernel does all arithmetic in float32 with sequential accumulation; b is nearly parallel to u (residual is a tiny perturbation), so cancellation in b - alpha*u and the float32 norm could amplify error. The tolerance is generous (0.01), so the question is whether float32 suffices on this fixed workload.
+Rationale: The kernel uses an E[x²]-mean² variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: On the fixed make_inputs() workload (b ≈ 1.125u + 1e-5 noise, residual norm 4.77e-5), the kernel's float32 output has relative L2 error 0.0605 vs a float64 reference, well above the 0.01 tolerance, due to cancellation in b - alpha*u computed in float32. Shape and finiteness are fine.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 — only the numeric bound fails.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_p"
+  "entry": "case_j"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel does all arithmetic in float32 with sequential accumulation; b is nearly parallel to u (residual is a tiny perturbation), so cancellation in b - alpha*u and the float32 norm could amplify error. The tolerance is generous (0.01), so the question is whether float32 suffices on this fixed workload.",
+  "rationale": "The kernel uses an E[x\u00b2]-mean\u00b2 variance in fp32 and the contract specifies a float64 reference with relative L2 error <= 0.02; need to measure actual error on the fixed input.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Only the two float32 vectors from make_inputs() are in scope; output must satisfy ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.01 against a float64 reference."
+      "summary": "Output must be finite, shape (128,), relative L2 error vs float64 reference <= 0.02 for the fixed make_inputs workload."
     }
   ],
-  "scope_rationale": "The contract requires the output on the fixed make_inputs() workload to be within 0.01 relative L2 error of the float64 reference and be finite.",
-  "statement": "The kernel's float32 output on the fixed make_inputs() workload fails the contract's 0.01 relative L2 error bound versus a float64 reference (or is non-finite/wrong shape).",
+  "scope_rationale": "Contract requires relative L2 error <= 0.02 on the fixed workload from make_inputs().",
+  "statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
   "status": "open"
 }
 
@@ -288,30 +348,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "254adfb1b4e2fc848b1494727ced485ca4835904843bcbd343989d4abbc3fd6b"
+      "sha256": "25b1dee6f214465e6fb6f5f003fe71f4d7a23935f011ef6e8fa4d2ba66cb64f2"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "5416b7ca3b899341aa27f9c804df4da583a353489f67847072e5b816f319f5dc"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t6_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "e3841423ae0888669ec4fe2ee53dce532a356aaf145623fe4aa5c52e3ea14db9"
+      "sha256": "1a20f8e361a2aad85dfb7b8e9c5083f681336398e0688149cf73f01862f86736"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's float32 output on the fixed make_inputs() workload fails the contract's 0.01 relative L2 error bound versus a float64 reference (or is non-finite/wrong shape).",
-  "duration_s": 6.721688,
+  "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
+  "duration_s": 8.19683,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -321,51 +375,116 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "254adfb1b4e2fc848b1494727ced485ca4835904843bcbd343989d4abbc3fd6b"
+          "sha256": "25b1dee6f214465e6fb6f5f003fe71f4d7a23935f011ef6e8fa4d2ba66cb64f2"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "5416b7ca3b899341aa27f9c804df4da583a353489f67847072e5b816f319f5dc"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t6_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b9
-...[truncated 1740 chars]
+          "sha256": "1a20f8e361a2aad85dfb7b8e9c5083f681336398e0688149cf73f01862f86736"
+        }
+      ],
+      "duration_s": 8.19683,
+      "exit_code": 1,
+      "expected_signal": "rel_l2_error",
+      "json_parse_error": "stdout has no non-empty lines",
+      "json_result": null,
+      "stderr": "Traceback (most recent call last):\n  File \"
+...[truncated 1435 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t7 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t7_probe.py",
+      "sha256": "cde1dabe258898af652106cbd3f430cb456ee742d51115bad6ca4786d9d5d090"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t7_stdout.txt",
+      "sha256": "a0a73f196c0f1b3f7da0b172ec8f93e7df32a14790d2145d80b316dd95b13ea8"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t7_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t7_json_result.json",
+      "sha256": "dae3c01e23e5209186328331f72708339b249404fe12c304ced57eea61b1ea70"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "The kernel's output for the fixed make_inputs() workload exceeds the contract's relative L2 error bound of 0.02 against the float64 reference.",
+  "duration_s": 4.812259,
+  "event_id": "t7",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t7_probe.py",
+          "sha256": "cde1dabe258898af652106cbd3f430cb456ee742d51115bad6ca4786d9d5d090"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t7_stdout.txt",
+          "sha256": "a0a73f196c0f1b3f7da0b172ec8f93e7df32a14790d2145d80b316dd95b13ea8"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t7_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+...[truncated 1672 chars]
+
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload (b \u2248 1.125u + 1e-5 noise, residual norm 4.77e-5), the kernel's float32 output has relative L2 error 0.0605 vs a float64 reference, well above the 0.01 tolerance, due to cancellation in b - alpha*u computed in float32. Shape and finiteness are fine.",
+  "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.1448 vs the float64 reference (max abs error 0.374), exceeding the 0.02 contract bound. Shape (128,), finite, fp32 \u2014 only the numeric bound fails.",
   "supports": "confirmed",
-  "tool_event_id": "t6"
+  "tool_event_id": "t7"
 }
 
-### t8 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.98,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 ran the exact fixed workload from kernel.make_inputs() on the real GPU and compared the kernel's output to a float64 reference of the contract's formulas. Output was finite and shape (32,), but relative L2 error was 0.06045526452776961, far above the contract's 0.01 tolerance (residual norm ~4.77e-5; b is nearly parallel to u, so float32 evaluation of b - alpha*u suffers catastrophic cancellation). This is an in-scope, confirmed contract violation per problem.txt, so the kernel is rejected.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-24T01:05:50Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-24T00:15:31Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 ran the exact fixed workload from kernel.make_inputs() on the real GPU and compared the kernel's output to a float64 reference of the contract's formulas. Output was finite and shape (32,), but relative L2 error was 0.06045526452776961, far above the contract's 0.01 tolerance (residual norm ~4.77e-5; b is nearly parallel to u, so float32 evaluation of b - alpha*u suffers catastrophic cancellation). This is an in-scope, confirmed contract violation per problem.txt, so the kernel is rejected.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload and compared to the contract's float64 reference (probe t7): output is finite, shape (128,), fp32, but relative L2 error is 0.1448 (bound 0.02, max abs error 0.374). The kernel computes variance in fp32 as squares/N - mean^2 (kernel.py line 16), which catastrophically cancels since E[x^2] \u2248 4096 while true variance \u2248 0.015. This violates the contract's explicit numerical requirement (relative L2 error <= 0.02) on the only in-scope input.",
   "verdict": "reject"
 }

@@ -1,29 +1,21 @@
+import json, numpy as np, torch, sys
+sys.path.insert(0, "/root/numerical_cases/case_i")
+import kernel as k
 
-import numpy as np, torch, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_o")
-from kernel import run, make_inputs
-
-u, b = make_inputs()
-out = run(u, b)
-
-# float64 reference (recentring to avoid cancellation in the reference itself)
-u64 = u.cpu().numpy().astype(np.float64)
-b64 = b.cpu().numpy().astype(np.float64)
-# reference: b = 1.125u + eps stored in fp32; compute alpha exactly from stored values
-alpha = (u64*b64).sum() / (u64*u64).sum()
-res = b64 - alpha*u64
-# alternative recentred: use dot of (b - mean-shift) — but straightforward fp64 is fine here
-ref = res / np.linalg.norm(res)
-
-o = out.cpu().numpy().astype(np.float64)
-rel = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)
+(x,) = k.make_inputs("cuda")
+out = k.run(x)
+x64 = x.cpu().numpy().astype(np.float64)
+mean = x64.sum() / 128
+var = ((x64 - mean) ** 2).sum() / 128
+ref = (x64 - mean) / np.sqrt(var + 1e-5)
+o = out.detach().cpu().numpy().astype(np.float64)
+err = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))
 print(json.dumps({
-  "relative_l2": float(rel),
-  "tolerance": 0.01,
-  "passes": bool(rel <= 0.01),
-  "finite": bool(np.all(np.isfinite(o))),
-  "shape": list(o.shape),
-  "norm_res": float(np.linalg.norm(res)),
-  "norm_b": float(np.linalg.norm(b64)),
-  "max_abs_err": float(np.abs(o-ref).max()),
+    "metric": "relative L2 error vs float64 reference",
+    "error": float(err),
+    "threshold": 0.02,
+    "finite": bool(np.isfinite(o).all()),
+    "shape": list(o.shape),
+    "max_abs_diff": float(np.abs(o - ref).max()),
+    "denominator_kernelish": float(np.sqrt(max(var, 0) + 1e-5)),
 }))

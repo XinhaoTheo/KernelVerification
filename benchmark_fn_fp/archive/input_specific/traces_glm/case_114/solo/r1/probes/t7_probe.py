@@ -1,16 +1,16 @@
-import numpy as np, torch, sys, os
-sys.path.insert(0, "/root/numerical_cases/case_p")
-from kernel import run, make_inputs_numpy
 
-u_np, b_np = make_inputs_numpy()
-u = torch.from_numpy(u_np).to("cuda")
-b = torch.from_numpy(b_np).to("cuda")
-out = run(u, b).cpu().numpy().astype(np.float64)
-
-# float64 reference on actual stored inputs, with recentring (b stored = round(1.125u + eps))
-u64 = u_np.astype(np.float64); b64 = b_np.astype(np.float64)
-alpha = (u64*b64).sum() / (u64*u64).sum()
-res = b64 - alpha*u64
-ref = res / np.linalg.norm(res)
-rel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)
-print(np.round(float(rel), 6), bool(np.isfinite(out).all()))
+import numpy as np, torch, math, json, importlib.util, sys
+spec = importlib.util.spec_from_file_location("kern", "/root/numerical_cases/case_j/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+x, = k.make_inputs(device="cuda")
+out = k.run(x)
+x64 = x.cpu().numpy().astype(np.float64)
+mean = x64.sum()/128
+var = ((x64-mean)**2).sum()/128
+ref = (x64-mean)/np.sqrt(var+1e-5)
+o = out.cpu().numpy().astype(np.float64)
+num = np.linalg.norm(o-ref)
+den = max(np.linalg.norm(ref), 0.001*math.sqrt(128))
+rel = num/den
+print(json.dumps({"rel_l2": float(rel), "mean": mean, "var": var, "num": float(num),
+                  "finite": bool(np.isfinite(o).all()), "shape": list(out.shape)}))

@@ -1,42 +1,32 @@
-import numpy as np, torch, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_i")
-import kernel as K
+import sys, json, numpy as np, torch
+sys.path.insert(0, "/root/numerical_cases/case_c")
+import kernel
 
-x, = K.make_inputs()
-out = K.run(x)
+logits, values = kernel.make_inputs()
+out = kernel.run(logits, values)
+torch.cuda.synchronize()
 
-# float64 reference per problem.txt
-xd = x.to(torch.float64).numpy()
-mean = xd.sum() / 128
-var = ((xd - mean) ** 2).sum() / 128
-ref = (xd - mean) / np.sqrt(var + 1e-5)
+l64 = logits.cpu().to(torch.float64).numpy()
+v64 = values.cpu().to(torch.float64).numpy()
+p = np.exp(l64 - l64.max()); p /= p.sum()
+ref = p @ v64
 
-err = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))
-
-# emulate kernel's float32 single-pass stats (sequential accumulation)
-xf = x.numpy().astype(np.float32)
-total = np.float32(0.0); squares = np.float32(0.0)
-for v in xf:
-    v = np.float32(v)
-    total = np.float32(total + v)
-    squares = np.float32(squares + np.float32(v * v))
-mean_f = np.float32(total / np.float32(128))
-sq_over_n = np.float32(squares / np.float32(128))
-mean_sq = np.float32(mean_f * mean_f)
-raw_var = np.float32(sq_over_n - mean_sq)
-clamped = np.float32(max(raw_var, np.float32(0.0)))
-denom = np.float32(np.sqrt(np.float32(clamped + np.float32(1e-5))))
+out_np = out.cpu().numpy().astype(np.float64)
+rel = np.linalg.norm(out_np - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(16))
+scale = np.abs(l64).max()/7.0
+codes = np.clip(np.floor(l64/scale + 0.5), -7, 7)
+rounded = codes*scale
+w = np.exp(rounded - rounded.max()); q = w/w.sum()
+ref_q = q @ v64
+rel_q = np.linalg.norm(ref_q - ref) / max(np.linalg.norm(ref), 0.004)
 
 print(json.dumps({
-    "rel_l2_error": float(err),
-    "tolerance": 0.02,
-    "passes": bool(err <= 0.02),
-    "out_finite": bool(np.isfinite(out.numpy()).all()),
-    "float64_variance": float(var),
-    "float32_single_pass_variance_raw": float(raw_var),
-    "raw_negative": bool(float(raw_var) < 0),
-    "clamped_to_zero": bool(float(clamped) == 0.0),
-    "kernel_denominator_est": float(denom),
-    "float64_denominator": float(np.sqrt(var + 1e-5)),
-    "kernel_output_max_abs": float(np.abs(out.numpy()).max()),
+  "metric": "relative L2 error vs unquantized float64 reference (contract)",
+  "kernel_rel_l2": float(rel),
+  "tolerance": 0.02,
+  "quantized_fp64_rel_l2": float(rel_q),
+  "finite": bool(np.all(np.isfinite(out_np))),
+  "shape": list(out_np.shape),
+  "max_abs_logit": float(np.abs(l64).max()),
+  "passes_contract": bool(rel <= 0.02 and np.all(np.isfinite(out_np)))
 }))

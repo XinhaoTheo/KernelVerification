@@ -1,19 +1,16 @@
-import numpy as np, torch, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_r")
-from kernel import run, make_inputs_numpy
 
-query, candidates, embeddings = make_inputs_numpy()
-q = query.astype(np.float64)
-d = ((candidates.astype(np.float64) - q)**2).sum(axis=1)
-ref_idx = int(np.lexsort((np.arange(len(d)), d))[0])
-ref = embeddings[ref_idx]
+import numpy as np, torch, json
+import importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/numerical_cases/case_l/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 
-out = run(torch.from_numpy(query).cuda(), torch.from_numpy(candidates).cuda(), torch.from_numpy(embeddings).cuda()).cpu().numpy()
-kernel_idx = int(np.argmin(np.linalg.norm(embeddings - out[None,:], axis=1)))
-rel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)
-# also compute quantized winner as kernel would
-qq = np.floor(q*8+0.5)/8
-cq = np.floor(candidates.astype(np.float64)*8+0.5)/8
-dq = ((cq-qq)**2).sum(axis=1)
-q_idx = int(np.argmin(dq))
-print(json.dumps({"ref_idx": ref_idx, "quant_idx": q_idx, "kernel_idx": kernel_idx, "rel_err": float(rel), "d_sorted_head": sorted(d)[:4].tolist(), "dq_sorted_head": sorted(dq)[:4].tolist(), "output": out.tolist(), "ref": ref.tolist()}))
+m_np, rhs_np = k.make_inputs_numpy()
+m64 = m_np.astype(np.float64); r64 = rhs_np.astype(np.float64)
+x = np.linalg.solve(m64, r64)  # float64 reference
+
+m, rhs = k.make_inputs("cuda")
+out = k.run(m, rhs)
+out_np = out.detach().cpu().numpy().astype(np.float64)
+den = max(np.linalg.norm(x), 0.001*np.sqrt(16))
+err = np.linalg.norm(out_np - x) / den
+print(json.dumps({"rel_l2_error": float(err), "bound": 0.08, "finite": bool(np.all(np.isfinite(out_np))), "norm_x": float(np.linalg.norm(x)), "output_first4": out_np[:4].tolist()}))

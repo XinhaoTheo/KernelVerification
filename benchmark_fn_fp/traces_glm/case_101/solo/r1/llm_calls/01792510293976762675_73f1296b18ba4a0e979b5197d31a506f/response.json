@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-258f5374",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe failed because I converted the input to FP32 before calling run(). I'll rerun with the FP16 tensor itself.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a420507b761be787",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, '/root/cases/case_101')\\nimport kernel\\n\\nbits = torch.arange(65536, dtype=torch.int32)\\nx16 = bits.to(torch.uint16).view(torch.float16).cpu()\\nfinite = torch.isfinite(x16)\\nxf = x16[finite].to('cuda')  # keep fp16\\n\\nout = kernel.run(xf)\\n\\nxd = xf.cpu().to(torch.float64)\\nref = torch.sign(xd) * torch.pow(torch.abs(xd), 1.0/3.0)\\nactual = out.cpu().to(torch.float64)\\n\\nnonzero = xd != 0\\nrel = (actual[nonzero] - ref[nonzero]).abs() / ref[nonzero].abs()\\nmaxrel = rel.max().item()\\nworst_bits = None\\nworst_x = None\\nif maxrel > 1e-6:\\n    idx = int(rel.argmax())\\n    wi = int(torch.where(nonzero)[0][idx])\\n    worst_bits = int(bits[finite][wi])\\n    worst_x = float(x16[finite][wi])\\nzero_ok = bool((actual[~nonzero] == 0).all().item())\\nprint({'num_tested': int(xf.numel()), 'max_rel_err': maxrel, 'tol': 1e-6,\\n       'passes': maxrel <= 1e-6, 'zero_ok': zero_ok, 'worst_bits': worst_bits, 'worst_x': worst_x})\\n\", \"expected_signal\": \"max_rel_err <= 1e-6 and zero_ok true\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe failed because I converted to float32; must pass FP16 to run(). Fix: pass x16[finite] (fp16) to cuda."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510294,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 415,
+    "prompt_tokens": 12437,
+    "total_tokens": 12852,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 32,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7235,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

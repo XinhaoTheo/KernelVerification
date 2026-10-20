@@ -1,17 +1,31 @@
-import json, numpy as np, torch, sys
-sys.path.insert(0, "/root/evidence_cases/case_e01")
+
+import sys, json
+sys.path.insert(0, '/root/numerical_cases/case_u')
+import numpy as np, torch
 import kernel
-x, y, q = kernel.make_inputs()
-out = kernel.run(x, y, q)
-X = x.cpu().numpy().astype(np.float64)
-Y = y.cpu().numpy().astype(np.float64)
-Q = q.cpu().numpy().astype(np.float64)
-mu_x = X.mean(axis=0); mu_y = Y.mean()
-Xc = X - mu_x; yc = Y - mu_y
-lam = 1.0/1024
-A = Xc.T@Xc/32 + lam*np.eye(2)
-beta = np.linalg.solve(A, Xc.T@yc/32)
-pred = mu_y + (Q - mu_x)@beta
-o = out.cpu().numpy().astype(np.float64)
-err = np.linalg.norm(o-pred)/max(np.linalg.norm(pred),0.1)
-print(json.dumps({"metric":"relative_l2_vs_float64_prediction","output":o.tolist(),"prediction":pred.tolist(),"beta":beta.tolist(),"relative_error":float(err),"tolerance":0.05,"finite":bool(np.all(np.isfinite(o))),"shape":list(out.shape),"passed":bool(err<=0.05)}))
+
+coeff, offset = kernel.make_inputs(device='cuda')
+out = kernel.run(coeff, offset)
+torch.cuda.synchronize()
+
+c64 = coeff.double().cpu().numpy()
+o64 = float(offset.double().cpu().numpy())
+n = np.arange(64, dtype=np.float64)
+ref = np.full(64, o64)
+for k in range(1, 17):
+    ref += c64[0, k-1]*np.cos(2*np.pi*k*n/64) + c64[1, k-1]*np.sin(2*np.pi*k*n/64)
+
+out_np = out.float().cpu().numpy()
+diff = out_np.astype(np.float64) - ref
+rel = np.linalg.norm(diff) / max(np.linalg.norm(ref), 1e-12)
+print(json.dumps({
+    "metric": "relative L2 error vs float64 16-mode reference",
+    "rel_l2": float(rel),
+    "tolerance": 0.15,
+    "pass": bool(rel <= 0.15),
+    "shape": list(out_np.shape),
+    "dtype": str(out.dtype),
+    "finite": bool(np.isfinite(out_np).all()),
+    "ref_norm": float(np.linalg.norm(ref)),
+    "max_abs_err": float(np.abs(diff).max()),
+}))

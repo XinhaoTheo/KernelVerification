@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-95625e22",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent probes: c1 sweeping all FP16 grid values in [0,1.05], and c2 testing the outer branch over all large FP16 values (|x| > 8), comparing against FP64 reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-91960dbedd2d3524",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_100\\\")\\nfrom kernel import run\\n\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nf16 = bits.to(torch.uint16).view(torch.float16)\\nfin = f16[torch.isfinite(f16)]\\nmags = fin.abs()\\nsel = mags[mags <= 1.05]  # polynomial branch domain\\nvals = sel.unique().contiguous()\\n\\nref = torch.asinh(vals.to(torch.float64))\\nactual = run(vals).to(torch.float64)\\nerr = (actual - ref).abs()\\ntol = 1e-6\\nworst_i = int(err.argmax())\\nprint({\\n \\\"n_values\\\": int(vals.numel()),\\n \\\"max_err\\\": float(err.max()),\\n \\\"tolerance\\\": tol,\\n \\\"violations\\\": int((err > tol).sum()),\\n \\\"worst_x\\\": float(vals[worst_i]),\\n \\\"worst_asinh\\\": float(ref[worst_i]),\\n})\\nimport json\\nprint(json.dumps({\\\"claim\\\":\\\"c1\\\",\\\"max_err\\\":float(err.max()),\\\"violations\\\":int((err>tol).sum()),\\\"worst_x\\\":float(vals[worst_i]),\\\"tol\\\":tol,\\\"n\\\":int(vals.numel())}))\\n\", \"expected_signal\": \"max abs error of polynomial branch vs FP64 asinh over all FP16 values in [0,1.05]\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a8ec20c07522b5b8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_100\\\")\\nfrom kernel import run\\n\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nf16 = bits.to(torch.uint16).view(torch.float16)\\nfin = f16[torch.isfinite(f16)]\\nmags = fin.abs().unique().contiguous()\\nvals = mags[mags > 8.0]  # outer branch, large magnitudes\\n\\nref = torch.asinh(vals.to(torch.float64))\\nactual = run(vals).to(torch.float64)\\nerr = (actual - ref).abs()\\ntol = 1e-6\\nworst_i = int(err.argmax())\\nr = {\\\"claim\\\":\\\"c2\\\",\\\"n\\\":int(vals.numel()),\\\"max_err\\\":float(err.max()),\\n     \\\"violations\\\":int((err>tol).sum()),\\\"worst_x\\\":float(vals[worst_i]),\\n     \\\"worst_asinh\\\":float(ref[worst_i]),\\\"tol\\\":tol,\\n     \\\"err_65504\\\":float(err[vals == 65504.0].item()) if (vals==65504.0).any() else None}\\nprint(r)\\nprint(json.dumps(r))\\n\", \"expected_signal\": \"max abs error of outer log/sqrt branch vs FP64 asinh over all large FP16 values\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Two independent probes: c1 (polynomial over all FP16 values in [0,1.05]) and c2 (large |x|). Actually can do exhaustive sweep over all finite FP16 values for both branches in one probe each. Launch both together."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510301,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 717,
+    "prompt_tokens": 18482,
+    "total_tokens": 19199,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 54,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

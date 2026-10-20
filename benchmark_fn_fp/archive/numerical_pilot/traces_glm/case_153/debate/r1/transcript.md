@@ -1,13 +1,13 @@
 # Agentic Verification Transcript
 
-- Entry: `case_90`
+- Entry: `case_84`
 - Turns: 10
 - Tool events: 17
 - Claims: 2
 - Description updates: 2
-- LLM time: 107.702s across 9 calls | tokens: in=200074 out=5348 total=205422
+- LLM time: 132.244s across 9 calls | tokens: in=210565 out=6478 total=217043
 - Stop reason: `verdict_recorded`
-- Verdict: `reject`
+- Verdict: `trust`
 - Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_90"
+    "entry": "case_84"
   }
   Output summary:
   {
-    "entry": "case_90"
+    "entry": "case_84"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_90"
+    "entry": "case_84"
   }
   Output summary:
   {
-    "entry": "case_90"
+    "entry": "case_84"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_90"
+    "entry": "case_84"
   }
   Output summary:
   {
-    "entry": "case_90"
+    "entry": "case_84"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_90",
+    "entry": "case_84",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_90"
+    "entry": "case_84"
   }
 
-### Turn 2 - `describer` (18.25143089400001s, in=5685 out=1051)
+### Turn 2 - `describer` (21.799789976s, in=5717 out=1189)
 
 Message:
 
 ```text
-I have full context: this is a linear recurrence h[t] = a[t]*h[t-1] + b[t] over T=896, D=32, with the kernel deliberately quantizing the running state to fp16 at every step. The key question is whether fp16 rounding of ~0.01-magnitude states accumulates past the 0.003 relative-error budget. I'll record a structured description.
+I have full context: single-workload softmax-attention kernel with an fp16 round-trip on the probabilities and a structured value offset engineered to create cancellation in the output. I'll record the description model now.
 ```
 
 Tool calls:
@@ -75,38 +75,33 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Single fixed workload: make_inputs() in kernel.py with seed 454, t=896, d=32, a=0.99 (broadcast scalar decay), b=N(0.01, 0.0001) per element, float32 inputs.",
-      "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all states returned (shape (896,32), 28672 outputs).",
-      "Reference is float64 evaluation of the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) must be <= 0.003 with all outputs finite.",
-      "Reduced precision arithmetic is explicitly permitted as long as the error budget is met; no bitwise/exactness requirement.",
-      "Out of scope: any other inputs, shapes, seeds, or generic correctness claims."
-    ],
-    "kernel_model": [
-      "Triton kernel runs one program (grid (1,)) looping t=0..895 over a D=32 lane vector, computing h
-  ...[truncated 2678 chars]
+      "Single fixed workload: make_inputs() in kernel.py, seed 815, n=128, d=32, attention family; no other inputs/shapes in scope.",
+      "Contract op: y = softmax(K @ q / sqrt(D)) @ V with softmax over N=128 tokens; output is d=32 vector.",
+      "Reference computed in float64 from the exact same float32 input values; tolerance E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001, all outputs finite.",
+      "Reduced precision / approximate arithmetic is explicitly permitted if the budget is met; verdict options are trust / reject / needs_more_evidence and scope is finite-workload only.",
+      "Inputs are generated on CPU (NumPy PCG64), rounded once to binary32 before transfer; k is scaled by 1.9 (tail-heavier scores) and v is offset by 0.5*(p@v) to deliber
+  ...[truncated 3666 chars]
   Output summary:
   {
     "contract_model": [
-      "Single fixed workload: make_inputs() in kernel.py with seed 454, t=896, d=32, a=0.99 (broadcast scalar decay), b=N(0.01, 0.0001) per element, float32 inputs.",
-      "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all states returned (shape (896,32), 28672 outputs).",
-      "Reference is float64 evaluation of the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) must be <= 0.003 with all outputs finite.",
-      "Reduced precision arithmetic is explicitly permitted as long as the error budget is met; no bitwise/exactness requirement.",
-      "Out of scope: any other inputs, shapes, seeds, or generic correctness claims."
+      "Single fixed workload: make_inputs() in kernel.py, seed 815, n=128, d=32, attention family; no other inputs/shapes in scope.",
+      "Contract op: y = softmax(K @ q / sqrt(D)) @ V with softmax over N=128 tokens; output is d=32 vector.",
+      "Reference computed in float64 from the exact same float32 input values; tolerance E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001, all outputs finite.",
+      "Reduced precision / approximate arithmetic is explicitly permitted if the budget is met; verdict options are trust / reject / needs_more_evidence and scope is finite-workload only.",
+      "Inputs are generated on CPU (NumPy PCG64), rounded once to binary32 before transfer; k is scaled by 1.9 (tail-heavier scores) and v is offset by 0.5*(p@v) to deliberately control output cancellation magnitude."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel runs one program (grid (1,)) looping t=0..895 over a D=32 lane vector, computing h = a*h + b in float32 and storing every state.",
-      "Each step explicitly quantizes the state to fp16 and back to fp32 (line 13), simulating a low-precision recurrence; the stored output at each t is the fp16-rounded value.",
-      "run() assumes a is (T,D) shaped (matches a=np.full((t,d),decay)); out = empty_like(b), float32 on CUDA.",
-      "enable_fp_fusion=False set; inp
-  ...[truncated 2368 chars]
+      "Triton single-program kernel (_kernel) with grid (1,), loads full K (128x32) and V (128x32) tiles, computes scores = row-dot(k, q) * D^-0.5 in input (fp32) precision.",
+      "Softmax computed as exp(scores - max(scores)) then normalized by the sum; result p is then cast to fp16 and back to fp32 (li
+  ...[truncated 3366 chars]
 
-### Turn 3 - `skeptic` (10.541546994999976s, in=13559 out=598)
+### Turn 3 - `skeptic` (10.186906735999997s, in=14572 out=592)
 
 Message:
 
 ```text
-The contract is a fixed single workload with an explicit error budget, and the kernel's only deviation risk is the per-step fp16 state quantization. I'll record the decisive testable claims.
+The description is thorough and matches my reading of the source. The central testable risk is the fp16 round-trip of softmax probabilities against the deliberately shrunken reference norm. I'll record the highest-value claims.
 ```
 
 Tool calls:
@@ -114,16 +109,17 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "Per-step fp16 rounding error is ~2^-11 relative; at h\u22481 fp16 ulp \u2248 0.001, so each step can inject ~5e-4 absolute error. Errors decay by 0.99 per step, giving effective accumulation over ~100 steps, which could push the L2 error past the 0.003 relative budget. Analysis alone is inconclusive (random walk vs damping), so E must be measured on the exact workload.",
+    "rationale": "The workload explicitly shrinks the reference output norm via v -= 0.5*(p@v), so E's denominator may hit the 0.001*sqrt(32) floor while each probability carries up to ~2^-11 relative quantization error; the induced error in y scales with ||V|| (~1 per row) and could exceed the absolute budget ~5.7e-3.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract fixes the exact workload (make_inputs, t=896, d=32, decay 0.99, b bias 0.01 noise 0.0001) and requires E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(N)) <= 0.003 against a float64 reference; rejecting requires only this budget violation on this workload."
-      }
-    ],
-    "statement": "On the exact fixed
-  ...[truncated 195 chars]
+        "summary": "Contract requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single make_inputs() workload (seed 815, n=128, d=32), with reference in float64 on the same float32 inputs; a decisive probe is the exact fixed workload."
+      },
+      {
+        "source": "kernel.py make_inputs",
+        "summary": "v -= 0.5*(p@v) deliberately shrinks the reference output norm, t
+  ...[truncated 355 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -132,15 +128,15 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "The contract requires all outputs finite; if any h value underflows fp16 to zero or the state drifts, finiteness could be violated, though magnitudes (~1) make this unlikely. The metric computation (max abs error, E, output norm, finite count) directly tests this.",
+    "rationale": "Scores are computed in fp32 with k scaled by 1.9 and D=32, so scores reach ~20-30 magnitude; fp32 dot products and exp introduce small errors whose effect on y is unclear relative to the tight post-shrink budget, and should be measured separately from the fp16 effect.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The implementation satisfies the contract iff all outputs are finite AND E <= 0.003; finiteness is an explicit in-scope requirement for this fixed workload."
+        "summary": "Contract permits reduced precision only if E <= 0.001 on the single fixed workload; the fp32 softmax path must also be verified within that budget on the exact workload."
       }
     ],
-    "statement": "The kernel's outputs on this workload include at least one non-finite value, or the E computation must be measured with max absolute error reported alongside E to confirm no fp16 saturation/flush-to-zero anomaly."
+    "statement": "Even ignoring the fp16 cast, the fp32 computation of scores and softmax (lines 12-14) contributes error that, combined with the shrunken reference norm on the fixed workload, may by itself push E above 0.001."
   }
   Output summary:
   {
@@ -148,12 +144,12 @@ Tool calls:
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (9.620103557999983s, in=15042 out=606)
+### Turn 4 - `skeptic` (10.925878958999988s, in=16148 out=669)
 
 Message:
 
 ```text
-Both prior claim recordings were rejected for missing `scope_rationale`; I'm resending them with the required field.
+Both prior claim attempts failed for missing `scope_rationale`; I'm resending them with that field filled.
 ```
 
 Tool calls:
@@ -161,66 +157,70 @@ Tool calls:
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "Per-step fp16 rounding error is ~2^-11 relative; at h\u22481 the fp16 ulp is ~0.001, so each step can inject ~5e-4 absolute error. Errors decay by 0.99 per step, giving effective accumulation over ~100 steps, which could push the L2 error past the 0.003 relative budget. Analysis alone is inconclusive (random walk vs damping), so E must be measured on the exact workload.",
+    "rationale": "The workload explicitly shrinks the reference output norm via v -= 0.5*(p@v), so E's denominator may hit the 0.001*sqrt(32) floor while each probability carries up to ~2^-11 relative quantization error; the induced error in y scales with ||V|| and could exceed the absolute budget ~5.7e-3.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The workload is exactly make_inputs() (seed 454, t=896, d=32, decay 0.99, b~N(0.01,1e-4)), and compliance requires E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(N)) <= 0.003 against a float64 reference; an E > 0.003 on this exact workload is a contract violation."
-      }
-    ],
-    "scope_rationale": "The claim t
-  ...[truncated 451 chars]
+        "summary": "Contract requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single make_inputs() workload (seed 815, n=128, d=32), reference in float64 on the same float32 inputs."
+      },
+      {
+        "source": "kernel.py make_inputs",
+        "summary": "v -= 0.5*(p@v) deliberately shrinks the reference output norm, tightening the budget against the kernel's fp16 probability quant
+  ...[truncated 563 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Per-step fp16 rounding error is ~2^-11 relative; at h\u22481 the fp16 ulp is ~0.001, so each step can inject ~5e-4 absolute error. Errors decay by 0.99 per step, giving effective accumulation over ~100 steps, which could push the L2 error past the 0.003 relative budget. Analysis alone is inconclusive (random walk vs damping), so E must be measured on the exact workload.",
+    "rationale": "The workload explicitly shrinks the reference output norm via v -= 0.5*(p@v), so E's denominator may hit the 0.001*sqrt(32) floor while each probability carries up to ~2^-11 relative quantization error; the induced error in y scales with ||V|| and could exceed the absolute budget ~5.7e-3.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The workload is exactly make_inputs() (seed 454, t=896, d=32, decay 0.99, b~N(0.01,1e-4)), and compliance requires E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(N)) <= 0.003 against a float64 reference; an E > 0.003 on this exact workload is a contract violation."
+        "summary": "Contract requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single make_inputs() workload (seed 815, n=128, d=32), reference in float64 on the same float32 inputs."
+      },
+      {
+        "source": "kernel.py make_inputs",
+        "summary": "v -= 0.5*(p@v) deliberately shrinks the reference output norm, tightening the budget against the kernel's fp16 probability quantization (line 15)."
       }
     ],
-    "scope_rationale": "The claim tests the stated compliance requirement (E <= 0.003) on the single fully specified workload named by the contract (make_inputs in kernel.py); problem.txt says the kernel is judged exactly on this workload's error budget.",
-    "statement": "On the exact fixed workload (seed 454, t=896, d=32, a=0.99, b~N(0.01,1e-4)), the per-step fp16 quantization of the recurrence state accumulates to a
-  ...[truncated 85 chars]
+    "scope_rationale": "The claim tests the exact fixed workload the contract defines (make_inputs, seed 815, n=128, d=32) against the stated tolerance E <= 0.001 with a float64 reference; the fp16 cast at line 15 is a reduced-precision step explicitly permitted only if that budget is met.",
+    "statement": "On the exact seed-815 workload (make_inputs, n=1
+  ...[truncated 197 chars]
 - `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "The contract requires all outputs finite; the explicit fp16 cast each step could theoretically produce saturation or non-finite values, though magnitudes (~1) make this unlikely. The E computation with a finite count and max absolute error directly tests it.",
+    "rationale": "Scores are computed in fp32 with k scaled by 1.9 and D=32, so scores reach ~20-30 magnitude; fp32 dot products, exp, and normalization introduce small errors whose effect on y is unclear relative to the tight post-shrink budget, and should be measured separately from the fp16 effect.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The implementation satisfies the contract iff all outputs are finite and E <= 0.003; finiteness of all outputs is an explicit requirement on this fixed workload."
+        "summary": "Contract requires E <= 0.001 on the single fixed workload with a float64 reference; reduced precision (including the fp32 softmax path) is permitted only if the budget is met."
       }
     ],
-    "scope_rationale": "Finiteness of all outputs on this fixed workload is an explicit clause of the contract in problem.txt (\"iff all outputs are finite and E <= 0.003\").",
-    "statement": "The kernel's outputs on this fixed workload include at l
-  ...[truncated 108 chars]
+    "scope_rationale": "The claim tests the same single fixed workload against the same stated budget; the fp32 softmax computation (lines 12-14) is the other precision-sensitive path that must be measured aga
+  ...[truncated 258 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "The contract requires all outputs finite; the explicit fp16 cast each step could theoretically produce saturation or non-finite values, though magnitudes (~1) make this unlikely. The E computation with a finite count and max absolute error directly tests it.",
+    "rationale": "Scores are computed in fp32 with k scaled by 1.9 and D=32, so scores reach ~20-30 magnitude; fp32 dot products, exp, and normalization introduce small errors whose effect on y is unclear relative to the tight post-shrink budget, and should be measured separately from the fp16 effect.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The implementation satisfies the contract iff all outputs are finite and E <= 0.003; finiteness of all outputs is an explicit requirement on this fixed workload."
+        "summary": "Contract requires E <= 0.001 on the single fixed workload with a float64 reference; reduced precision (including the fp32 softmax path) is permitted only if the budget is met."
       }
     ],
-    "scope_rationale": "Finiteness of all outputs on this fixed workload is an explicit clause of the contract in problem.txt (\"iff all outputs are finite and E <= 0.003\").",
-    "statement": "The kernel's outputs on this fixed workload include at least one non-finite value (fp16 cast producing Inf/NaN), violating the contract's finiteness requirement.",
+    "scope_rationale": "The claim tests the same single fixed workload against the same stated budget; the fp32 softmax computation (lines 12-14) is the other precision-sensitive path that must be measured against the contract tolerance.",
+    "statement": "Even ignoring the fp16 cast, the fp32 computation of scores and softmax (lines 12-14) contributes error that, combined with the shrunken reference norm on the fixed workload, may by itself push E above 0.001.",
     "status": "open"
   }
 
-### Turn 5 - `describer` (19.68137176700003s, in=16165 out=1125)
+### Turn 5 - `describer` (29.44494448400002s, in=17526 out=1455)
 
 Message:
 
 ```text
-The description model is already complete and both open claims (c1, c2) are correctly scoped to the fixed workload. I'll add one refinement to the description: a sharper quantitative picture of the fp16 error budget and what the probe should measure, to guide the experimenter.
+The description model is already recorded and matches the source; the two open claims (c1, c2) are pending Skeptic/Experimenter evidence. I'll add one refinement that sharpens the reference-norm analysis, since it affects how the E denominator behaves: the structured offset v' = v − 0.5·(p@v) makes the reference exactly 0.5·(p@v_original) (because p@(p@v) is not the identity, but p is a fixed distribution applied twice on the same v — actually p@v' = p@v − 0.5·(p@(p@v), so the reference is not exactly halved; this needs care). Let me record that correction rather than leave an imprecise statement in the model.
 ```
 
 Tool calls:
@@ -228,33 +228,30 @@ Tool calls:
 - `record_description_update -> t10 ok`
   Args:
   {
-    "contract_model": [
-      "Single fixed workload: make_inputs() in kernel.py, seed 454, t=896, d=32, a=0.99, b~N(0.01, 1e-4) float32; operation h[0]=a[0]*0+b[0], h[t]=a[t]*h[t-1]+b[t], all states returned (28672 outputs).",
-      "Reference: float64 recurrence on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 and all outputs finite; reduced precision explicitly permitted."
-    ],
     "kernel_model": [
-      "Sequential Triton loop (grid (1,)) over t=0..895 with D=32 lanes; h = a*h + b in fp32, then h.to(fp16).to(fp32) each step, storing the fp16-rounded state at every t (line 13).",
-      "Steady-state analysis: with a=0.99 and b mean 0.01, h converges to ~0.01/(1-0.99) = ~1.0, so fp16 ulp near the state magnitude is ~2^-10 to 2^-11 (~0.0005-0.001), i.e. per-st
-  ...[truncated 2751 chars]
+      "Correction to prior entry: the reference norm is NOT exactly halved. With v' = v - 0.5*(p@v), the reference is ref = p@v' = p@v - 0.5*(p@(p@v)). Since (p@v) is a d-vector with entries r_j = sum_i p_i v_ij, p@(p@v) = sum_i p_i r_j = r_j (row-weighted sum of a constant-per-column vector equals that vector). So p@(p@v) = p@v exactly, and ref = 0.5*(p@v).",
+      "Therefore the reference output IS exactly 0.5 times the unstructured softmax output: the offset removes half of p@v, a known-magnitude shrink (not a near-total cancellation). ||ref||_2 is roughly 0.5*||p@v_orig||_2, likely well above the 0.001*sqrt(32) ~ 0.0057 floor, so the denominator of E is ||ref||_2 itself, not the floor.",
+      "Note the make_inputs p used for the offset is computed in float64 from float
+  ...[truncated 2238 chars]
   Output summary:
   {
-    "contract_model": [
-      "Single fixed workload: make_inputs() in kernel.py, seed 454, t=896, d=32, a=0.99, b~N(0.01, 1e-4) float32; operation h[0]=a[0]*0+b[0], h[t]=a[t]*h[t-1]+b[t], all states returned (28672 outputs).",
-      "Reference: float64 recurrence on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 and all outputs finite; reduced precision explicitly permitted."
-    ],
+    "contract_model": [],
     "impact_on_claims": [],
     "kernel_model": [
-      "Sequential Triton loop (grid (1,)) over t=0..895 with D=32 lanes; h = a*h + b in fp32, then h.to(fp16).to(fp32) each step, storing the fp16-rounded state at every t (line 13).",
-      "Steady-state analysis: with a=0.99 and b mean 0.01, h converges to ~0.01/(1-0.99) = ~1.0, so fp16 ulp near the state magnitude is ~2^-10 to 2^-11 (~0.0005-0.001), i.e. per-step absolute rounding error up to ~5e-4.",
-      "Error dynamics: quantization error injected each step is damped by factor 0.99 in subsequent steps; the accumulated per-element state error has std ~ sigma_step/sqrt(1-0.99^2) ~ 10x sigma_step if errors are independent (random walk), which for sigma_step ~ 3e-4 gives accumulated error std ~ 3e-3 per element; relative to ||ref
-  ...[truncated 2441 chars]
+      "Correction to prior entry: the reference norm is NOT exactly halved. With v' = v - 0.5*(p@v), the reference is ref = p@v' = p@v - 0.5*(p@(p@v)). Since (p@v) is a d-vector with entries r_j = sum_i p_i v_ij, p@(p@v) = sum_i p_i r_j = r_j (row-weighted sum of a constant-per-column vector equals that vector). So p@(p@v) = p@v exactly, and ref = 0.5*(p@v).",
+      "Therefore the reference output IS exactly 0.5 times the unstructured softmax output: the offset removes half of p@v, a known-magnitude shrink (not a near-total cancellation). ||ref||_2 is roughly 0.5*||p@v_orig||_2, likely well above the 0.001*sqrt(32) ~ 0.0057 floor, so the denominator of E is ||ref||_2 itself, not the floor.",
+      "Note the make_inputs p used for the offset is computed in float64 from float32 q,k; the kernel's fp32 softmax approximates the same p, so the shrink applies identically to both kernel output and reference in the p@v sense \u2014 but the fp16 quantization acts on the kernel's p, not the reference's."
+    ],
+    "open_questions": [
+      "Empirical ||ref||_2 = 0.5*||p@v_orig||_2 for seed 815: expected O(0.5*sqrt(d)/sqrt(effective 
+  ...[truncated 1952 chars]
 
-### Turn 6 - `skeptic` (8.26789923199999s, in=24974 out=260)
+### Turn 6 - `skeptic` (9.150777195000018s, in=26040 out=280)
 
 Message:
 
 ```text
-Both decisive, in-scope claims (c1: accumulated fp16 rounding vs. the E ≤ 0.003 budget; c2: output finiteness) are already recorded, and the description model covers all contract-relevant risk surfaces. The kernel is operationally a straightforward sequential recurrence on a fixed workload, so there are no further contract-tied failure modes worth claiming — the remaining questions are purely measurement-dependent and need runtime probes, not new hypotheses.
+The description model's refinement (reference norm exactly halved by the structured offset) sharpens but does not change my two open claims — the decisive fact is still the empirical E on the exact workload, which requires Experimenter runs. Both c1 and c2 cover the two precision-sensitive paths (fp16 probability quantization, fp32 softmax), and no other distinct high-risk attack surface exists for this single fixed workload. I'll record that I found no new claims this turn.
 ```
 
 Tool calls:
@@ -262,7 +259,7 @@ Tool calls:
 - `record_no_new_claims -> t11 ok`
   Args:
   {
-    "reason": "The contract covers a single fully fixed workload; the only contract-relevant deviation surface is the per-step fp16 state quantization, already captured by c1 (E vs 0.003 budget) and c2 (finiteness). The kernel is a plain sequential recurrence with correct indexing and output dtype, and the contract explicitly permits reduced precision within the budget, so no additional testable in-scope failure modes exist; both claims now need runtime measurement evidence.",
+    "reason": "The describer's refinement confirms my analysis (reference is exactly 0.5*(p@v_orig), budget is ~1e-4 absolute, near-threshold) but exposes no new attack surface beyond the two open claims c1 (fp16 probability quantization) and c2 (fp32 softmax path). Both are in_scope on the exact seed-815 workload and await Experimenter evidence; the decisive question is empirical E, which requires runtime probes I do not run.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -271,7 +268,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The contract covers a single fully fixed workload; the only contract-relevant deviation surface is the per-step fp16 state quantization, already captured by c1 (E vs 0.003 budget) and c2 (finiteness). The kernel is a plain sequential recurrence with correct indexing and output dtype, and the contract explicitly permits reduced precision within the budget, so no additional testable in-scope failure modes exist; both claims now need runtime measurement evidence.",
+    "reason": "The describer's refinement confirms my analysis (reference is exactly 0.5*(p@v_orig), budget is ~1e-4 absolute, near-threshold) but exposes no new attack surface beyond the two open claims c1 (fp16 probability quantization) and c2 (fp32 softmax path). Both are in_scope on the exact seed-815 workload and await Experimenter evidence; the decisive question is empirical E, which requires runtime probes I do not run.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -280,12 +277,12 @@ Tool calls:
     "turn": 6
   }
 
-### Turn 7 - `experimenter` (10.473367515999996s, in=26050 out=614)
+### Turn 7 - `experimenter` (17.489173360999985s, in=27135 out=1044)
 
 Message:
 
 ```text
-I'll run two probes: c1 measures E on the exact workload against a float64 reference, and c2 checks output finiteness. They're independent, so I'll batch them.
+I'll run two independent probes on the exact seed-815 workload: one measuring the kernel's full E vs the float64 reference (c1), and one isolating the fp32-softmax path error by simulating the kernel without the fp16 cast (c2).
 ```
 
 Tool calls:
@@ -294,8 +291,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json\nsys.path.insert(0, \"/root/pilot_cases/case_90\")\nimport torch, numpy as np\nimport kernel as K\n\na, b = K.make_inputs(\"cuda\")\nout = K.run(a, b).cpu()\n\n# float64 reference on same float32 inputs\na64 = a.cpu().numpy().astype(np.float64)\nb64 = b.cpu().numpy().astype(np.float64)\nT, D = a64.shape\nref = np.empty((T, D), dtype=np.float64)\nh = np.zeros(D, dtype=np.float64)\nfor t in range(T):\n    h = a64[t] * h + b64[t]\n    ref[t] = h\n\nN = ref.size\nerr = out.numpy().astype(np.float64).ravel() - ref.ravel()\nrefn = np.linalg.norm(ref.ravel())\nden = max(refn, 0.001 * np.sqrt(N))\nE = np.linalg.norm(err) / den\nper_t = np.linalg.norm(err.reshape(T, D), axis=1)\n\nprint(json.dumps({\n    \"E\": E, \"threshold\": 0.003, \"E_exceeds_b
-  ...[truncated 377 chars]
+    "code": "import json, sys, math\nsys.path.insert(0, \"/root/pilot_cases/case_84\")\nimport torch, numpy as np\nimport kernel as K\n\nq, k, v = K.make_inputs(\"cuda\")\nout = K.run(q, k, v).double().cpu().numpy()\n\n# float64 reference on the same float32 inputs\nq64 = q.double().cpu().numpy(); k64 = k.double().cpu().numpy(); v64 = v.double().cpu().numpy()\nz = k64 @ q64 / math.sqrt(q64.shape[0])\nz = z - z.max(); p = np.exp(z); p /= p.sum()\nref = p @ v64\n\nerr = np.linalg.norm(out - ref)\nrefn = np.linalg.norm(ref)\ndenom = max(refn, 0.001*math.sqrt(32))\nE = err/denom\nprint(json.dumps({\n    \"metric\": \"contract E on exact workload\",\n    \"E\": E, \"err_l2\": err, \"ref_norm\": refn, \"denominator\": denom,\n    \"floor\": 0.001*math.sqrt(32),\n    \"finite\
+  ...[truncated 217 chars]
   Output summary:
   {
     "artifacts": [
@@ -303,13 +300,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t12_probe.py",
-        "sha256": "a4c1a84d3ec1d44f180431c722a0787fb214de990e7af64c8283539485efb1ae"
+        "sha256": "fca864f3e57e927319593844c65e1b7fc299711ddb1b78608090f5c21ca7cf38"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t12_stdout.txt",
-        "sha256": "1eb186eca16db2544e5bf4afbb468b7cc4c465652202d2c26c17fcf3a4699919"
+        "sha256": "fd015037a3d5353bc7d61c98fd2a4b663a63f888d3a041f8b2603dc1b9075e25"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -321,19 +318,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t12_json_result.json",
-        "sha256": "5c6ae107f0af6b19e957a8661ce78a24c14843b2a8f19c1768c12c8363909e26"
+        "sha256": "396bcba23b1e6536faedc369c2ac3749e68f32704f00474c5802050fc681269f"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the exact fixed workload (seed 454, t=896, d=32, a=0.99, b~N(0.01,1e-4)), the per-step fp16 quantization of the recurrence state accumulates to a normalized error E > 0.003 relative to the float64 reference
-  ...[truncated 3164 chars]
+    "claim_statement": "On the exact seed-815 workload (make_inputs, n=128, d=32), the fp16 round-trip of softmax probabilities (kernel line 15) causes E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the con
+  ...[truncated 3054 chars]
 - `run_claim_probe -> t13 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "import sys, json\nsys.path.insert(0, \"/root/pilot_cases/case_90\")\nimport torch, numpy as np\nimport kernel as K\n\na, b = K.make_inputs(\"cuda\")\nout = K.run(a, b).cpu().numpy()\nfinite_count = int(np.isfinite(out).sum())\ntotal = out.size\nnonfinite = int(total - finite_count)\nprint(json.dumps({\n    \"finite\": bool(finite_count == total),\n    \"finite_count\": finite_count, \"total\": total, \"nonfinite_count\": nonfinite,\n    \"max_abs_out\": float(np.abs(out).max()), \"min_abs_out\": float(np.abs(out).min()),\n    \"has_nan\": bool(np.isnan(out).any()), \"has_inf\": bool(np.isinf(out).any()),\n}))",
-    "expected_signal": "finite check of all outputs on the exact workload"
-  }
+    "code": "import json, sys, math\nsys.path.insert(0, \"/root/pilot_cases/case_84\")\nimport torch, numpy as np\nimport kernel as K\n\nq, k, v = K.make_inputs(\"cuda\")\n\n# fp64 reference\nq64 = q.double().cpu().numpy(); k64 = k.double().cpu().numpy(); v64 = v.double().cpu().numpy()\nz = k64 @ q64 / math.sqrt(32); z -= z.max(); p = np.exp(z); p /= p.sum()\nref = p @ v64\n\n# fp32-softmax-only simulation (no fp16 cast): replicate lines 12-14,16 in fp32\nq32 = q.float().cpu().numpy(); k32 = k.float().cpu().numpy(); v32 = v.float().cpu().numpy()\ns = (k32.astype(np.float64) @ q32) if False else None\n# mimic Triton: dot in fp32 accumulation order ~ pairwise; use numpy float32 matmul with float64 accumulate not allowed -> use float32 GEMM\ns32 = (k32 @ q32.astype(np.floa
+  ...[truncated 956 chars]
   Output summary:
   {
     "artifacts": [
@@ -341,13 +337,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t13_probe.py",
-        "sha256": "338b6ec0d6d5f1a588b5ec1b66e6b78682aa74017c1ea6b5544916a94c631305"
+        "sha256": "f51e697c3dc1c478d31ab42b45c567e4cc052a9fbafec75b816cfdd9ffaeeb9e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t13_stdout.txt",
-        "sha256": "4d7a0004404d70d7741adc7d1008a5a1dbe14f8ca5f9b989fd599794f70db86e"
+        "sha256": "9c2189bc425191c04a7ec8a5eef640ed436bee9e6a3c6ea491e0e3da6650c81b"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -359,21 +355,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t13_json_result.json",
-        "sha256": "2f2a0be056125fbb22e2dda098acbbf779026c10070d915621035dd841a621e1"
+        "sha256": "ad7a3a8b7a6bc37df9787f560201983207160594773df5d2379fca7f29377bbe"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "The kernel's outputs on this fixed workload include at least one non-finite value (fp16 cast producing Inf/NaN), violating the contract's finiteness requirement.",
-    "duration_s": 4.230282,
-    "event_id": "t13"
-  ...[truncated 2619 chars]
+    "claim_statement": "Even ignoring the fp16 cast, the fp32 computation of scores and softmax (lines 12-14) contributes error that, combined with the shrunken reference norm on the fixed workload, may by itself push E above 0.001."
+  ...[truncated 3026 chars]
 
-### Turn 8 - `experimenter` (11.884520845000054s, in=29228 out=541)
+### Turn 8 - `experimenter` (9.667953742000009s, in=31011 out=523)
 
 Message:
 
 ```text
-Both probe results are in: c1's measured E = 0.00375 exceeds the 0.003 budget (confirming the budget-violation claim), and c2's outputs are all finite (rebutting the non-finiteness claim). I'll finalize both.
+Both probes completed on the exact seed-815 workload. The full kernel (with fp16 cast) yields E = 3.22e-4, well under the 0.001 budget, and the fp32-softmax-only path contributes only ~2.8e-7 — far from pushing E over budget. I'll finalize both claims as rebutted.
 ```
 
 Tool calls:
@@ -382,46 +376,37 @@ Tool calls:
   Args:
   {
     "data": {
-      "E": 0.0037531111103975296,
-      "E_exceeds_budget": true,
-      "N": 28672,
-      "denominator": 154.65225318232999,
-      "max_abs_err": 0.007861854365318721,
-      "max_per_t_err_l2": 0.0306929055824275,
-      "out_finite": true,
-      "ref_l2": 154.65225318232999,
-      "threshold": 0.003
+      "E_le_0.001": true,
+      "err_l2": 0.00028786848204201117,
+      "ref_norm": 0.8939396215846612,
+      "tolerance": 0.001
     },
     "event_id": "t12",
-    "status": "confirmed",
-    "summary": "Measured E = 0.003753 on the exact fixed workload (seed 454, t=896, d=32, ref_l2=154.65, N=28672), exceeding the 0.003 contract budget by ~25%. Max abs error 0.00786; per-t L2 error persists to the last step (0.0216), showing persistent fp16 quantization drift. The fp16 per-step quantization accumulates past the budget, confirming the claim.",
-    "supports": "confirmed"
+    "status": "rebutted",
+    "summary": "Full kernel (fp16 probability round-trip included) run on the exact seed-815 make_inputs workload: E = 3.22e-4 with ||ref||_2 = 0.894 (denominator = ||ref||_2, well above the 0.0057 floor), err_l2 = 2.88e-4, all outputs finite. E <= 0.001, so the fp16 cast does NOT violate the budget; c1 is rebutted.",
+    "supports": "rebutted"
   }
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Measured E = 0.003753 on the exact fixed workload (seed 454, t=896, d=32, ref_l2=154.65, N=28672), exceeding the 0.003 contract budget by ~25%. Max abs error 0.00786; per-t L2 error persists to the last step (0.0216), showing persistent fp16 quantization drift. The fp16 per-step quantization accumulates past the budget, confirming the claim.",
-    "supports": "confirmed",
+    "summary": "Full kernel (fp16 probability round-trip included) run on the exact seed-815 make_inputs workload: E = 3.22e-4 with ||ref||_2 = 0.894 (denominator = ||ref||_2, well above the 0.0057 floor), err_l2 = 2.88e-4, all outputs finite. E <= 0.001, so the fp16 cast does NOT violate the budget; c1 is rebutted.",
+    "supports": "rebutted",
     "tool_event_id": "t12"
   }
 - `finalize_probe_evidence -> t15 ok`
   Args:
   {
     "data": {
-      "finite": true,
-      "finite_count": 28672,
-      "has_inf": false,
-      "has_nan": false,
-      "max_abs_out": 0.99853515625,
-      "min_abs_out": 0.0098724365234375,
-      "nonfinite_count": 0,
-      "total": 28672
+      "E_fp32_softmax": 2.7736435689521077e-07,
+      "E_fp32_softmax_fp64sum": 1.8064636521101315e-07,
+      "ref_norm": 0.8939396215846612,
+      "tolerance": 0.001
     },
     "event_id": "t13",
     "status": "rebutted",
-    "summary": "All 28672 outputs are finite (no NaN, no Inf); magnitudes range 0.00987-0.9985, well inside fp16 normal range. The finiteness-violation claim is rebutted; the contract's finiteness clause is satisfied.",
+    "summary": "fp32 softmax simulation without the fp16 cast on the exact workload gives E = 2.77e-7 (and 1.81e-7 with fp64 final accumulation), ~3600x below the 0.001 budget. The fp32 scores/softmax path alone cannot push E above 0.001; c2 is rebutted.",
     "supports": "rebutted"
   }
   Output summary:
@@ -429,17 +414,17 @@ Tool calls:
     "claim_id": "c2",
     "claim_status": "rebutted",
     "evidence_id": "c2.e1",
-    "summary": "All 28672 outputs are finite (no NaN, no Inf); magnitudes range 0.00987-0.9985, well inside fp16 normal range. The finiteness-violation claim is rebutted; the contract's finiteness clause is satisfied.",
+    "summary": "fp32 softmax simulation without the fp16 cast on the exact workload gives E = 2.77e-7 (and 1.81e-7 with fp64 final accumulation), ~3600x below the 0.001 budget. The fp32 scores/softmax path alone cannot push E above 0.001; c2 is rebutted.",
     "supports": "rebutted",
     "tool_event_id": "t13"
   }
 
-### Turn 9 - `skeptic` (11.855678317999946s, in=34669 out=225)
+### Turn 9 - `skeptic` (7.229823388s, in=36077 out=275)
 
 Message:
 
 ```text
-The decisive evidence is in: c1 is confirmed with measured E = 0.003753 > 0.003 on the exact contract workload, and c2 (finiteness) is rebutted. No new in-scope failure modes remain for this fixed-workload contract.
+This is my final review turn. The probes are decisive: the full kernel (fp16 cast included) achieves E = 3.22e-4 on the exact seed-815 workload, ~3x below the 0.001 budget, with outputs finite and the denominator well above the floor; the fp32 softmax path alone contributes only ~2.8e-7. Both in-scope claims (c1, c2) are rebutted by direct runtime evidence on the exact contract workload, and no uncovered attack surface exists for this single fixed workload. I'll record no new claims.
 ```
 
 Tool calls:
@@ -447,7 +432,7 @@ Tool calls:
 - `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Final review: the two in-scope claims are fully resolved by runtime probes on the exact contract workload. c1 is confirmed (E = 0.003753 > 0.003 budget, ~25% over, with per-t L2 error persisting to the last step), which is a decisive budget violation; c2 is rebutted (all 28672 outputs finite). The contract covers only this single fixed workload, and the only deviation surface (per-step fp16 state quantization) is already captured by c1, so no new testable in-scope claims exist.",
+    "reason": "Final review: both in-scope claims (c1 fp16 probability quantization, c2 fp32 softmax path) are rebutted by decisive runtime probes on the exact contract workload (seed 815, n=128, d=32): full kernel E = 3.22e-4 <= 0.001 with finite outputs, and the fp32-softmax-only path contributes E ~ 2.8e-7. The contract is a single fixed workload and reduced precision is explicitly permitted within budget; the new evidence exposes no material, testable, in-scope problem not already covered.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -456,7 +441,7 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the two in-scope claims are fully resolved by runtime probes on the exact contract workload. c1 is confirmed (E = 0.003753 > 0.003 budget, ~25% over, with per-t L2 error persisting to the last step), which is a decisive budget violation; c2 is rebutted (all 28672 outputs finite). The contract covers only this single fixed workload, and the only deviation surface (per-step fp16 state quantization) is already captured by c1, so no new testable in-scope claims exist.",
+    "reason": "Final review: both in-scope claims (c1 fp16 probability quantization, c2 fp32 softmax path) are rebutted by decisive runtime probes on the exact contract workload (seed 815, n=128, d=32): full kernel E = 3.22e-4 <= 0.001 with finite outputs, and the fp32-softmax-only path contributes E ~ 2.8e-7. The contract is a single fixed workload and reduced precision is explicitly permitted within budget; the new evidence exposes no material, testable, in-scope problem not already covered.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -465,12 +450,12 @@ Tool calls:
     "turn": 9
   }
 
-### Turn 10 - `judge` (7.12598588100002s, in=34702 out=328)
+### Turn 10 - `judge` (16.34915668000002s, in=36339 out=451)
 
 Message:
 
 ```text
-The evidence is decisive: claim c1 is confirmed with a runtime probe on the exact contract workload measuring E = 0.003753 against the 0.003 budget (a ~25% violation), while c2 (finiteness) is rebutted. Skeptic has signed off, no open claims remain, and the scope evidence ties the violation directly to the single fixed workload the contract names. Reduced precision is permitted only if the budget is met — here it is not.
+The decisive empirical evidence is in: on the exact seed-815 workload, the full kernel (fp16 cast included) achieves E = 3.22e-4 against the float64 reference, well under the 0.001 budget, with finite outputs and the denominator well above the floor; the fp32 softmax path alone contributes only ~2.8e-7. Both in-scope claims are rebutted, the Skeptic signed off with no new claims, and no open claims remain. The contract explicitly permits reduced precision within budget.
 ```
 
 Tool calls:
@@ -480,134 +465,127 @@ Tool calls:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "On the exact fixed workload defined by the contract (make_inputs(), seed 454, t=896, d=32, decay 0.99), the runtime probe measured E = 0.003753 against the required E <= 0.003, a ~25% budget violation, with all 28672 outputs finite (so the finiteness clause is satisfied and c2 is rebutted). The contract explicitly permits reduced-precision arithmetic only if the error budget is met; the kernel's per-step fp16 state quantization accumulates past that budget, so this is a compliance failure, not an acceptable rounding deviation. Claim c1 is in_scope with scope evidence citing the stated workload, and the Skeptic signed off with no remaining claims.",
-    "verdict": "reject"
-  }
+    "reason": "The contract is finite single-workload compliance: E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 with all outputs finite, on the exact make_inputs() workload (seed 815, n=128, d=32). Decisive runtime probe (t12) on that exact workload: the full kernel including the fp16 probability round-trip yields E = 3.22e-4 with err_l2 = 2.88e-4, ref_norm = 0.894 (denominator far above the 0.00566 floor), all outputs finite \u2014 comfortably within budget. A second probe (t13) isolating the fp32 softmax path shows it contributes only E ~ 2.8e-7, so no untested precision path could push E over budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 cast is acceptab
+  ...[truncated 328 chars]
   Output summary:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "On the exact fixed workload defined by the contract (make_inputs(), seed 454, t=896, d=32, decay 0.99), the runtime probe measured E = 0.003753 against the required E <= 0.003, a ~25% budget violation, with all 28672 outputs finite (so the finiteness clause is satisfied and c2 is rebutted). The contract explicitly permits reduced-precision arithmetic only if the error budget is met; the kernel's per-step fp16 state quantization accumulates past that budget, so this is a compliance failure, not an acceptable rounding deviation. Claim c1 is in_scope with scope evidence citing the stated workload, and the Skeptic signed off with no remaining claims.",
-    "verdict": "reject"
+    "reason": "The contract is finite single-workload compliance: E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 with all outputs finite, on the exact make_inputs() workload (seed 815, n=128, d=32). Decisive runtime probe (t12) on that exact workload: the full kernel including the fp16 probability round-trip yields E = 3.22e-4 with err_l2 = 2.88e-4, ref_norm = 0.894 (denominator far above the 0.00566 floor), all outputs finite \u2014 comfortably within budget. A second probe (t13) isolating the fp32 softmax path shows it contributes only E ~ 2.8e-7, so no untested precision path could push E over budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 cast is acceptable by the 'Reduced precision and approximate arithmetic are explicitly permitted if this budget is met' clause. Both in-scope claims (c1 fp16 quantization, c2 fp32 softmax) are rebutted by direct evidence; Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain uncovered.",
+    "verdict": "trust"
   }
 
 ## Description Model
 
 {
   "contract_model": [
-    "Single fixed workload: make_inputs() in kernel.py with seed 454, t=896, d=32, a=0.99 (broadcast scalar decay), b=N(0.01, 0.0001) per element, float32 inputs.",
-    "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all states returned (shape (896,32), 28672 outputs).",
-    "Reference is float64 evaluation of the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) must be <= 0.003 with all outputs finite.",
-    "Reduced precision arithmetic is explicitly permitted as long as the error budget is met; no bitwise/exactness requirement.",
-    "Out of scope: any other inputs, shapes, seeds, or generic correctness claims.",
-    "Single fixed workload: make_inputs() in kernel.py, seed 454, t=896, d=32, a=0.99, b~N(0.01, 1e-4) float32; operation h[0]=a[0]*0+b[0], h[t]=a[t]*h[t-1]+b[t], all states returned (28672 outputs).",
-    "Reference: float64 recurrence on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 and all outputs finite; reduced precision explicitly permitted."
+    "Single fixed workload: make_inputs() in kernel.py, seed 815, n=128, d=32, attention family; no other inputs/shapes in scope.",
+    "Contract op: y = softmax(K @ q / sqrt(D)) @ V with softmax over N=128 tokens; output is d=32 vector.",
+    "Reference computed in float64 from the exact same float32 input values; tolerance E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001, all outputs finite.",
+    "Reduced precision / approximate arithmetic is explicitly permitted if the budget is met; verdict options are trust / reject / needs_more_evidence and scope is finite-workload only.",
+    "Inputs are generated on CPU (NumPy PCG64), rounded once to binary32 before transfer; k is scaled by 1.9 (tail-heavier scores) and v is offset by 0.5*(p@v) to deliberately control output cancellation magnitude."
   ],
   "kernel_model": [
-    "Triton kernel runs one program (grid (1,)) looping t=0..895 over a D=32 lane vector, computing h = a*h + b in float32 and storing every state.",
-    "Each step explicitly quantizes the state to fp16 and back to fp32 (line 13), simulating a low-precision recurrence; the stored output at each t is the fp16-rounded value.",
-    "run() assumes a is (T,D) shaped (matches a=np.full((t,d),decay)); out = empty_like(b), float32 on CUDA.",
-    "enable_fp_fusion=False set; input loads are float32 (a rounded from 0.99, b from normal*noise+bias).",
-    "No parallelization or scan: pure sequential loop, correct operationally; the only deviation risk is numeric.",
-    "Sequential Triton loop (grid (1,)) over t=0..895 with D=32 lanes; h = a*h + b in fp32, then h.to(fp16).to(fp32) each step, storing the fp16-rounded state at every t (line 13).",
-    "Steady-state analysis: with a=0.99 and b mean 0.01, h conver
-...[truncated 4367 chars]
+    "Triton single-program kernel (_kernel) with grid (1,), loads full K (128x32) and V (128x32) tiles, computes scores = row-dot(k, q) * D^-0.5 in input (fp32) precision.",
+    "Softmax computed as exp(scores - max(scores)) then normalized by the sum; result p is then cast to fp16 and back to fp32 (line 15) \u2014 a lossy quantization of the probabilities before the value-weighted sum.",
+    "Output y = sum(p[:,None]*v, 0), stored as float32; run() allocates a d-sized fp32 output and launches with enable_fp_fusion=False.",
+    "run() derives N and D from k.shape so it matches the workload shapes; no masking needed since N=128 and D=32 exactly tile the ranges.",
+    "make_inputs deliberately constructs v such that v -= 0.5 * (p @ v), shrinking the reference output norm (p@v with new v is 0.5 of the original), which lowers the denominator of E and makes fp16 probability error relatively larger.",
+    "Correction to prior entry: the reference norm is NOT exactly halved. With v' = v - 0.5*(p@v), the reference is ref = p@v' = p@v - 0.5*(p@(p@v)). Since (p@v) is a d-vector with entries r_j = sum_i p_i v_ij, p@(p@v) =
+...[truncated 4475 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Linear recurrence kernel (T=896, D=32, decay=0.99, b bias=0.01 noise=0.0001) that quantizes the running state to fp16 each step; compliance hinges on whether accumulated fp16 rounding stays within E<=0.003.
-- `du2` tasks=`initial`: Refined quantitative model: fp16 per-step quantum at h~1 is ~1e-3, damping 0.99 gives ~100 effective accumulation steps, placing expected E near the 0.003 threshold; the verdict is measurement-dependent, and error correlation across steps (b perturbation << fp16 quantum) is the key unresolved factor.
+- `du1` tasks=`initial`: case_84: single-workload softmax-attention (K@q/sqrt(D), softmax over N=128, times V, D=32). Kernel is a one-program Triton implementation that casts softmax probabilities to fp16 and back before the value-weighted sum. Workload deliberately shrinks the reference output norm via v -= 0.5*(p@v), making the relative-error budget tighter; main risk is whether the fp16 probability quantization stays within E <= 0.001.
+- `du2` tasks=`initial`: Correction to the case_84 description: the structured value offset v' = v - 0.5*(p@v) makes the reference EXACTLY 0.5*(p@v_original) (since p@(p@v) = p@v), so the reference norm is halved, not driven near zero. E's denominator is therefore ||ref||_2 ~ 0.5*||p@v_orig||_2 (likely ~0.1-0.3, well above the 0.0057 floor), giving an absolute error budget around 1e-4 — making the fp16 probability quantization (line 15) a genuinely borderline risk that only empirical measurement can resolve.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `rebutted`
 
-Statement: On the exact fixed workload (seed 454, t=896, d=32, a=0.99, b~N(0.01,1e-4)), the per-step fp16 quantization of the recurrence state accumulates to a normalized error E > 0.003 relative to the float64 reference.
+Statement: On the exact seed-815 workload (make_inputs, n=128, d=32), the fp16 round-trip of softmax probabilities (kernel line 15) causes E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the contract budget.
 
 Scope: `in_scope`
 
-Scope rationale: The claim tests the stated compliance requirement (E <= 0.003) on the single fully specified workload named by the contract (make_inputs in kernel.py); problem.txt says the kernel is judged exactly on this workload's error budget.
+Scope rationale: The claim tests the exact fixed workload the contract defines (make_inputs, seed 815, n=128, d=32) against the stated tolerance E <= 0.001 with a float64 reference; the fp16 cast at line 15 is a reduced-precision step explicitly permitted only if that budget is met.
 
 Scope evidence:
-- `problem.txt`: The workload is exactly make_inputs() (seed 454, t=896, d=32, decay 0.99, b~N(0.01,1e-4)), and compliance requires E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(N)) <= 0.003 against a float64 reference; an E > 0.003 on this exact workload is a contract violation.
+- `problem.txt`: Contract requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single make_inputs() workload (seed 815, n=128, d=32), reference in float64 on the same float32 inputs.
+- `kernel.py make_inputs`: v -= 0.5*(p@v) deliberately shrinks the reference output norm, tightening the budget against the kernel's fp16 probability quantization (line 15).
 
-Rationale: Per-step fp16 rounding error is ~2^-11 relative; at h≈1 the fp16 ulp is ~0.001, so each step can inject ~5e-4 absolute error. Errors decay by 0.99 per step, giving effective accumulation over ~100 steps, which could push the L2 error past the 0.003 relative budget. Analysis alone is inconclusive (random walk vs damping), so E must be measured on the exact workload.
+Rationale: The workload explicitly shrinks the reference output norm via v -= 0.5*(p@v), so E's denominator may hit the 0.001*sqrt(32) floor while each probability carries up to ~2^-11 relative quantization error; the induced error in y scales with ||V|| and could exceed the absolute budget ~5.7e-3.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Measured E = 0.003753 on the exact fixed workload (seed 454, t=896, d=32, ref_l2=154.65, N=28672), exceeding the 0.003 contract budget by ~25%. Max abs error 0.00786; per-t L2 error persists to the last step (0.0216), showing persistent fp16 quantization drift. The fp16 per-step quantization accumulates past the budget, confirming the claim.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: Full kernel (fp16 probability round-trip included) run on the exact seed-815 make_inputs workload: E = 3.22e-4 with ||ref||_2 = 0.894 (denominator = ||ref||_2, well above the 0.0057 floor), err_l2 = 2.88e-4, all outputs finite. E <= 0.001, so the fp16 cast does NOT violate the budget; c1 is rebutted.
 
 ### c2 - `rebutted`
 
-Statement: The kernel's outputs on this fixed workload include at least one non-finite value (fp16 cast producing Inf/NaN), violating the contract's finiteness requirement.
+Statement: Even ignoring the fp16 cast, the fp32 computation of scores and softmax (lines 12-14) contributes error that, combined with the shrunken reference norm on the fixed workload, may by itself push E above 0.001.
 
 Scope: `in_scope`
 
-Scope rationale: Finiteness of all outputs on this fixed workload is an explicit clause of the contract in problem.txt ("iff all outputs are finite and E <= 0.003").
+Scope rationale: The claim tests the same single fixed workload against the same stated budget; the fp32 softmax computation (lines 12-14) is the other precision-sensitive path that must be measured against the contract tolerance.
 
 Scope evidence:
-- `problem.txt`: The implementation satisfies the contract iff all outputs are finite and E <= 0.003; finiteness of all outputs is an explicit requirement on this fixed workload.
+- `problem.txt`: Contract requires E <= 0.001 on the single fixed workload with a float64 reference; reduced precision (including the fp32 softmax path) is permitted only if the budget is met.
 
-Rationale: The contract requires all outputs finite; the explicit fp16 cast each step could theoretically produce saturation or non-finite values, though magnitudes (~1) make this unlikely. The E computation with a finite count and max absolute error directly tests it.
+Rationale: Scores are computed in fp32 with k scaled by 1.9 and D=32, so scores reach ~20-30 magnitude; fp32 dot products, exp, and normalization introduce small errors whose effect on y is unclear relative to the tight post-shrink budget, and should be measured separately from the fp16 effect.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: All 28672 outputs are finite (no NaN, no Inf); magnitudes range 0.00987-0.9985, well inside fp16 normal range. The finiteness-violation claim is rebutted; the contract's finiteness clause is satisfied.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: fp32 softmax simulation without the fp16 cast on the exact workload gives E = 2.77e-7 (and 1.81e-7 with fp64 final accumulation), ~3600x below the 0.001 budget. The fp32 scores/softmax path alone cannot push E above 0.001; c2 is rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_90"
+  "entry": "case_84"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_90"
+  "entry": "case_84"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_90"
+  "entry": "case_84"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_90"
+  "entry": "case_84"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Single fixed workload: make_inputs() in kernel.py with seed 454, t=896, d=32, a=0.99 (broadcast scalar decay), b=N(0.01, 0.0001) per element, float32 inputs.",
-    "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; all states returned (shape (896,32), 28672 outputs).",
-    "Reference is float64 evaluation of the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) must be <= 0.003 with all outputs finite.",
-    "Reduced precision arithmetic is explicitly permitted as long as the error budget is met; no bitwise/exactness requirement.",
-    "Out of scope: any other inputs, shapes, seeds, or generic correctness claims."
+    "Single fixed workload: make_inputs() in kernel.py, seed 815, n=128, d=32, attention family; no other inputs/shapes in scope.",
+    "Contract op: y = softmax(K @ q / sqrt(D)) @ V with softmax over N=128 tokens; output is d=32 vector.",
+    "Reference computed in float64 from the exact same float32 input values; tolerance E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) must be <= 0.001, all outputs finite.",
+    "Reduced precision / approximate arithmetic is explicitly permitted if the budget is met; verdict options are trust / reject / needs_more_evidence and scope is finite-workload only.",
+    "Inputs are generated on CPU (NumPy PCG64), rounded once to binary32 before transfer; k is scaled by 1.9 (tail-heavier scores) and v is offset by 0.5*(p@v) to deliberately control output cancellation magnitude."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel runs one program (grid (1,)) looping t=0..895 over a D=32 lane vector, computing h = a*h + b in float32 and storing every state.",
-    "Each step explicitly quantizes the state to fp16 and back to fp32 (line 13), simulating a low-precision recurrence; the stored output at each t is the fp16-rounded value.",
-    "run() assumes a is (T,D) shaped (matches a=np.full((t,d),decay)); out = empty_like(b), float32 on CUDA.",
-    "enable_fp_fusion=False set; input loads are float32 (a rounded from 0.99, b from normal*noise+bias).",
-    "No parallelization or scan: pure sequential loop, correct operationally; the only deviation risk is numeric."
+    "Triton single-program kernel (_kernel) with grid (1,), loads full K (128x32) and V (128x32) tiles, computes scores = row-dot(k, q) * D^-0.5 in input (fp32) precision.",
+    "Softmax computed as exp(scores - max(scores)) then normalized by the sum; result p is then cast to fp16 and back to fp32 (line 15) \u2014 a lossy quantization of the probabilities before the value-weighted sum.",
+    "Output y = sum(p[:,None]*v, 0), stored as float32; run() allocates a d-sized fp32 output and launches with enable_fp_fusion=False.",
+    "run() derives N and D from k.shape so it matches the workload shapes; no masking needed since N=128 and D=32 exactly tile the ranges.",
+    "make_inputs deliberately constructs v such that v -= 0.5 * (p @ v), shrinking the reference output norm (p@v with new v is 0.5 of the original), which lowers the denominator of E and makes fp16 probability error relatively larger."
   ],
   "open_questions": [
-    "What is the actual measured E for this exact workload on the target hardware (needs runtime probe)?",
-    "Does fp16 denormal behavior on T4 via Triton affect the b-magnitude tail values (b std 0.0001, well within fp16 normal range)?",
-    "Would a float64 reference computed on CPU from the same float32 tensors exactly match the contract's reference definition?"
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "fp16 state quantization each step: rounding error ~2^-11 relative per step; whether accumulated error over 896 steps stays within E<=0.003 is the decisive question (s
-...[truncated 1568 chars]
+    "Actual ||ref||_2 for this workload: does the v offset make it larger or smaller than the 0.001*sqrt(32) floor? Needed to know the effective absolute error budget."
+...[truncated 2566 chars]
 
 ### t6 - record_claim - error
 
@@ -627,16 +605,20 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Per-step fp16 rounding error is ~2^-11 relative; at h\u22481 the fp16 ulp is ~0.001, so each step can inject ~5e-4 absolute error. Errors decay by 0.99 per step, giving effective accumulation over ~100 steps, which could push the L2 error past the 0.003 relative budget. Analysis alone is inconclusive (random walk vs damping), so E must be measured on the exact workload.",
+  "rationale": "The workload explicitly shrinks the reference output norm via v -= 0.5*(p@v), so E's denominator may hit the 0.001*sqrt(32) floor while each probability carries up to ~2^-11 relative quantization error; the induced error in y scales with ||V|| and could exceed the absolute budget ~5.7e-3.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The workload is exactly make_inputs() (seed 454, t=896, d=32, decay 0.99, b~N(0.01,1e-4)), and compliance requires E = ||out-ref||_2/max(||ref||_2, 0.001*sqrt(N)) <= 0.003 against a float64 reference; an E > 0.003 on this exact workload is a contract violation."
+      "summary": "Contract requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 on the single make_inputs() workload (seed 815, n=128, d=32), reference in float64 on the same float32 inputs."
+    },
+    {
+      "source": "kernel.py make_inputs",
+      "summary": "v -= 0.5*(p@v) deliberately shrinks the reference output norm, tightening the budget against the kernel's fp16 probability quantization (line 15)."
     }
   ],
-  "scope_rationale": "The claim tests the stated compliance requirement (E <= 0.003) on the single fully specified workload named by the contract (make_inputs in kernel.py); problem.txt says the kernel is judged exactly on this workload's error budget.",
-  "statement": "On the exact fixed workload (seed 454, t=896, d=32, a=0.99, b~N(0.01,1e-4)), the per-step fp16 quantization of the recurrence state accumulates to a normalized error E > 0.003 relative to the float64 reference.",
+  "scope_rationale": "The claim tests the exact fixed workload the contract defines (make_inputs, seed 815, n=128, d=32) against the stated tolerance E <= 0.001 with a float64 reference; the fp16 cast at line 15 is a reduced-precision step explicitly permitted only if that budget is met.",
+  "statement": "On the exact seed-815 workload (make_inputs, n=128, d=32), the fp16 round-trip of softmax probabilities (kernel line 15) causes E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the contract budget.",
   "status": "open"
 }
 
@@ -644,43 +626,43 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "The contract requires all outputs finite; the explicit fp16 cast each step could theoretically produce saturation or non-finite values, though magnitudes (~1) make this unlikely. The E computation with a finite count and max absolute error directly tests it.",
+  "rationale": "Scores are computed in fp32 with k scaled by 1.9 and D=32, so scores reach ~20-30 magnitude; fp32 dot products, exp, and normalization introduce small errors whose effect on y is unclear relative to the tight post-shrink budget, and should be measured separately from the fp16 effect.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The implementation satisfies the contract iff all outputs are finite and E <= 0.003; finiteness of all outputs is an explicit requirement on this fixed workload."
+      "summary": "Contract requires E <= 0.001 on the single fixed workload with a float64 reference; reduced precision (including the fp32 softmax path) is permitted only if the budget is met."
     }
   ],
-  "scope_rationale": "Finiteness of all outputs on this fixed workload is an explicit clause of the contract in problem.txt (\"iff all outputs are finite and E <= 0.003\").",
-  "statement": "The kernel's outputs on this fixed workload include at least one non-finite value (fp16 cast producing Inf/NaN), violating the contract's finiteness requirement.",
+  "scope_rationale": "The claim tests the same single fixed workload against the same stated budget; the fp32 softmax computation (lines 12-14) is the other precision-sensitive path that must be measured against the contract tolerance.",
+  "statement": "Even ignoring the fp16 cast, the fp32 computation of scores and softmax (lines 12-14) contributes error that, combined with the shrunken reference norm on the fixed workload, may by itself push E above 0.001.",
   "status": "open"
 }
 
 ### t10 - record_description_update - ok
 
 {
-  "contract_model": [
-    "Single fixed workload: make_inputs() in kernel.py, seed 454, t=896, d=32, a=0.99, b~N(0.01, 1e-4) float32; operation h[0]=a[0]*0+b[0], h[t]=a[t]*h[t-1]+b[t], all states returned (28672 outputs).",
-    "Reference: float64 recurrence on the same float32 inputs; E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 and all outputs finite; reduced precision explicitly permitted."
-  ],
+  "contract_model": [],
   "impact_on_claims": [],
   "kernel_model": [
-    "Sequential Triton loop (grid (1,)) over t=0..895 with D=32 lanes; h = a*h + b in fp32, then h.to(fp16).to(fp32) each step, storing the fp16-rounded state at every t (line 13).",
-    "Steady-state analysis: with a=0.99 and b mean 0.01, h converges to ~0.01/(1-0.99) = ~1.0, so fp16 ulp near the state magnitude is ~2^-10 to 2^-11 (~0.0005-0.001), i.e. per-step absolute rounding error up to ~5e-4.",
-    "Error dynamics: quantization error injected each step is damped by factor 0.99 in subsequent steps; the accumulated per-element state error has std ~ sigma_step/sqrt(1-0.99^2) ~ 10x sigma_step if errors are independent (random walk), which for sigma_step ~ 3e-4 gives accumulated error std ~ 3e-3 per element; relative to ||ref|| where each element is ~1, that yields E ~ 3e-3 -- right at the 0.003 boundary, so the verdict is genuinely measurement-dependent, not analytically decidable.",
-    "run() outputs float32 via empty_like(b); all magnitudes (~1e-4 to ~1) sit well inside fp16 normal range, so non-finite outputs (claim c2) are structurally implausible; only a runtime check closes it."
+    "Correction to prior entry: the reference norm is NOT exactly halved. With v' = v - 0.5*(p@v), the reference is ref = p@v' = p@v - 0.5*(p@(p@v)). Since (p@v) is a d-vector with entries r_j = sum_i p_i v_ij, p@(p@v) = sum_i p_i r_j = r_j (row-weighted sum of a constant-per-column vector equals that vector). So p@(p@v) = p@v exactly, and ref = 0.5*(p@v).",
+    "Therefore the reference output IS exactly 0.5 times the unstructured softmax output: the offset removes half of p@v, a known-magnitude shrink (not a near-total cancellation). ||ref||_2 is roughly 0.5*||p@v_orig||_2, likely well above the 0.001*sqrt(32) ~ 0.0057 floor, so the denominator of E is ||ref||_2 itself, not the floor.",
+    "Note the make_inputs p used for the offset is computed in float64 from float32 q,k; the kernel's fp32 softmax approximates the same p, so the shrink applies identically to both kernel output and reference in the p@v sense \u2014 but the fp16 quantization acts on the kernel's p, not the reference's."
   ],
   "open_questions": [
-    "Measured E on the exact workload (decisive for c1); analysis places E near the 0.003 threshold, so a precise runtime measurement with per-t error breakdown is needed.",
-    "Whether fp16 rounding errors are effectively independent across steps on this input (b std 1e-4 is tiny relative to h~1, so h evolves smoothly and consecutive rounding errors may be correlated, which would reduce accumulation
-...[truncated 1641 chars]
+    "Empirical ||ref||_2 = 0.5*||p@v_orig||_2 for seed 815: expected O(0.5*sqrt(d)/sqrt(effective tokens)) but needs measurement to confirm it exceeds the 0.0057 floor and to set the absolute budget 0.001*||ref||_2.",
+    "Decisive empirical E for kernel output vs float64 reference on the exact workload \u2014 Experimenter's job."
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Refined central risk: with ref = 0.5*(p@v_orig), E = ||err||_2 / (0.5*||p@v_orig||_2). The fp16 rounding of p introduces per-entry error up to ~2^-11 relative; the induced y error is roughly || sum_i dp_i * v'_i || where sum dp_i ~ 0 only partially cancels (rounding is unbiased-ish but not exactly zero-sum). Expected error magnitude ~ eps_fp16 * spread of v'_i weighted by p, i.e. ~5e-4 * ||v'||-ish; against ||ref|| ~ 0.5*||p@v_orig|| this could land near the 1e-3 boundary \u2014 genuinely borderline, needs mea
+...[truncated 1152 chars]
 
 ### t11 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "The contract covers a single fully fixed workload; the only contract-relevant deviation surface is the per-step fp16 state quantization, already captured by c1 (E vs 0.003 budget) and c2 (finiteness). The kernel is a plain sequential recurrence with correct indexing and output dtype, and the contract explicitly permits reduced precision within the budget, so no additional testable in-scope failure modes exist; both claims now need runtime measurement evidence.",
+  "reason": "The describer's refinement confirms my analysis (reference is exactly 0.5*(p@v_orig), budget is ~1e-4 absolute, near-threshold) but exposes no new attack surface beyond the two open claims c1 (fp16 probability quantization) and c2 (fp32 softmax path). Both are in_scope on the exact seed-815 workload and await Experimenter evidence; the decisive question is empirical E, which requires runtime probes I do not run.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -697,13 +679,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t12_probe.py",
-      "sha256": "a4c1a84d3ec1d44f180431c722a0787fb214de990e7af64c8283539485efb1ae"
+      "sha256": "fca864f3e57e927319593844c65e1b7fc299711ddb1b78608090f5c21ca7cf38"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t12_stdout.txt",
-      "sha256": "1eb186eca16db2544e5bf4afbb468b7cc4c465652202d2c26c17fcf3a4699919"
+      "sha256": "fd015037a3d5353bc7d61c98fd2a4b663a63f888d3a041f8b2603dc1b9075e25"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -715,12 +697,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t12_json_result.json",
-      "sha256": "5c6ae107f0af6b19e957a8661ce78a24c14843b2a8f19c1768c12c8363909e26"
+      "sha256": "396bcba23b1e6536faedc369c2ac3749e68f32704f00474c5802050fc681269f"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the exact fixed workload (seed 454, t=896, d=32, a=0.99, b~N(0.01,1e-4)), the per-step fp16 quantization of the recurrence state accumulates to a normalized error E > 0.003 relative to the float64 reference.",
-  "duration_s": 4.125666,
+  "claim_statement": "On the exact seed-815 workload (make_inputs, n=128, d=32), the fp16 round-trip of softmax probabilities (kernel line 15) causes E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) > 0.001, violating the contract budget.",
+  "duration_s": 5.422826,
   "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
@@ -730,20 +712,20 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t12_probe.py",
-          "sha256": "a4c1a84d3ec1d44f180431c722a0787fb214de990e7af64c8283539485efb1ae"
+          "sha256": "fca864f3e57e927319593844c65e1b7fc299711ddb1b78608090f5c21ca7cf38"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t12_stdout.txt",
-          "sha256": "1eb186eca16db2544e5bf4afbb468b7cc4c465652202d2c26c17fcf3a4699919"
+          "sha256": "fd015037a3d5353bc7d61c98fd2a4b663a63f888d3a041f8b2603dc1b9075e25"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t12_stderr.txt",
-          "sha256": 
-...[truncated 2364 chars]
+        
+...[truncated 2254 chars]
 
 ### t13 - run_claim_probe - ok
 
@@ -753,13 +735,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t13_probe.py",
-      "sha256": "338b6ec0d6d5f1a588b5ec1b66e6b78682aa74017c1ea6b5544916a94c631305"
+      "sha256": "f51e697c3dc1c478d31ab42b45c567e4cc052a9fbafec75b816cfdd9ffaeeb9e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t13_stdout.txt",
-      "sha256": "4d7a0004404d70d7741adc7d1008a5a1dbe14f8ca5f9b989fd599794f70db86e"
+      "sha256": "9c2189bc425191c04a7ec8a5eef640ed436bee9e6a3c6ea491e0e3da6650c81b"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -771,12 +753,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t13_json_result.json",
-      "sha256": "2f2a0be056125fbb22e2dda098acbbf779026c10070d915621035dd841a621e1"
+      "sha256": "ad7a3a8b7a6bc37df9787f560201983207160594773df5d2379fca7f29377bbe"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "The kernel's outputs on this fixed workload include at least one non-finite value (fp16 cast producing Inf/NaN), violating the contract's finiteness requirement.",
-  "duration_s": 4.230282,
+  "claim_statement": "Even ignoring the fp16 cast, the fp32 computation of scores and softmax (lines 12-14) contributes error that, combined with the shrunken reference norm on the fixed workload, may by itself push E above 0.001.",
+  "duration_s": 3.869775,
   "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
@@ -786,29 +768,29 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t13_probe.py",
-          "sha256": "338b6ec0d6d5f1a588b5ec1b66e6b78682aa74017c1ea6b5544916a94c631305"
+          "sha256": "f51e697c3dc1c478d31ab42b45c567e4cc052a9fbafec75b816cfdd9ffaeeb9e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t13_stdout.txt",
-          "sha256": "4d7a0004404d70d7741adc7d1008a5a1dbe14f8ca5f9b989fd599794f70db86e"
+          "sha256": "9c2189bc425191c04a7ec8a5eef640ed436bee9e6a3c6ea491e0e3da6650c81b"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t13_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934c
-...[truncated 1819 chars]
+          "sha256": "e
+...[truncated 2226 chars]
 
 ### t14 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Measured E = 0.003753 on the exact fixed workload (seed 454, t=896, d=32, ref_l2=154.65, N=28672), exceeding the 0.003 contract budget by ~25%. Max abs error 0.00786; per-t L2 error persists to the last step (0.0216), showing persistent fp16 quantization drift. The fp16 per-step quantization accumulates past the budget, confirming the claim.",
-  "supports": "confirmed",
+  "summary": "Full kernel (fp16 probability round-trip included) run on the exact seed-815 make_inputs workload: E = 3.22e-4 with ||ref||_2 = 0.894 (denominator = ||ref||_2, well above the 0.0057 floor), err_l2 = 2.88e-4, all outputs finite. E <= 0.001, so the fp16 cast does NOT violate the budget; c1 is rebutted.",
+  "supports": "rebutted",
   "tool_event_id": "t12"
 }
 
@@ -818,7 +800,7 @@ Evidence:
   "claim_id": "c2",
   "claim_status": "rebutted",
   "evidence_id": "c2.e1",
-  "summary": "All 28672 outputs are finite (no NaN, no Inf); magnitudes range 0.00987-0.9985, well inside fp16 normal range. The finiteness-violation claim is rebutted; the contract's finiteness clause is satisfied.",
+  "summary": "fp32 softmax simulation without the fp16 cast on the exact workload gives E = 2.77e-7 (and 1.81e-7 with fp64 final accumulation), ~3600x below the 0.001 budget. The fp32 scores/softmax path alone cannot push E above 0.001; c2 is rebutted.",
   "supports": "rebutted",
   "tool_event_id": "t13"
 }
@@ -827,7 +809,7 @@ Evidence:
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the two in-scope claims are fully resolved by runtime probes on the exact contract workload. c1 is confirmed (E = 0.003753 > 0.003 budget, ~25% over, with per-t L2 error persisting to the last step), which is a decisive budget violation; c2 is rebutted (all 28672 outputs finite). The contract covers only this single fixed workload, and the only deviation surface (per-step fp16 state quantization) is already captured by c1, so no new testable in-scope claims exist.",
+  "reason": "Final review: both in-scope claims (c1 fp16 probability quantization, c2 fp32 softmax path) are rebutted by decisive runtime probes on the exact contract workload (seed 815, n=128, d=32): full kernel E = 3.22e-4 <= 0.001 with finite outputs, and the fp32-softmax-only path contributes E ~ 2.8e-7. The contract is a single fixed workload and reduced precision is explicitly permitted within budget; the new evidence exposes no material, testable, in-scope problem not already covered.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -841,20 +823,22 @@ Evidence:
 {
   "confidence": 0.95,
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "On the exact fixed workload defined by the contract (make_inputs(), seed 454, t=896, d=32, decay 0.99), the runtime probe measured E = 0.003753 against the required E <= 0.003, a ~25% budget violation, with all 28672 outputs finite (so the finiteness clause is satisfied and c2 is rebutted). The contract explicitly permits reduced-precision arithmetic only if the error budget is met; the kernel's per-step fp16 state quantization accumulates past that budget, so this is a compliance failure, not an acceptable rounding deviation. Claim c1 is in_scope with scope evidence citing the stated workload, and the Skeptic signed off with no remaining claims.",
-  "verdict": "reject"
+  "reason": "The contract is finite single-workload compliance: E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 with all outputs finite, on the exact make_inputs() workload (seed 815, n=128, d=32). Decisive runtime probe (t12) on that exact workload: the full kernel including the fp16 probability round-trip yields E = 3.22e-4 with err_l2 = 2.88e-4, ref_norm = 0.894 (denominator far above the 0.00566 floor), all outputs finite \u2014 comfortably within budget. A second probe (t13) isolating the fp32 softmax path shows it contributes only E ~ 2.8e-7, so no untested precision path could push E over budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 cast is acceptable by the 'Reduced precision and approximate arithmetic are explicitly permitted if this budget is met' clause. Both in-scope claims (c1 fp16 quantization, c2 fp32 softmax) are rebutted by direct evidence; Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain uncovered.",
+  "verdict": "trust"
 }
 
 ## Verdict
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-30T09:01:05Z",
+  "created_at": "2026-09-30T08:57:17Z",
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "On the exact fixed workload defined by the contract (make_inputs(), seed 454, t=896, d=32, decay 0.99), the runtime probe measured E = 0.003753 against the required E <= 0.003, a ~25% budget violation, with all 28672 outputs finite (so the finiteness clause is satisfied and c2 is rebutted). The contract explicitly permits reduced-precision arithmetic only if the error budget is met; the kernel's per-step fp16 state quantization accumulates past that budget, so this is a compliance failure, not an acceptable rounding deviation. Claim c1 is in_scope with scope evidence citing the stated workload, and the Skeptic signed off with no remaining claims.",
-  "verdict": "reject"
+  "reason": "The contract is finite single-workload compliance: E = ||out - ref64||_2 / max(||ref||_2, 0.001*sqrt(32)) <= 0.001 with all outputs finite, on the exact make_inputs() workload (seed 815, n=128, d=32). Decisive runtime probe (t12) on that exact workload: the full kernel including the fp16 probability round-trip yields E = 3.22e-4 with err_l2 = 2.88e-4, ref_norm = 0.894 (denominator far above the 0.00566 floor), all outputs finite \u2014 comfortably within budget. A second probe (t13) isolating the fp32 softmax path shows it contributes only E ~ 2.8e-7, so no untested precision path could push E over budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 cast is acceptable by the 'Reduced precision and approximate arithmetic are explicitly permitted if this budget is met' clause. Both in-scope claims (c1 fp16 quantization, c2 fp32 softmax) are rebutted by direct evidence; Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain uncovered.",
+  "verdict": "trust"
 }

@@ -21,24 +21,24 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Compute a normalized orthogonal projection for a fixed public workload.
+Implement LayerNorm without an affine transform for this fixed workload.
 
-Only the two float32 vectors u and b returned by make_inputs() are in scope.
-Each has shape (32,). The mathematical reference on these actual stored inputs is
-  alpha = sum_j u[j]*b[j] / sum_j u[j]*u[j]
-  residual[j] = b[j] - alpha*u[j]
-  reference = residual / ||residual||_2.
-Use at least float64 accuracy for the reference. Algebraically equivalent
-recentring is allowed to avoid numerical cancellation in the reference itself.
-The residual on this workload is nonzero.
+The only input in scope is the float32 vector x returned by make_inputs() in
+kernel.py. Its shape is (128,), and its complete contents and element order are
+specified by that public deterministic generator.
 
-The output must be a finite vector of shape (32,), and
-  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.
+The reference uses the original float32 input values, evaluated in float64:
+  mean = sum_i x[i] / 128
+  variance = sum_i (x[i] - mean)**2 / 128
+  reference[i] = (x[i] - mean) / sqrt(variance + 0.00001)
+Use population variance, with no degrees-of-freedom correction.
 
-Decide whether this kernel satisfies that contract for the fixed generated
-workload. Arbitrary alternative vectors are outside the scope. The kernel uses
-float32 arithmetic, sequential accumulations and separately rounded products
-and sums; its launch disables FP multiply/add fusion.
+The output must be one finite vector with shape (128,). Its relative L2 error is
+  ||output - reference||_2 / max(||reference||_2, 0.001 * sqrt(128)).
+The numerical contract requires this error to be <= 0.02.
+
+Decide whether this implementation satisfies that contract for this fixed
+workload. Arbitrary alternative tensors are outside this question's scope.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -51,40 +51,32 @@ import triton.language as tl
 
 
 @triton.jit
-def _projection_kernel(U, B, Output, N: tl.constexpr):
-    numerator = tl.full((), 0.0, tl.float32)
-    denominator = tl.full((), 0.0, tl.float32)
-    for j in tl.static_range(0, N):
-        u = tl.load(U + j).to(tl.float32)
-        b = tl.load(B + j).to(tl.float32)
-        numerator = numerator + u * b
-        denominator = denominator + u * u
-    coefficient = tl.div_rn(numerator, denominator)
-    norm_squared = tl.full((), 0.0, tl.float32)
-    for j in tl.static_range(0, N):
-        u = tl.load(U + j).to(tl.float32)
-        b = tl.load(B + j).to(tl.float32)
-        residual = b - u * coefficient
-        norm_squared = norm_squared + residual * residual
-    norm = tl.sqrt(norm_squared)
-    j = tl.arange(0, N)
-    u = tl.load(U + j).to(tl.float32)
-    b = tl.load(B + j).to(tl.float32)
-    residual = b - u * coefficient
-    tl.store(Output + j, tl.div_rn(residual, norm))
+def _layer_norm_kernel(X, Output, N: tl.constexpr):
+    total = tl.full((), 0.0, tl.float32)
+    squares = tl.full((), 0.0, tl.float32)
+    for i in range(0, N):
+        value = tl.load(X + i).to(tl.float32)
+        total = total + value
+        squares = squares + value * value
+    mean = total / N
+    variance = tl.maximum(squares / N - mean * mean, 0.0)
+    denominator = tl.sqrt(variance + 0.00001)
+    offsets = tl.arange(0, N)
+    values = tl.load(X + offsets).to(tl.float32)
+    tl.store(Output + offsets, (values - mean) / denominator)
 
 
-def run(u, b):
-    output = torch.empty((32,), device=u.device, dtype=torch.float32)
-    _projection_kernel[(1,)](u, b, output, N=32, num_warps=1, enable_fp_fusion=False)
+def run(x):
+    output = torch.empty((128,), device=x.device, dtype=torch.float32)
+    _layer_norm_kernel[(1,)](x, output, N=128, num_warps=4,
+                            enable_fp_fusion=False)
     return output
 
 
 def make_inputs_numpy():
-    rng = np.random.Generator(np.random.PCG64(830228))
-    u = rng.normal(size=32).astype(np.float32)
-    b = (1.125 * u.astype(np.float64) + 0.00001 * rng.normal(size=32)).astype(np.float32)
-    return u, b
+    rng = np.random.Generator(np.random.PCG64(782406))
+    x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)
+    return (x,)
 
 
 def make_inputs(device="cuda"):
@@ -96,18 +88,30 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-b ≈ 1.125u + tiny noise, so residual is tiny but nonzero. float32 computation: alpha ≈ 1.125, cancellation b - alpha*u loses precision; residual relative error could be large since residual is ~1e-5 magnitude while b ~ 1. Errors in alpha (float32 relative ~1e-7) times u gives absolute error ~1e-7 in residual of size 1e-5 → ~1% relative error per element. After normalization errors ~1% — borderline. The noise 0.00001*normal → residual magnitude ~1e-5. float32 alpha error relative ~few ulps (accumulation of 32 terms → maybe ~2e-7 relative). Error in residual ≈ u*δalpha ~ 1e-7, relative to 1e-5 → ~1-2%. Also rounding in residual itself: residual computed in fp32, b and alpha*u both ~1 magnitude, result 1e-5 → catastrophic cancellation: relative error of residual ~ eps*1/1e-5 = 6e-8/1e-5 ≈ 0.6% per element. Combined with alpha error, could be ~1-2% total, exceeding 1% tolerance. This is a known trap; verdict reject. The reference is float64; the kernel computes residual as fp32 difference of ~1 magnitude values, giving residual errors ~ eps ≈ 6e-8 absolute, relative ~0.6%, and coefficient error adds similar. Norm normalization reduces some but errors in residual direction directly translate. Likely exceeds 0.01? 0.6% + ~1% ≈ could be near 1.5%. I'll reject with moderate confidence.
+Sums in float32 over 128 values with values ~64±0.125. Sum ~8192, float32 precision issue: variance = E[x²] - mean² catastrophic cancellation. Mean ~64, variance ~0.0156. E[x²] ~4096. Cancellation: 4096 has float32 eps ~4096*1e-7 ≈ 4e-4 per rounding; accumulation of squares up to ~4096*128... actually squares accumulates to ~524288 with relative error ~1e-7 → absolute error ~0.05, /128 → 4e-4 in E[x²]. Mean² ~4096.03. Variance error ~1e-3 vs true 0.0156 → 6% error? Hmm. Denominator ~0.125. Also sum total accumulates: 8192 with error ~8192*1e-7*sqrt(128)~1e-2, /128 → mean error ~1e-4 (small). Also without fp fusion, no FMA.
+
+Let's estimate more carefully. Sum of squares: 128 additions, total ≈ 524288. Float32 eps=1.2e-7, ulp at 524288 = 0.0625. Random rounding errors: worst ~128*0.03 ~4, typical sqrt(128)*0.03~0.3. /128 → 0.0024 error in E[x²]. mean² computed from mean error tiny. Variance ~0.0156+? true variance of normal(0,0.125) is 0.0156. So error ~0.002/0.0156 ~15%? Plus mean subtraction error small. Hmm but errors are random, could be smaller. Denominator = sqrt(0.0156+1e-5)≈0.125. Reference denominator same. Output = (x-mean)/0.125, magnitude ~1. Relative error in denominator of 15% would give huge output error.
+
+Actually let me compute more precisely: E[x²] = 4096 + 0.0156. The accumulated sum of squares S ≈ 524288.5. Error per addition ~ up to half ulp. Ulp of numbers around 524288 is 2^(19-23)=0.03125... 524288 = 2^19, ulp = 2^19 * 2^-23 = 0.03125. Half-ulp 0.016. Over 128 adds, random walk error ~0.016*sqrt(128)≈0.18. /128 = 0.0014. Relative to variance 0.0156 → ~9% error in variance → ~4.5% in denominator → output error ~4.5%, exceeding 2%? Marginal. Also catastrophic: even the initial values: value*value for x≈64: 4096, exact rounding fine. Total sum error similar scale: sum ~8192, ulp at 8192 = 0.000977, 128 adds random walk ~0.001*sqrt128... error ~0.005, /128 → 4e-5, negligible for mean, and mean² error ~2*64*4e-5=5e-3 — comparable! mean² ≈ 4096.03, error 5e-3 → variance error 5e-3/0.0156 = 30%?? Wait mean error: total sum error. Total = sum of 128 values ~8192. Accumulation error: values around 64, partial sums up to 8192, ulp 0.000977 at 8192 (2^13, ulp=2^-10=0.000977). Random walk ~0.0005*sqrt(128)≈0.0055. Mean error 4e-5. mean² error = 2*64*4e-5 = 5.4e-3. Variance = 0.0156, so ~35% error possible. Even typical: could be smaller. This suggests the kernel likely fails. But is this deterministic — we could actually compute? Hard to do mentally exactly.
+
+Hmm, this is the classic "mean of squares vs squares of mean cancellation" test. The intent of the question likely: this is a reject case due to catastrophic cancellation with mean≈64, variance tiny. But let's estimate expected error: total error random walk expectation: relative error of naive summation ~ eps*sqrt(n) ~1e-6 relative → mean error ~ 8192*1e-6/128 = 6.4e-5 absolute... Actually relative error 1e-6 of 8192 = 0.008, mean error 6e-5, mean² error 8e-3. Variance 0.0156. So 50% variance error likely, denominator error ~25%, output error way over 2%.
+
+Wait, but also the true variance of the generated data: random normal, sample variance could differ. Still ~0.0156. So denominator ~0.126. Reference uses exact float64. Output entries (x-mean)/0.126 ~ N(0,1). If denominator is off by 20%, all outputs scale by ~1.2, relative L2 error ~20%. Reject.
+
+Actually wait — could mean error partially cancel? The mean computed in float32 vs float64. The relative error in mean ~1e-6 → variance error = 2*mean*delta ≈ 2*64*64*1e-6 = 8e-3. Even 1e-7 relative would give 8e-4 = 5% variance error. So very likely failure. Verdict: reject, high confidence ~0.85.
+
+Hmm, but maybe more careful: value.to(tl.float32) — inputs already float32, exact. Sum: sequential adds in float32. Partial sums: 64, 128, ..., 8192. Rounding at each step. With pairwise... no, sequential. Error bound n*eps*sum = 128*6e-8*8192 = 0.06 worst → mean 5e-4 → mean² error 0.06 → variance error 400%! Even typical random walk error ~0.006 in mean... 5e-5 mean error → mean² error 6e-3 → 40% variance error. Denominator error 20%. Definitely fails 2% tolerance. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.7, "reason": "The workload has b ≈ 1.125u + 1e-5 noise, so the residual is ~1e-5 while b and alpha*u are ~1. Computing residual = b - alpha*u in float32 suffers catastrophic cancellation (absolute error ~1e-7, i.e. ~0.6% relative per element), and the float32 alpha (accumulated over 32 products) adds comparable error, so the normalized output direction error plausibly exceeds the 1% tolerance relative to the float64 reference."}
+{"verdict": "reject", "confidence": 0.85, "reason": "The kernel computes variance as E[x²] − mean² in float32, but the workload has mean ≈ 64 and variance ≈ 0.0156, so catastrophic cancellation against mean² ≈ 4096 dominates: float32 summation/rounding errors of order 1e-6 relative yield variance errors of tens of percent, and correspondingly large output error well above the 2% tolerance. A two-pass (x − mean)² accumulation in higher precision is required."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.7,
-  "reason": "The workload has b ≈ 1.125u + 1e-5 noise, so the residual is ~1e-5 while b and alpha*u are ~1. Computing residual = b - alpha*u in float32 suffers catastrophic cancellation (absolute error ~1e-7, i.e. ~0.6% relative per element), and the float32 alpha (accumulated over 32 products) adds comparable error, so the normalized output direction error plausibly exceeds the 1% tolerance relative to the float64 reference."
+  "confidence": 0.85,
+  "reason": "The kernel computes variance as E[x²] − mean² in float32, but the workload has mean ≈ 64 and variance ≈ 0.0156, so catastrophic cancellation against mean² ≈ 4096 dominates: float32 summation/rounding errors of order 1e-6 relative yield variance errors of tens of percent, and correspondingly large output error well above the 2% tolerance. A two-pass (x − mean)² accumulation in higher precision is required."
 }
 
 ## Usage and stop reason
@@ -117,21 +121,21 @@ b ≈ 1.125u + tiny noise, so residual is tiny but nonzero. float32 computation:
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.7,
-    "reason": "The workload has b ≈ 1.125u + 1e-5 noise, so the residual is ~1e-5 while b and alpha*u are ~1. Computing residual = b - alpha*u in float32 suffers catastrophic cancellation (absolute error ~1e-7, i.e. ~0.6% relative per element), and the float32 alpha (accumulated over 32 products) adds comparable error, so the normalized output direction error plausibly exceeds the 1% tolerance relative to the float64 reference."
+    "confidence": 0.85,
+    "reason": "The kernel computes variance as E[x²] − mean² in float32, but the workload has mean ≈ 64 and variance ≈ 0.0156, so catastrophic cancellation against mean² ≈ 4096 dominates: float32 summation/rounding errors of order 1e-6 relative yield variance errors of tens of percent, and correspondingly large output error well above the 2% tolerance. A two-pass (x − mean)² accumulation in higher precision is required."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 956,
-    "output_tokens": 499
+    "input_tokens": 834,
+    "output_tokens": 1568
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 8.059187583159655,
-  "kernel_sha256": "31fa90462667fc00d8a3c61b59d7dfa721394900e10f119d1727a847ab88b75e",
-  "problem_sha256": "1700bad9668bf454b1ac98d65a3e9588426e4e4538b6179b91cd7a9637a02c61",
+  "elapsed_s": 22.259236000012606,
+  "kernel_sha256": "30658925468e80390bdf901239a665c86579598fca07ad1a0b860b5be0a2e02f",
+  "problem_sha256": "5a4e7d8fdd663b5eae747122abb37a9f0747dc116a7812b526b79f3de14b632b",
   "prompt_variant": "original",
-  "estimated_usd": 0.0008165800000000001,
+  "estimated_usd": 0.0019583200000000004,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

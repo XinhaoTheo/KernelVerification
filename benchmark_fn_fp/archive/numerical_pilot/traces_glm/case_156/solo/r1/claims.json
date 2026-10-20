@@ -1,76 +1,79 @@
 [
   {
-    "created_at": "2026-09-30T09:01:34Z",
+    "created_at": "2026-09-30T08:57:12Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T09:01:47Z",
+        "created_at": "2026-09-30T08:57:27Z",
         "data": {
-          "E": 0.17019111199798995,
+          "E": 0.00496169852853232,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
-              "path": "probes/t7_probe.py",
-              "sha256": "dcb50990f7bab1e90f24c220a048d5c48e2e71a212415eba6af2144f3b17a2dc"
+              "path": "probes/t6_probe.py",
+              "sha256": "c539b03dbcd6a4e85bace46edf08939b001c7adf8a195712138c620ba074b8b2"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
-              "path": "probes/t7_stdout.txt",
-              "sha256": "3e1341a3b2c5f17145cef7febc960fdfc53e532ea29c8e78d5bc8c5290391fdc"
+              "path": "probes/t6_stdout.txt",
+              "sha256": "c5f71293321ab86c9fcca0be33fa38a1b6b8d63701b61f00cda87604b246f8ba"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
-              "path": "probes/t7_stderr.txt",
+              "path": "probes/t6_stderr.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
-              "path": "probes/t7_json_result.json",
-              "sha256": "ebb8cb15e5b43d6134189882c87090eaa6f5360499817243240adaf9361d0ecb"
+              "path": "probes/t6_json_result.json",
+              "sha256": "2754be6bbd0f47517e8e300706618de4af170a1e9e0149020971885ef63f9385"
             }
           ],
-          "duration_s": 5.152664,
+          "budget": 0.003,
+          "duration_s": 5.508561,
           "exit_code": 0,
           "expected_signal": null,
           "finite": true,
           "json_parse_error": null,
           "json_result": {
-            "E": 0.17019111199798995,
+            "E": 0.00496169852853232,
+            "N": 24576,
+            "budget": 0.003,
             "finite": true,
-            "out_norm": 16.89737193571933,
-            "ref_norm": 14.793421227839687
+            "max_abs_err": 0.09084800844191854,
+            "ref_norm": 531.6864488580535
           },
-          "out_norm": 16.89737193571933,
-          "ref_norm": 14.793421227839687,
+          "max_abs_err": 0.09084800844191854,
+          "ref_norm": 531.6864488580535,
           "stderr": "",
-          "stdout": "{\"E\": 0.17019111199798995, \"finite\": true, \"ref_norm\": 14.793421227839687, \"out_norm\": 16.89737193571933}\n",
+          "stdout": "{\"E\": 0.00496169852853232, \"finite\": true, \"ref_norm\": 531.6864488580535, \"N\": 24576, \"max_abs_err\": 0.09084800844191854, \"budget\": 0.003}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "On the exact make_inputs() workload, the kernel output (all finite) has E = 0.170 against the float64 reference W@x (ref_norm 14.79), exceeding the contract budget E <= 0.12.",
+        "summary": "Running the exact make_inputs() workload: output finite but E = 0.00496 vs 0.003 budget (max abs error 0.0908, ref norm 531.7, N=24576). The per-step fp16 state rounding accumulates beyond the permitted relative error.",
         "supports": "confirmed",
-        "tool_event_id": "t7"
+        "tool_event_id": "t6"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "The kernel replaces W with per-row 7-step symmetric quantization and make_inputs adds a residual direction aligned with the quantization error, so E may exceed 0.12.",
+    "rationale": "The kernel stores h as fp16 each of 768 steps; near steady state (~0.01/0.001 = 10) fp16 ulp is ~0.0078, so accumulated quantization error may exceed the contract's E <= 0.003 relative budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(#outputs)) on the exact make_inputs() workload; satisfies iff outputs finite and E <= 0.12; reject for budget violation."
+        "summary": "Contract requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload, with all outputs finite."
       }
     ],
-    "scope_rationale": "The contract requires E <= 0.12 on the exact make_inputs() workload; measuring E on that workload directly decides compliance.",
-    "statement": "On the exact make_inputs() workload, the kernel's quantized matvec output fails the contract budget E <= 0.12 against the float64 reference of W @ x.",
+    "scope_rationale": "The contract defines compliance as finite outputs and E <= 0.003 on exactly the make_inputs() workload; an fp16 rounding accumulation that pushes E above 0.003 violates it.",
+    "statement": "The fp16 rounding of the recurrent state at each of the 768 steps causes relative error E exceeding the 0.003 budget on the specified workload.",
     "status": "confirmed",
-    "updated_at": "2026-09-30T09:01:47Z"
+    "updated_at": "2026-09-30T08:57:27Z"
   }
 ]

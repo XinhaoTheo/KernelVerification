@@ -1,25 +1,24 @@
-import numpy as np, torch, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_o")
-import kernel
+import sys, json
+sys.path.insert(0, "/root/numerical_cases/case_i")
+import numpy as np, torch, kernel
 
-u, b = kernel.make_inputs(device="cuda")
-out = kernel.run(u, b)
+(x,) = kernel.make_inputs("cuda")
+out = kernel.run(x)
 torch.cuda.synchronize()
 
-u64 = u.cpu().numpy().astype(np.float64)
-b64 = b.cpu().numpy().astype(np.float64)
-alpha = (u64*b64).sum() / (u64*u64).sum()
-res = b64 - alpha*u64
-ref = res / np.linalg.norm(res)
-o = out.cpu().numpy()
-err = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 1e-12)
+xd = x.cpu().numpy().astype(np.float64)
+mean = xd.sum() / 128
+var = ((xd - mean) ** 2).sum() / 128
+ref = (xd - mean) / np.sqrt(var + 1e-5)
+
+o = out.cpu().numpy().astype(np.float64)
+err = np.linalg.norm(o - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))
 print(json.dumps({
-  "metric": "relative L2 error vs float64 reference (contract bound 0.01)",
-  "shape": list(o.shape),
-  "finite": bool(np.isfinite(o).all()),
-  "rel_l2_error": float(err),
-  "pass": bool(err <= 0.01),
-  "max_abs_err": float(np.abs(o-ref).max()),
-  "residual_norm": float(np.linalg.norm(res)),
-  "dtype": str(out.dtype)
+    "metric": "relative L2 error (contract formula)",
+    "error": float(err),
+    "threshold": 0.02,
+    "shape": list(out.shape),
+    "finite": bool(np.isfinite(o).all()),
+    "dtype": str(out.dtype),
+    "max_abs_err": float(np.abs(o - ref).max()),
 }))

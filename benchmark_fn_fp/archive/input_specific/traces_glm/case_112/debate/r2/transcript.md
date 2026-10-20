@@ -1,13 +1,13 @@
 # Agentic Verification Transcript
 
-- Entry: `case_n`
-- Turns: 12
+- Entry: `case_h`
+- Turns: 10
 - Tool events: 17
 - Claims: 2
 - Description updates: 2
-- LLM time: 106.061s across 11 calls | tokens: in=265974 out=6221 total=272195
+- LLM time: 93.606s across 9 calls | tokens: in=183016 out=5756 total=188772
 - Stop reason: `verdict_recorded`
-- Verdict: `reject`
+- Verdict: `trust`
 - Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_n",
+    "entry": "case_h",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 
-### Turn 2 - `describer` (14.080666487999991s, in=4963 out=1010)
+### Turn 2 - `describer` (18.478893011999986s, in=5191 out=896)
 
 Message:
 
 ```text
-I have the full context. The kernel is a straightforward degree-48 Horner evaluation in float32 with FP fusion disabled, on an adversarially constructed workload (catastrophic cancellation: coefficients[0] cancels the higher-degree terms at the anchor point). I'll record the description model now.
+I'll analyze the artifact: the kernel does a sequential per-row float32 sum over 128 columns, with the workload featuring large ±2^20-magnitude terms that cancel (w and -w), plus small 0.25–0.75 tail values. The risk is float32 accumulation error from ordering when large terms cancel.
 ```
 
 Tool calls:
@@ -75,33 +75,36 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
-      "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
-      "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
-      "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
-      "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construc
-  ...[truncated 3273 chars]
+      "Output must match a float64/high-accuracy reference row-sum of the original float32 (64,128) input, with relative L2 metric E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 and all-finite outputs.",
+      "Only the exact generated workload (seed 730119, public PCG64 input and fixed column permutation) is in scope; any summation order or float32 arithmetic is allowed if E and finiteness hold.",
+      "Input is one contiguous float32 (64,128) matrix: columns are [w (32 cols, values 1..32 times 2^20), -w (32 cols), small (64 cols, 0.25..0.75)], then permuted columns.",
+      "Target hardware is NVIDIA T4, Triton kernel."
+    ],
+    "kernel_model": [
+      "Kernel launches a single program with rows = tl.arange(0,64), accumulates each row's sum in a (64,) float32 vector, itera
+  ...[truncated 2558 chars]
   Output summary:
   {
     "contract_model": [
-      "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
-      "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
-      "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
-      "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
-      "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construction + 0.003 offset), making the reference value small (~0.003 plus perturbation terms) relative to intermediate Horner magnitudes."
+      "Output must match a float64/high-accuracy reference row-sum of the original float32 (64,128) input, with relative L2 metric E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 and all-finite outputs.",
+      "Only the exact generated workload (seed 730119, public PCG64 input and fixed column permutation) is in scope; any summation order or float32 arithmetic is allowed if E and finiteness hold.",
+      "Input is one contiguous float32 (64,128) matrix: columns are [w (32 cols, values 1..32 times 2^20), -w (32 cols), small (64 cols, 0.25..0.75)], then permuted columns.",
+      "Target hardware is NVIDIA T4, Triton kernel."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Single Triton program (grid (1,), BLOCK=32, N=8) handles all 8 rows in one block with masking; one thread lane per row is not required -- arange(0,32) with mask row<8.",
-      "Degree-48 Horner scheme: result star
-  ...[truncated 2973 chars]
+      "Kernel launches a single program with rows = tl.arange(0,64), accumulates each row's sum in a (64,) float32 vector, iterating j = 0..127 in ascending column order (kernel.py lines 7-12).",
+      "Input is assumed row-major contiguous with row stride K=128 (address X + rows*K + j); output is a (64,) float32 vector.",
+      "run() allocates float32 output on the input's device and passes K=values.shape[1], R=values.shape[0] as constexpr, with enable_fp_fusion=False (no FMA reassociation).",
+      "
+  ...[truncated 2258 chars]
 
-### Turn 3 - `skeptic` (11.141415835999993s, in=12706 out=737)
+### Turn 3 - `skeptic` (10.761739912000024s, in=12137 out=695)
 
 Message:
 
 ```text
-The main attack surface is clear: engineered catastrophic cancellation against a tight 2e-4 relative-L2 float64-reference tolerance. I'll record the decisive claims.
+I'll record the core in-scope numerical claims for this workload: the float32 sequential-summation cancellation risk against the small true row sums, and a secondary finiteness/completeness claim.
 ```
 
 Tool calls:
@@ -109,13 +112,13 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09 (1.015625^48). Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement of ||output-reference||_2 vs max(||reference||_2, 0.001*sqrt(8)).",
+    "rationale": "Large +w/-w terms (magnitudes up to ~3.36e7) cancel exactly in real arithmetic, leaving a true row sum of only the 64 small terms (0.25\u20130.75 each, ~8\u201332 total). Sequential fp32 accumulation rounds partial sums to ULPs of up to 2^7=128 at large-magnitude intermediate stages; if the permuted column order interleaves large and small terms before the +/-w cancellation completes, accumulated absolute rounding error can dwarf the ~32 true sum, pushing E far above 0.1.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' 
-  ...[truncated 634 chars]
+        "summary": "Reference sums original float32 entries in real arithmetic (float64); contract requires E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 on the exact seed-730119 workload; kernel may use float32 arithmetic 
+  ...[truncated 647 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -124,28 +127,28 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly close to sqrt(8)*0.003 \u2248 0.0085 (plus perturbation terms from point noise 4e-5 times derivative scale, which could be small or large). If ||reference||_2 is below 0.0028, the floor denominator looser/tighter changes whether the 2e-4 bound is on absolute error ~5.6e-7 vs relative error. The exact reference norm must be measured to interpret any error measurement correctly.",
+    "rationale": "The single-program kernel assumes a (64,128) contiguous row-major input with K=128, R=64 from make_inputs; if rows*K + j indexing or the fp32 store path is consistent the output is finite, but any deviation (e.g., wrong specialization or masking absence) would show as garbage or non-finite values. Finiteness is explicitly contractually required, so it needs direct runtime confirmation.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
+        "summary": "Contract: every output must be finite and E <= 0.1; only the final result on the specified input is in scope."
       }
     ],
-    "sta
-  ...[truncated 282 chars]
+    "statement": "run(*make_inputs()) on the specified CUDA workload returns a finite (64,) float32 output whose values equal the kernel's sequential fp32 sums without ind
+  ...[truncated 61 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 4 - `skeptic` (12.478403997999976s, in=14593 out=778)
+### Turn 4 - `skeptic` (8.54521842699998s, in=13834 out=662)
 
 Message:
 
 ```text
-The previous two claim attempts were rejected for missing scope_rationale. I'll re-send them with the required field filled in.
+Both prior claim attempts were rejected for a missing `scope_rationale`. I'll re-record them correctly.
 ```
 
 Tool calls:
@@ -153,64 +156,69 @@ Tool calls:
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.",
+    "rationale": "Large +w/-w terms (magnitudes up to ~3.36e7) cancel exactly in real arithmetic, leaving true row sums of only the 64 small terms (~8-32). Sequential fp32 accumulation rounds partial sums to ULPs up to 128 at 2^25-scale intermediate stages; if the permuted column order interleaves large and small terms before +w/-w cancellation completes, accumulated absolute rounding error can dwarf the ~32 true sum, pushing E far above 0.1.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) wit
-  ...[truncated 830 chars]
+        "summary": "Reference sums original float32 entries in real arithmetic (float64); contract requires E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 on the exact seed-730119 workload; fp32 arithmetic is allowed only if this metric holds."
+      },
+      {
+        "source"
+  ...[truncated 871 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.",
+    "rationale": "Large +w/-w terms (magnitudes up to ~3.36e7) cancel exactly in real arithmetic, leaving true row sums of only the 64 small terms (~8-32). Sequential fp32 accumulation rounds partial sums to ULPs up to 128 at 2^25-scale intermediate stages; if the permuted column order interleaves large and small terms before +w/-w cancellation completes, accumulated absolute rounding error can dwarf the ~32 true sum, pushing E far above 0.1.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) with float64 reference. 'Arbitrary alternative coefficients or points are outside the scope.'"
+        "summary": "Reference sums original float32 entries in real arithmetic (float64); contract requires E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 on the exact seed-730119 workload; fp32 arithmetic is allowed only if this metric holds."
       },
       {
-        "source": "kernel.py make_inputs_numpy",
-        "summary": "coefficients[:,0] is constructed in float64 to cancel sum of coefficients[:,1:]*anchor^k plus 0.003 offset, and points are anchor \u00b1 4e-5 noise -- a designed near-cancellation workload."
+        "source": "kernel.py",
+        "summary": "make_inputs_numpy generates [w (1..32)*2^20, -w, small 0.25..0.75] then applies the fixed public column permutation; the kernel sums sequentially in fp32, so permuted order governs accumulation error."
       }
     ],
-    "scope_ratio
-  ...[truncated 464 chars]
+    "scope_rationale": "The contract requires E <= 0.1 against a float64 reference on exactly the seed-730119 workload (problem.txt); the kern
+  ...[truncated 505 chars]
 - `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 \u2248 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.",
+    "rationale": "The single-program kernel assumes a (64,128) contiguous row-major input with K=128, R=64; any indexing or specialization deviation would show as garbage or non-finite values. Finiteness is explicitly contractually required, so it needs direct runtime confirmation.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
+        "summary": "Contract: every output must be finite and E <= 0.1; only the final result on the specified input is in scope."
       }
     ],
-    "scope_rationale": "Interpreting the contract's error metric ma
-  ...[truncated 487 chars]
+    "scope_rationale": "problem.txt explicitly states every output must be finite on the specified workload, so verifying the output is finite and correctly indexed on run(*make_inputs()) is directly required by the stated contract.",
+    "statement": "run(*make_inputs()) on the specified CUDA wo
+  ...[truncated 154 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 \u2248 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.",
+    "rationale": "The single-program kernel assumes a (64,128) contiguous row-major input with K=128, R=64; any indexing or specialization deviation would show as garbage or non-finite values. Finiteness is explicitly contractually required, so it needs direct runtime confirmation.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
+        "summary": "Contract: every output must be finite and E <= 0.1; only the final result on the specified input is in scope."
       }
     ],
-    "scope_rationale": "Interpreting the contract's error metric max(||reference||_2, 0.001*sqrt(8)) requires knowing the actual reference norm on the fixed workload; this directly determines whether the 2e-4 tolerance is effectively relative or absolute for the sole in-scope input.",
-    "statement": "The reference L2 norm ||reference||_2 on this workload is below or near the 0.001*sqrt(8) \u2248 0.00283 floor, so the tolerance is effectively an abso
-  ...[truncated 121 chars]
+    "scope_rationale": "problem.txt explicitly states every output must be finite on the specified workload, so verifying the output is finite and correctly indexed on run(*make_inputs()) is directly required by the stated contract.",
+    "statement": "run(*make_inputs()) on the specified CUDA workload returns a finite (64,) float32 output equal to the kernel's sequential fp32 sums without index/stride errors (no garbage or non-finite entries).",
+    "status": "open"
+  }
 
-### Turn 5 - `describer` (17.860461082s, in=16466 out=1186)
+### Turn 5 - `describer` (12.243286626000014s, in=15203 out=738)
 
 Message:
 
 ```text
-The description model is already recorded and no description tasks are open. One quantitative refinement is worth adding to guide the Experimenter: the reference value is not just the 0.003 offset — point noise of 4e-5 multiplied by the polynomial's derivative at the anchor (which scales like sum k·coeff·anchor^(k-1), plausibly O(100–500) for degree 48 with N(0,1) coefficients) contributes perturbations of order 0.004–0.02 per row, comparable to or larger than the 0.003 offset. This affects both open claims and I should record it.
+The description model already covers case_h well. I'll add a small refinement to help the Skeptic/Experimenter: the metric is a global vector L2 over all 64 rows, and the double permutation (rng.permutation then PERMUTATION) means small terms can appear before large ±w pairs, which is what drives cancellation error.
 ```
 
 Tool calls:
@@ -218,61 +226,68 @@ Tool calls:
 - `record_description_update -> t10 ok`
   Args:
   {
-    "contract_model": [
-      "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
-      "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
-    ],
     "kernel_model": [
-      "Unchanged: single-block float32 Horner, degree 48, enable_fp_fusion=False, masked store of 8 rows."
+      "The kernel loads each value as fp32 and adds it into an fp32 accumulator; all 64 rows are summed in parallel with the same fixed column order j=0..127 (kernel.py lines 9-11).",
+      "The effective column order applied by make_inputs_numpy is values[:, order][:, PERMUTATION], i.e. PCG64 permutation composed with the hardcoded PERMUTATION list; small terms (0.25-0.75) can appear at early positions before the +w/-w pairs complete, which is exactly the interleaving that maximizes sequential-fp32 cancellation loss."
     ],
     "open_questions": [
-      "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
-      "What relative L2 error does the float32 Horner kernel actually achieve on this w
-  ...[truncated 2304 chars]
+      "Per-row relative error vs the global E metric: if only some rows carry large error, E may still pass because ||ref||_2 pools all 64 rows; needs the actual per-row fp32-vs-float64 deltas from the exact generated matrix.",
+      
+  ...[truncated 1773 chars]
   Output summary:
   {
-    "contract_model": [
-      "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
-      "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
-    ],
+    "contract_model": [],
     "impact_on_claims": [],
     "kernel_model": [
-      "Unchanged: single-block float32 Horner, degree 48, enable_fp_fusion=False, masked store of 8 rows."
+      "The kernel loads each value as fp32 and adds it into an fp32 accumulator; all 64 rows are summed in parallel with the same fixed column order j=0..127 (kernel.py lines 9-11).",
+      "The effective column order applied by make_inputs_numpy is values[:, order][:, PERMUTATION], i.e. PCG64 permutation composed with the hardcoded PERMUTATION list; small terms (0.25-0.75) can appear at early positions before the +w/-w pairs complete, which is exactly the interleaving that maximizes sequential-fp32 cancellation loss."
     ],
     "open_questions": [
-      "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
-      "What relative L2 error does the float32 Horner kernel actually achieve on this workload (needs Experimenter run)?",
-      "Does Triton with enable_fp_fusion=False round each multiply and add exactly as assumed?",
-      "What is the empirical scale of P'(a) per row (needed to decide whether the eps*P'(a) perturbation dominates the 0.003 offset in the reference) and the corresponding per-row error scale?"
+      "Per-row relative error vs the global E metric: if only some rows carry large error, E may still pass because ||ref||_2 pools all 64 rows; needs the actual per-row fp32-vs-float64 deltas from the exact generated matrix.",
+      "Can the reference be independently checked by two methods (float64 direct sum and e.g. pairwise/Kahan in float64) as the problem text allows, on the exact seed-730119 matrix?"
     ],
     "resolved_tasks": [],
     "risk_map": [
-      "R
-  ...[truncated 1994 chars]
+      "Metric aggregation nuance: E is a single global L2 ratio over the 64-row output vector, not a per-row check; a few rows wit
+  ...[truncated 1487 chars]
 
-### Turn 6 - `skeptic` (3.8449684450000063s, in=24129 out=88)
+### Turn 6 - `skeptic` (5.146595256000012s, in=21500 out=302)
 
 Message:
 
 ```text
-Both decisive claims (c1, c2) are already recorded and await runtime measurement. Before deciding whether anything new is needed, I'll check whether the Experimenter has produced any probe results yet.
+The two core in-scope risks (fp32 sequential-summation cancellation error vs the float64 reference, and output finiteness/indexing) are already recorded as c1 and c2, and the describer's refinement already captures the global-vs-per-row metric nuance and small-term flush as sub-mechanisms of c1. No additional distinct, testable in-scope claims are warranted.
 ```
 
 Tool calls:
 
-- `retrieve_experiment_history -> t11 ok`
+- `record_no_new_claims -> t11 ok`
+  Args:
+  {
+    "reason": "The ledger's open claims c1 (fp32 sequential cancellation error vs float64 reference on the exact seed-730119 permuted workload, possibly violating E <= 0.1) and c2 (output finiteness/indexing on run(*make_inputs())) fully cover the contract surface: the only in-scope behavior is the E metric and finiteness on the single specified workload. The describer's refinement (global L2 aggregation, small-term flush, double permutation) elaborates mechanisms already inside c1, and the workload is fully reproducible offline so the experimenter can decide both claims with one probe. No further distinct, testable in-scope hypotheses remain.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
   Output summary:
   {
-    "exists": false,
-    "source": "/root/trace_runs/extension_low32_r2/numerical_challenges/case_n/debate/tool_events.jsonl"
+    "decision": "no_new_claims",
+    "reason": "The ledger's open claims c1 (fp32 sequential cancellation error vs float64 reference on the exact seed-730119 permuted workload, possibly violating E <= 0.1) and c2 (output finiteness/indexing on run(*make_inputs())) fully cover the contract surface: the only in-scope behavior is the E metric and finiteness on the single specified workload. The describer's refinement (global L2 aggregation, small-term flush, double permutation) elaborates mechanisms already inside c1, and the workload is fully reproducible offline so the experimenter can decide both claims with one probe. No further distinct, testable in-scope hypotheses remain.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 10,
+    "turn": 6
   }
 
-### Turn 7 - `experimenter` (8.130114902000003s, in=24585 out=466)
+### Turn 7 - `experimenter` (17.314117210000006s, in=22738 out=1311)
 
 Message:
 
 ```text
-I'll launch one probe that runs the kernel on the exact make_inputs() workload, computes the float64 reference, and reports the reference norm and the relative L2 error — enough to settle both c1 and c2. I'll run it as a c1 claim probe (the error measurement), then use the same data to record c2's norm measurement.
+I'll probe both open claims in one batch: c1 via a CPU-only evaluation of left-to-right fp32 sequential summation versus the float64 reference on the exact seed-730119 matrix, and c2 via the actual GPU run of `run(*make_inputs())` checking finiteness, shape, and equality against a faithful fp32 emulation.
 ```
 
 Tool calls:
@@ -281,8 +296,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_n\")\nimport kernel as K\n\ncoefficients, points = K.make_inputs(\"cuda\")\nout = K.run(coefficients, points)\ntorch.cuda.synchronize()\n\n# float64 reference from stored float32 values\nc64 = coefficients.detach().cpu().numpy().astype(np.float64)\np64 = points.detach().cpu().numpy().astype(np.float64)\nref = np.array([np.sum(c64[i] * p64[i] ** np.arange(49)) for i in range(8)])\n\noutn = out.detach().cpu().numpy().astype(np.float64)\nerr_norm = np.linalg.norm(outn - ref)\nref_norm = np.linalg.norm(ref)\nfloor = 0.001 * np.sqrt(8)\ndenom = max(ref_norm, floor)\nrel = err_norm / denom\nresult = {\n    \"per_row_reference\": ref.tolist(),\n    \"per_row_kernel\": outn.tolist
-  ...[truncated 575 chars]
+    "code": "\nimport numpy as np, json\n\nSEED = 730119\nPERMUTATION = [40,110,94,84,77,58,57,120,82,13,85,86,113,106,39,102,19,18,112,26,71,122,61,103,46,91,79,125,44,38,47,28,50,30,97,52,53,109,119,35,1,107,43,114,117,60,74,33,25,88,78,59,81,93,27,36,108,90,23,126,95,76,31,124,98,73,37,29,32,10,48,51,17,121,100,6,22,49,11,20,34,69,115,4,68,56,5,21,66,65,92,3,15,0,118,67,55,83,105,116,99,101,42,16,123,64,104,41,87,9,62,8,12,127,14,24,75,70,80,7,54,45,96,2,63,89,111,72]\n\nrng = np.random.Generator(np.random.PCG64(SEED))\nw = rng.integers(1,33,size=(64,32)).astype(np.float32)*np.float32(1048576)\nsmall = rng.integers(1,4,size=(64,64)).astype(np.float32)*np.float32(0.25)\nvalues = np.concatenate([w,-w,small],axis=1)\norder = rng.permutation(128)\nvalues = values[:,order
+  ...[truncated 1467 chars]
   Output summary:
   {
     "artifacts": [
@@ -290,13 +305,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t12_probe.py",
-        "sha256": "ca520dd3ec7e9d1d4f3a4e47be06797edd52d8be98a56a719fa6e07c2589b713"
+        "sha256": "69b22ba24b48d40450d2b935fe7b51d5da4deedf241e3abeb670c36a365a6656"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t12_stdout.txt",
-        "sha256": "9c0ea33c5ff73fd5e97eaa71e39019238f4503b2cbeccbb1ef11fd668c1a6fe5"
+        "sha256": "d27f8ab6653533daf0c1cc5640f0df2bdd30d6e69f87d579ff6020eed0fc0e41"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -308,134 +323,121 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t12_json_result.json",
-        "sha256": "9de5913cf2670959aab9f757d45317d98365b72267702a08c7dcf388e6e1ddf4"
+        "sha256": "d82a7ebbfed71df36879f84a7ff85fe738e229f81a203461d9e5929ed1cdc48c"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.",
-    "duration_s": 5.334492,
-    "event_id": "t12",
-  
-  ...[truncated 5707 chars]
+    "claim_statement": "The kernel's left-to-right float32 accumulation over the specifically permuted columns (seed 730119) can carry absolute rounding error on the order of tens-to-hundreds (ULP ~128 at 2^25-scale partial sums), wh
+  ...[truncated 3474 chars]
+- `run_claim_probe -> t13 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_h\")\nimport numpy as np, torch\nimport kernel as K\n\ntry:\n    values = K.make_inputs(\"cuda\")[0]\n    out = K.run(values)\n    out_cpu = out.detach().cpu().numpy()\n    # faithful fp32 left-to-right emulation from the same tensor\n    v = values.detach().cpu().numpy()\n    acc = np.zeros(64, dtype=np.float32)\n    for j in range(128):\n        acc = (acc + v[:, j]).astype(np.float32)\n    max_dev = float(np.abs(out_cpu.astype(np.float64) - acc.astype(np.float64)).max())\n    res = {\n      \"shape\": list(out.shape), \"dtype\": str(out.dtype),\n      \"all_finite\": bool(np.isfinite(out_cpu).all()),\n      \"matches_fp32_sequential_emulation\": bool(max_dev == 0.0),\n      \"max_abs_dev
+  ...[truncated 273 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t13_probe.py",
+        "sha256": "525d067cc41523f6c5a2effc471b8f8fb62d9ee4e3e49a837107918d54507116"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t13_stdout.txt",
+        "sha256": "9bdb8ffb95bcec6d7ffd96564735bc44577d32e3d3dfb0c5700e9e90d74bcbb5"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t13_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t13_json_result.json",
+        "sha256": "7e0a9f60d5e0f2daed7cbd14457a8fc466c0dadba76a8edb8519c77408a4a619"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "run(*make_inputs()) on the specified CUDA workload returns a finite (64,) float32 output equal to the kernel's sequential fp32 sums without index/stride errors (no garbage or non-finite entries).",
+    "duration
+  ...[truncated 2599 chars]
 
-### Turn 8 - `experimenter` (11.14058511799999s, in=28825 out=672)
+### Turn 8 - `experimenter` (8.028998262000016s, in=27122 out=553)
 
 Message:
 
 ```text
-The probe results are in: relative L2 error is 4.73e-4, above the 2e-4 tolerance (confirms c1), and ||reference||_2 = 0.0158, well above the 0.00283 floor (rebuts c2). I'll finalize c1's evidence and record the same measurement as evidence against c2.
+Both probes completed with decisive results: the emulated and actual GPU fp32 sequential sums match the float64 reference exactly (E = 0), and the GPU output is finite, correctly shaped, and bit-matches the emulation. Finalizing both claims now.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t13 ok`
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "E": 0.0,
+      "kahan_crosscheck_ok": true,
+      "max_abs_err": 0.0,
+      "max_ref_row": 35.75,
+      "max_row_rel_err": 0.0,
+      "min_ref_row": 28.5,
+      "nonfinite_emulated": false,
+      "rows_exceeding_rel_0.1": 0,
+      "tolerance": 0.1
+    },
+    "event_id": "t12",
+    "status": "rebutted",
+    "summary": "On the exact seed-730119 double-permuted matrix, left-to-right fp32 sequential summation is EXACT vs the float64 (Kahan cross-checked) reference: E = 0.0, max_abs_err = 0.0, zero rows exceed relative error 0.1. The feared cancellation error does not materialize because all large terms are integer multiples of 2^20 (exactly representable, exact cancellation) and the small 0.25-granularity terms sum exactly once the accumulator returns to small scale; reference row sums are 28.5-35.
+  ...[truncated 102 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "rebutted",
+    "evidence_id": "c1.e1",
+    "summary": "On the exact seed-730119 double-permuted matrix, left-to-right fp32 sequential summation is EXACT vs the float64 (Kahan cross-checked) reference: E = 0.0, max_abs_err = 0.0, zero rows exceed relative error 0.1. The feared cancellation error does not materialize because all large terms are integer multiples of 2^20 (exactly representable, exact cancellation) and the small 0.25-granularity terms sum exactly once the accumulator returns to small scale; reference row sums are 28.5-35.75. The claimed E-budget violation is rebutted for the in-scope workload.",
+    "supports": "rebutted",
+    "tool_event_id": "t12"
+  }
+- `finalize_probe_evidence -> t15 ok`
   Args:
   {
     "data": {
       "all_finite": true,
-      "denominator": 0.01581703756880129,
-      "err_L2": 7.480275918007203e-06,
-      "exceeds_tolerance": true,
-      "floor_0p001sqrt8": 0.0028284271247461905,
-      "floor_active": false,
-      "max_abs_row_err": 5.79933538968902e-06,
-      "per_row_abs_err": [
-        5.876572273244562e-07,
-        -5.935299292048057e-07,
-        -8.360940446650034e-07,
-        -3.5024364757885174e-06,
-        1.0896153870287861e-06,
-        5.79933538968902e-06,
-        2.950964317349758e-07,
-        -2.717381081041026e-06
-      ],
-      "ref_L2": 0.01581703756880129,
-      "relative_L2": 0.0004729252165880834,
-      "tolerance": 0.0002
+      "dtype": "torch.float32",
+      "matches_fp32_sequential_emulation": true,
+      "max_abs_dev_vs_emulation": 0.0,
+      "shape": [
+        64
+      ]
     },
-    "event_id": "t12",
+    "event_id": "t13",
     "status": "confirmed",
-    "summary": "Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored
-  ...[truncated 406 chars]
+    "summary": "GPU run of run(*make_inputs()) produced a (64,) float32 output, all entries finite, bit-exactly matching the faithful left-to-right fp32 sequential emulation (max_abs_dev = 0.0) \u2014 no index/stride or garbage values. Combined with t12 (emulation equals float64 reference exactly), the in-scope output is both finite and contractually accurate.",
+    "supports": "confirmed"
+  }
   Output summary:
   {
-    "claim_id": "c1",
+    "claim_id": "c2",
     "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored float32 inputs. Relative L2 error = 4.729e-4, which exceeds the 2e-4 tolerance by ~2.4x. ||output-reference||_2 = 7.48e-6, denominator = ||reference||_2 = 0.015817 (floor not active). All outputs finite, shape (8,). The catastrophic-cancellation concern is realized: float32 Horner per-row absolute errors of 6e-7 to 5.8e-6 against reference values of 3e-5 to 9e-3 magnitude.",
+    "evidence_id": "c2.e1",
+    "summary": "GPU run of run(*make_inputs()) produced a (64,) float32 output, all entries finite, bit-exactly matching the faithful left-to-right fp32 sequential emulation (max_abs_dev = 0.0) \u2014 no index/stride or garbage values. Combined with t12 (emulation equals float64 reference exactly), the in-scope output is both finite and contractually accurate.",
     "supports": "confirmed",
-    "tool_event_id": "t12"
+    "tool_event_id": "t13"
   }
 
-### Turn 9 - `experimenter` (8.94195757899999s, in=34642 out=477)
+### Turn 9 - `skeptic` (6.139133810000004s, in=32476 out=315)
 
 Message:
 
 ```text
-The t12 probe already measured ||reference||_2 = 0.015817, well above the 0.00283 floor (floor_active=false), which rebuts c2. I'll attach that evidence and update the claim status.
-```
-
-Tool calls:
-
-- `append_evidence -> t14 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "data": {
-      "denominator": 0.01581703756880129,
-      "floor_0p001sqrt8": 0.0028284271247461905,
-      "floor_active": false,
-      "per_row_reference": [
-        0.003171035095915986,
-        0.00777876125453858,
-        -0.0028239472311506475,
-        0.0069309926708507885,
-        0.0015410017542418775,
-        -3.822426214750152e-05,
-        -0.009263333731685641,
-        -0.005951071376243178
-      ],
-      "ratio_ref_over_floor": 5.591,
-      "ref_L2": 0.01581703756880129
-    },
-    "kind": "runtime_probe",
-    "summary": "Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. T
-  ...[truncated 277 chars]
-  Output summary:
-  {
-    "id": "c2.e1",
-    "summary": "Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. This contradicts c2's claim that the reference norm is below or near the floor. Per-row reference values range from -3.8e-5 to 0.00926, confirming the eps*P'(a) derivative-scale perturbation dominates over the 0.003 offset.",
-    "supports": "rebutted"
-  }
-
-### Turn 10 - `experimenter` (3.8994973439999967s, in=35339 out=74)
-
-Message:
-
-```text
-The c2 evidence is already attached; I just need to update its status to reflect the rebutting evidence, then all claims are covered.
-```
-
-Tool calls:
-
-- `update_claim_status -> t15 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "status": "rebutted"
-  }
-  Output summary:
-  {
-    "id": "c2",
-    "status": "rebutted"
-  }
-
-### Turn 11 - `skeptic` (5.347648781000004s, in=34904 out=257)
-
-Message:
-
-```text
-The decisive evidence is in: c1 is confirmed — the kernel's relative L2 error (4.73e-4) exceeds the contractual 2e-4 tolerance on the sole in-scope workload, with the floor inactive. c2 is rebutted. Both claims are fully evidenced with scope ties to problem.txt; the probe used the exact make_inputs() inputs and a float64 reference as the contract requires. No new material issues remain.
+The probes decisively resolved both claims: the feared fp32 cancellation error never materializes (E = 0.0, exact match to the float64 Kahan-cross-checked reference), and the actual GPU output is finite, correctly shaped, and bit-exact against the sequential fp32 emulation. The contract surface (single specified workload, E ≤ 0.1, finiteness) is fully covered with no open questions remaining.
 ```
 
 Tool calls:
@@ -443,30 +445,26 @@ Tool calls:
 - `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Final review: the only in-scope contract requirement (relative L2 <= 0.0002 on the fixed make_inputs() workload vs float64 reference) is directly measured by probe t12 as violated (4.729e-4, floor inactive, all finite, shape (8,)). Claim c1 is confirmed with in-scope evidence; c2 is rebutted. The evidence already covers every stated contract element (finiteness, shape, error metric, denominator floor, float64 reference from stored float32 inputs), so no additional testable in-scope claims are warranted.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
+    "reason": "Final review: both in-scope claims are resolved with decisive runtime evidence. c1 is rebutted \u2014 the left-to-right fp32 sequential summation on the exact seed-730119 double-permuted matrix matches the float64 (Kahan cross-checked) reference exactly (E = 0.0, max_abs_err = 0.0), because all large \u00b1w terms are integer multiples of 2^20 and cancel exactly, and small 0.25-granularity terms sum exactly once the accumulator returns to small scale. c2 is confirmed \u2014 the actual GPU run of run(*make_inputs()) returned a finite (64,) float32 output bit-matching the fp32 sequential emulation with zero deviation, which combined with t12 means the contractual E <= 0.1 and finiteness requirements are satisfied. The only in-scope behavior is this single specified workload; n
+  ...[truncated 87 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the only in-scope contract requirement (relative L2 <= 0.0002 on the fixed make_inputs() workload vs float64 reference) is directly measured by probe t12 as violated (4.729e-4, floor inactive, all finite, shape (8,)). Claim c1 is confirmed with in-scope evidence; c2 is rebutted. The evidence already covers every stated contract element (finiteness, shape, error metric, denominator floor, float64 reference from stored float32 inputs), so no additional testable in-scope claims are warranted.",
+    "reason": "Final review: both in-scope claims are resolved with decisive runtime evidence. c1 is rebutted \u2014 the left-to-right fp32 sequential summation on the exact seed-730119 double-permuted matrix matches the float64 (Kahan cross-checked) reference exactly (E = 0.0, max_abs_err = 0.0), because all large \u00b1w terms are integer multiples of 2^20 and cancel exactly, and small 0.25-granularity terms sum exactly once the accumulator returns to small scale. c2 is confirmed \u2014 the actual GPU run of run(*make_inputs()) returned a finite (64,) float32 output bit-matching the fp32 sequential emulation with zero deviation, which combined with t12 means the contractual E <= 0.1 and finiteness requirements are satisfied. The only in-scope behavior is this single specified workload; no further testable hypotheses remain.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
     "reviewed_tool_event_count": 15,
-    "turn": 11
+    "turn": 9
   }
 
-### Turn 12 - `judge` (9.195622062000012s, in=34822 out=476)
+### Turn 10 - `judge` (6.948151441999983s, in=32815 out=284)
 
 Message:
 
 ```text
-The decisive evidence is clear: probe t12 ran the exact sole in-scope workload (make_inputs()) through kernel.run(), computed the contractually correct float64 reference from the stored float32 inputs, and measured relative L2 error = 4.729e-4 — over 2x the contractual 2e-4 tolerance. The denominator floor is inactive (ref norm 0.0158 > 0.00283), outputs are finite and correctly shaped, so the only basis to excuse the deviation would be a declared tolerance the contract doesn't have. The contract explicitly requires ≤ 0.0002, so this is a defect. Claim c1 is confirmed and in-scope; c2 is rebutted; the Skeptic signed off with no new claims.
+All claims are resolved with decisive runtime evidence and the Skeptic has signed off. Recording the final verdict.
 ```
 
 Tool calls:
@@ -476,127 +474,131 @@ Tool calls:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1"
+      "c2"
     ],
-    "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually as
-  ...[truncated 356 chars]
+    "reason": "The contract covers only the single specified seed-730119 workload with E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 and all-finite outputs. Probe t12 shows the kernel's exact left-to-right fp32 sequential summation on the exact double-permuted input matrix matches the float64 (Kahan cross-checked) reference exactly (E = 0.0, max_abs_err = 0.0, zero rows exceeding tolerance), rebutting the catastrophic-cancellation concern (c1) \u2014 all large \u00b1w terms are integer multiples of 2^20 and cancel exactly. Probe t13 confirms (c2) the actual GPU run of run(*make_inputs()) returned a finite (64,) float32 output bit-identical to the fp32 sequential emulation with zero deviation, so the contract's finiteness and accura
+  ...[truncated 162 chars]
   Output summary:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1"
+      "c2"
     ],
-    "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually assumed. This is not an excusable rounding/accumulation deviation: the contract explicitly fixes a numeric tolerance and this is a ~2.4x violation of it on the fixed workload the contract defines as the entire scope. Finiteness and shape requirements pass, but the accuracy requirement \u2014 the core of this contract \u2014 fails.",
-    "verdict": "reject"
+    "reason": "The contract covers only the single specified seed-730119 workload with E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 and all-finite outputs. Probe t12 shows the kernel's exact left-to-right fp32 sequential summation on the exact double-permuted input matrix matches the float64 (Kahan cross-checked) reference exactly (E = 0.0, max_abs_err = 0.0, zero rows exceeding tolerance), rebutting the catastrophic-cancellation concern (c1) \u2014 all large \u00b1w terms are integer multiples of 2^20 and cancel exactly. Probe t13 confirms (c2) the actual GPU run of run(*make_inputs()) returned a finite (64,) float32 output bit-identical to the fp32 sequential emulation with zero deviation, so the contract's finiteness and accuracy clauses are both satisfied on the in-scope input. No open claims remain; skeptic reviewed the latest evidence and found no new claims.",
+    "verdict": "trust"
   }
 
 ## Description Model
 
 {
   "contract_model": [
-    "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
-    "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
-    "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
-    "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
-    "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construction + 0.003 offset), making the reference value small (~0.003 plus perturbation terms) relative to intermediate Horner magnitudes.",
-    "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
-    "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
+    "Output must match a float64/high-accuracy reference row-sum of the original float32 (64,128) input, with relative L2 metric E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 and all-finite outputs.",
+    "Only the exact generated workload (seed 730119, public PCG64 input and fixed column permutation) is in scope; any summation order or float32 arithmetic is allowed if E and finiteness hold.",
+    "Input is one contiguous float32 (64,128) matrix: columns are [w (32 cols, values 1..32 times 2^20), -w (32 cols), small (64 cols, 0.25..0.75)], then permuted columns.",
+    "Target hardware is NVIDIA T4, Triton kernel."
   ],
   "kernel_model": [
-    "Single Triton program (grid (1,), BLOCK=32, N=8) handles all 8 rows in one block with masking; one thread lane per row is not required -- arange(0,32) with mask row<8.",
-    "Degree-48 Horner scheme: result starts at coefficient DEGREE=48, then static_range loop multiplies by point and adds coefficient k from 48 down to 0 -- algebraically the standard Horner recurrence.",
-    "All loads cast to float32; result is float32 throughout; store to preallocated float32 output tensor of shape (8,).",
-    "Launch disables FP fusion (enable_fp_fusion=False), matching the contract's pe
-...[truncated 4326 chars]
+    "Kernel launches a single program with rows = tl.arange(0,64), accumulates each row's sum in a (64,) float32 vector, iterating j = 0..127 in ascending column order (kernel.py lines 7-12).",
+    "Input is assumed row-major contiguous with row stride K=128 (address X + rows*K + j); output is a (64,) float32 vector.",
+    "run() allocates float32 output on the input's device and passes K=values.shape[1], R=values.shape[0] as constexpr, with enable_fp_fusion=False (no FMA reassociation).",
+    "Summation is strictly sequential left-to-right in float32 per row; each intermediate partial sum is stored as float32.",
+    "The kernel loads each value as fp32 and adds it into an fp32 accumulator; all 64 rows are summed in parallel with the same fixed column order j=0..127 (kernel.py lines 9-11).",
+    "The effective column order applied by make_inputs_numpy is values[:, order][:, PERMUTATION], i.e. PCG64 permutation composed with the hardcoded PERMUTATION list; small terms (0.25-0.75) can appear at early positions before the +w/-w pairs complete, which is exactly the interleaving that maximizes sequential-fp32 cancellation loss."
+  ],
+  "open_questions": [
+    "Exact fp32 sequential sum per row versus float64 reference: which rows exceed the tolerance if any? Needs runtime probe (Experimenter).",
+    "Whether t
+...[truncated 3256 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_n: degree-48 float32 Horner polynomial evaluation on a fixed adversarial near-cancellation workload, with a 2e-4 relative-L2 float64-reference tolerance contract.
-- `du2` tasks=`initial`: Refined description of case_n: the reference value per row is 0.003 plus a float32 rounding residual plus eps_i*P'(anchor) perturbation; the derivative-scale term likely dominates and determines whether the norm floor is active and how tight the 2e-4 relative tolerance is. Recorded to guide Experimenter probes for claims c1/c2.
+- `du1` tasks=`initial`: Described case_h: a single-block Triton row-sum kernel over a fixed (64,128) float32 input designed with large cancelling terms (w, -w at ~2^20-2^25 scale) plus small 0.25-0.75 terms; contract requires E <= 0.1 against a float64 reference on exactly this workload.
+- `du2` tasks=`initial`: Refinement for case_h: clarified the double column permutation effect (small terms can precede +w/-w pairs), the global vs per-row nature of the E metric, and fp32 ULP flush of small terms at large partial sums; notes the workload is fully CPU-reproducible for float64 reference construction.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `rebutted`
 
-Statement: On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.
-
-Scope: `in_scope`
-
-Scope rationale: The claim tests the exact contract requirement that the kernel's relative L2 error on the sole in-scope workload (make_inputs() tensors) be <= 0.0002 against the float64 reference; problem.txt states this is the numerical contract for this fixed workload.
-
-Scope evidence:
-- `problem.txt`: Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) with float64 reference. 'Arbitrary alternative coefficients or points are outside the scope.'
-- `kernel.py make_inputs_numpy`: coefficients[:,0] is constructed in float64 to cancel sum of coefficients[:,1:]*anchor^k plus 0.003 offset, and points are anchor ± 4e-5 noise -- a designed near-cancellation workload.
-
-Rationale: make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored float32 inputs. Relative L2 error = 4.729e-4, which exceeds the 2e-4 tolerance by ~2.4x. ||output-reference||_2 = 7.48e-6, denominator = ||reference||_2 = 0.015817 (floor not active). All outputs finite, shape (8,). The catastrophic-cancellation concern is realized: float32 Horner per-row absolute errors of 6e-7 to 5.8e-6 against reference values of 3e-5 to 9e-3 magnitude.
-
-### c2 - `rebutted`
-
-Statement: The reference L2 norm ||reference||_2 on this workload is below or near the 0.001*sqrt(8) ≈ 0.00283 floor, so the tolerance is effectively an absolute-error bound; pass/fail depends sensitively on the measured reference norm and per-row errors.
+Statement: The kernel's left-to-right float32 accumulation over the specifically permuted columns (seed 730119) can carry absolute rounding error on the order of tens-to-hundreds (ULP ~128 at 2^25-scale partial sums), which may exceed the 10% relative error budget E <= 0.1 given true row sums are only ~8-32.
 
 Scope: `in_scope`
 
-Scope rationale: Interpreting the contract's error metric max(||reference||_2, 0.001*sqrt(8)) requires knowing the actual reference norm on the fixed workload; this directly determines whether the 2e-4 tolerance is effectively relative or absolute for the sole in-scope input.
+Scope rationale: The contract requires E <= 0.1 against a float64 reference on exactly the seed-730119 workload (problem.txt); the kernel uses left-to-right fp32 accumulation whose rounding error on this specific permuted input directly determines whether that stated numeric requirement is violated.
 
 Scope evidence:
-- `problem.txt`: Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload.
+- `problem.txt`: Reference sums original float32 entries in real arithmetic (float64); contract requires E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 on the exact seed-730119 workload; fp32 arithmetic is allowed only if this metric holds.
+- `kernel.py`: make_inputs_numpy generates [w (1..32)*2^20, -w, small 0.25..0.75] then applies the fixed public column permutation; the kernel sums sequentially in fp32, so permuted order governs accumulation error.
 
-Rationale: The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 ≈ 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.
+Rationale: Large +w/-w terms (magnitudes up to ~3.36e7) cancel exactly in real arithmetic, leaving true row sums of only the 64 small terms (~8-32). Sequential fp32 accumulation rounds partial sums to ULPs up to 128 at 2^25-scale intermediate stages; if the permuted column order interleaves large and small terms before +w/-w cancellation completes, accumulated absolute rounding error can dwarf the ~32 true sum, pushing E far above 0.1.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t12: Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. This contradicts c2's claim that the reference norm is below or near the floor. Per-row reference values range from -3.8e-5 to 0.00926, confirming the eps*P'(a) derivative-scale perturbation dominates over the 0.003 offset.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: On the exact seed-730119 double-permuted matrix, left-to-right fp32 sequential summation is EXACT vs the float64 (Kahan cross-checked) reference: E = 0.0, max_abs_err = 0.0, zero rows exceed relative error 0.1. The feared cancellation error does not materialize because all large terms are integer multiples of 2^20 (exactly representable, exact cancellation) and the small 0.25-granularity terms sum exactly once the accumulator returns to small scale; reference row sums are 28.5-35.75. The claimed E-budget violation is rebutted for the in-scope workload.
+
+### c2 - `confirmed`
+
+Statement: run(*make_inputs()) on the specified CUDA workload returns a finite (64,) float32 output equal to the kernel's sequential fp32 sums without index/stride errors (no garbage or non-finite entries).
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt explicitly states every output must be finite on the specified workload, so verifying the output is finite and correctly indexed on run(*make_inputs()) is directly required by the stated contract.
+
+Scope evidence:
+- `problem.txt`: Contract: every output must be finite and E <= 0.1; only the final result on the specified input is in scope.
+
+Rationale: The single-program kernel assumes a (64,128) contiguous row-major input with K=128, R=64; any indexing or specialization deviation would show as garbage or non-finite values. Finiteness is explicitly contractually required, so it needs direct runtime confirmation.
+
+Evidence:
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: GPU run of run(*make_inputs()) produced a (64,) float32 output, all entries finite, bit-exactly matching the faithful left-to-right fp32 sequential emulation (max_abs_dev = 0.0) — no index/stride or garbage values. Combined with t12 (emulation equals float64 reference exactly), the in-scope output is both finite and contractually accurate.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Inputs are fixed: float32 coefficients (8,49) and points (8,) from make_inputs(); other inputs are out of scope.",
-    "Reference is evaluated in float64 from the stored float32 values: reference[i] = sum_{k=0..48} coefficients[i,k] * points[i]**k; coefficients[i,0] is the rounded stored float32, not the unrounded generating expression.",
-    "Output: finite float32 vector shape (8,); relative L2 error ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(8)) must be <= 0.0002.",
-    "Kernel is explicitly run with enable_fp_fusion=False, so every Horner multiply and add rounds separately to float32; this is part of the stated contract, not incidental.",
-    "Input generator sets coefficients[:,0] so the polynomial nearly cancels near point anchor 1.015625 (float64 construction + 0.003 offset), making the reference value small (~0.003 plus perturbation terms) relative to intermediate Horner magnitudes."
+    "Output must match a float64/high-accuracy reference row-sum of the original float32 (64,128) input, with relative L2 metric E = ||out-ref||_2 / max(||ref||_2, 0.008) <= 0.1 and all-finite outputs.",
+    "Only the exact generated workload (seed 730119, public PCG64 input and fixed column permutation) is in scope; any summation order or float32 arithmetic is allowed if E and finiteness hold.",
+    "Input is one contiguous float32 (64,128) matrix: columns are [w (32 cols, values 1..32 times 2^20), -w (32 cols), small (64 cols, 0.25..0.75)], then permuted columns.",
+    "Target hardware is NVIDIA T4, Triton kernel."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Single Triton program (grid (1,), BLOCK=32, N=8) handles all 8 rows in one block with masking; one thread lane per row is not required -- arange(0,32) with mask row<8.",
-    "Degree-48 Horner scheme: result starts at coefficient DEGREE=48, then static_range loop multiplies by point and adds coefficient k from 48 down to 0 -- algebraically the standard Horner recurrence.",
-    "All loads cast to float32; result is float32 throughout; store to preallocated float32 output tensor of shape (8,).",
-    "Launch disables FP fusion (enable_fp_fusion=False), matching the contract's per-operation float32 rounding assumption.",
-    "run() assumes inputs already on the right device and contiguous (flat pointer arithmetic `row*(DEGREE+1)+k` assumes row-major contiguous coefficients)."
+    "Kernel launches a single program with rows = tl.arange(0,64), accumulates each row's sum in a (64,) float32 vector, iterating j = 0..127 in ascending column order (kernel.py lines 7-12).",
+    "Input is assumed row-major contiguous with row stride K=128 (address X + rows*K + j); output is a (64,) float32 vector.",
+    "run() allocates float32 output on the input's device and passes K=values.shape[1], R=values.shape[0] as constexpr, with enable_fp_fusion=False (no FMA reassociation).",
+    "Summation is strictly sequential left-to-right in float32 per row; each intermediate partial sum is stored as float32."
   ],
   "open_questions": [
-    "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
-    "What relative L2 error does the float32 Horner kernel actually achieve on this workload (needs Experimenter run)?",
-  
-...[truncated 2173 chars]
+    "Exact fp32 sequential sum per row versus float64 reference: which rows exceed the tolerance if any? Needs runtime probe (Experimenter).",
+    "Whether the value magnitudes (<=32*2^20 \u2248 3.36e7, exponent < 2^25) keep fp32 rounding error small enough: worst-case fp32 sum error bound vs the small true sums (~magnitude 8-32) needs numeric evaluation on the actual permuted data."
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Float32 catastrophic-cancellation risk: large \u00b12^20-magnitude terms cancel, leaving a small true row sum (~8-32 from the small terms); fp32 sequential accumulation can carry absolute error on the order of ULP(2^
+...[truncated 1458 chars]
 
 ### t6 - record_claim - error
 
@@ -616,20 +618,20 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "make_inputs() engineers coefficients[:,0] so the polynomial nearly cancels at the anchor point 1.015625, leaving a true result on the order of 0.003 while intermediate Horner terms involve sums of ~N(0,1) coefficients times anchor^k up to ~2.09. Each of 48 sequential float32 roundings contributes relative error ~6e-8 against intermediate magnitudes, so absolute error can far exceed the ~0.003-scale result, potentially blowing past the 2e-4 relative-L2 tolerance. Needs runtime measurement.",
+  "rationale": "Large +w/-w terms (magnitudes up to ~3.36e7) cancel exactly in real arithmetic, leaving true row sums of only the 64 small terms (~8-32). Sequential fp32 accumulation rounds partial sums to ULPs up to 128 at 2^25-scale intermediate stages; if the permuted column order interleaves large and small terms before +w/-w cancellation completes, accumulated absolute rounding error can dwarf the ~32 true sum, pushing E far above 0.1.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Inputs are exactly the make_inputs() tensors; 'The numerical contract requires this error to be <= 0.0002' where error is ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) with float64 reference. 'Arbitrary alternative coefficients or points are outside the scope.'"
+      "summary": "Reference sums original float32 entries in real arithmetic (float64); contract requires E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 on the exact seed-730119 workload; fp32 arithmetic is allowed only if this metric holds."
     },
     {
-      "source": "kernel.py make_inputs_numpy",
-      "summary": "coefficients[:,0] is constructed in float64 to cancel sum of coefficients[:,1:]*anchor^k plus 0.003 offset, and points are anchor \u00b1 4e-5 noise -- a designed near-cancellation workload."
+      "source": "kernel.py",
+      "summary": "make_inputs_numpy generates [w (1..32)*2^20, -w, small 0.25..0.75] then applies the fixed public column permutation; the kernel sums sequentially in fp32, so permuted order governs accumulation error."
     }
   ],
-  "scope_rationale": "The claim tests the exact contract requirement that the kernel's relative L2 error on the sole in-scope workload (make_inputs() tensors) be <= 0.0002 against the float64 reference; problem.txt states this is the numerical contract for this fixed workload.",
-  "statement": "On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.",
+  "scope_rationale": "The contract requires E <= 0.1 against a float64 reference on exactly the seed-730119 workload (problem.txt); the kernel uses left-to-right fp32 accumulation whose rounding error on this specific permuted input directly determines whether that stated numeric requirement is violated.",
+  "statement": "The kernel's left-to-right float32 accumulation over the specifically permuted columns (seed 730119) can carry absolute rounding error on the order of tens-to-hundreds (ULP ~128 at 2^25-scale partial sums), which may exceed the 10% relative error budget E <= 0.1 given true row sums are only ~8-32.",
   "status": "open"
 }
 
@@ -637,48 +639,53 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "The generator adds a fixed 0.003 offset to each polynomial's near-cancellation value, so ||reference||_2 is plausibly near sqrt(8)*0.003 \u2248 0.0085 but point noise (4e-5 times derivative scale, potentially huge for degree 48) could push it either way. If ||reference||_2 is below 0.0028, the floor denominator makes the bound effectively absolute (~5.6e-7). The exact reference norm must be measured to interpret any error measurement.",
+  "rationale": "The single-program kernel assumes a (64,128) contiguous row-major input with K=128, R=64; any indexing or specialization deviation would show as garbage or non-finite values. Finiteness is explicitly contractually required, so it needs direct runtime confirmation.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Error metric denominator is max(||reference||_2, 0.001*sqrt(8)); 'The output must be a finite vector of shape (8,)' and tolerance <= 0.0002 on this fixed workload."
+      "summary": "Contract: every output must be finite and E <= 0.1; only the final result on the specified input is in scope."
     }
   ],
-  "scope_rationale": "Interpreting the contract's error metric max(||reference||_2, 0.001*sqrt(8)) requires knowing the actual reference norm on the fixed workload; this directly determines whether the 2e-4 tolerance is effectively relative or absolute for the sole in-scope input.",
-  "statement": "The reference L2 norm ||reference||_2 on this workload is below or near the 0.001*sqrt(8) \u2248 0.00283 floor, so the tolerance is effectively an absolute-error bound; pass/fail depends sensitively on the measured reference norm and per-row errors.",
+  "scope_rationale": "problem.txt explicitly states every output must be finite on the specified workload, so verifying the output is finite and correctly indexed on run(*make_inputs()) is directly required by the stated contract.",
+  "statement": "run(*make_inputs()) on the specified CUDA workload returns a finite (64,) float32 output equal to the kernel's sequential fp32 sums without index/stride errors (no garbage or non-finite entries).",
   "status": "open"
 }
 
 ### t10 - record_description_update - ok
 
 {
-  "contract_model": [
-    "Unchanged: fixed make_inputs() workload only; float64 reference from stored float32 values; relative L2 <= 0.0002 with floor max(||ref||_2, 0.001*sqrt(8)).",
-    "Additional contract nuance: reference[i] = c0 + sum_{k>=1} c_k p_i^k where c0 was constructed so c0 + sum c_k a^k = 0.003 + float32-rounding residual (a=1.015625); since p_i = a + eps_i with eps_i ~ N(0,4e-5), reference[i] approx 0.003 + rounding_residual_i + eps_i * P'(a) + O(eps^2)."
-  ],
+  "contract_model": [],
   "impact_on_claims": [],
   "kernel_model": [
-    "Unchanged: single-block float32 Horner, degree 48, enable_fp_fusion=False, masked store of 8 rows."
+    "The kernel loads each value as fp32 and adds it into an fp32 accumulator; all 64 rows are summed in parallel with the same fixed column order j=0..127 (kernel.py lines 9-11).",
+    "The effective column order applied by make_inputs_numpy is values[:, order][:, PERMUTATION], i.e. PCG64 permutation composed with the hardcoded PERMUTATION list; small terms (0.25-0.75) can appear at early positions before the +w/-w pairs complete, which is exactly the interleaving that maximizes sequential-fp32 cancellation loss."
   ],
   "open_questions": [
-    "What is the actual ||reference||_2 (is the 0.001*sqrt(8) floor active)?",
-    "What relative L2 error does the float32 Horner kernel actually achieve on this workload (needs Experimenter run)?",
-    "Does Triton with enable_fp_fusion=False round each multiply and add exactly as assumed?",
-    "What is the empirical scale of P'(a) per row (needed to decide whether the eps*P'(a) perturbation dominates the 0.003 offset in the reference) and the corresponding per-row error scale?"
+    "Per-row relative error vs the global E metric: if only some rows carry large error, E may still pass because ||ref||_2 pools all 64 rows; needs the actual per-row fp32-vs-float64 deltas from the exact generated matrix.",
+    "Can the reference be independently checked by two methods (float64 direct sum and e.g. pairwise/Kahan in float64) as the problem text allows, on the exact seed-730119 matrix?"
   ],
   "resolved_tasks": [],
   "risk_map": [
-    "Refinement for claims c1/c2: the reference is NOT simply ~0.003 per row. The derivative-scale perturbation eps_i*P'(a) (eps ~ 4e-5, P'(a) plausibly O(100-500) for degree 48 with N(0,1) coefficients) can contribute 0.004-0.02 per row, likely pushing ||reference||_2 well above the 0.00283 floor and making the tolerance genuinely relative.",
-    "That same large derivative also amplifies point sensitivity: a relative ulp error (~6e-8) in intermediate Horner values of magnitude comparable to |P'(a)|*a-terms can yield absolute output errors ~1e-5 or more; against a reference norm possibly ~0.02-0.06 this lands near the 2e-4 threshold -- the outcome is genuinely borderline and only a runtime measurement can settle it.",
-    "Float32 rounding residual in the stored coefficients[:,0] (ulp of the ~O
-...[truncated 1194 chars]
+    "Metric aggregation nuance: E is a single global L2 ratio over the 64-row output vector, not a per-row check; a few rows with large relative error could be diluted by other rows' small true sums (~8-32 each), so both per-row errors and global E should be probed.",
+    "Small-term flush risk: when the fp32 accumulator is at 2^20-2^25 scale, adding 0.25-granularity small terms rounds them away entirely (ULP 64-128 vs term 0.25-0.75); any small terms encountered before the +w/-w cancellation completes are lost, biasing the sum low by up to ~tens per row.",
+    "Experimenter probes should compute the reference in float64 on the exact make_inputs() matrix and compare against a faithful CPU emulation of left-to-right fp32 sequential summation plus the actual GPU output, so kernel-vs-emulation and emulation-vs-reference are separated."
+  ],
+  "scope_notes": [
+    "Finiteness and shape (64,) fp32 output plus index corr
+...[truncated 687 chars]
 
-### t11 - retrieve_experiment_history - ok
+### t11 - record_no_new_claims - ok
 
 {
-  "exists": false,
-  "source": "/root/trace_runs/extension_low32_r2/numerical_challenges/case_n/debate/tool_events.jsonl"
+  "decision": "no_new_claims",
+  "reason": "The ledger's open claims c1 (fp32 sequential cancellation error vs float64 reference on the exact seed-730119 permuted workload, possibly violating E <= 0.1) and c2 (output finiteness/indexing on run(*make_inputs())) fully cover the contract surface: the only in-scope behavior is the E metric and finiteness on the single specified workload. The describer's refinement (global L2 aggregation, small-term flush, double permutation) elaborates mechanisms already inside c1, and the workload is fully reproducible offline so the experimenter can decide both claims with one probe. No further distinct, testable in-scope hypotheses remain.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 10,
+  "turn": 6
 }
 
 ### t12 - run_claim_probe - ok
@@ -689,13 +696,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t12_probe.py",
-      "sha256": "ca520dd3ec7e9d1d4f3a4e47be06797edd52d8be98a56a719fa6e07c2589b713"
+      "sha256": "69b22ba24b48d40450d2b935fe7b51d5da4deedf241e3abeb670c36a365a6656"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t12_stdout.txt",
-      "sha256": "9c0ea33c5ff73fd5e97eaa71e39019238f4503b2cbeccbb1ef11fd668c1a6fe5"
+      "sha256": "d27f8ab6653533daf0c1cc5640f0df2bdd30d6e69f87d579ff6020eed0fc0e41"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -707,12 +714,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t12_json_result.json",
-      "sha256": "9de5913cf2670959aab9f757d45317d98365b72267702a08c7dcf388e6e1ddf4"
+      "sha256": "d82a7ebbfed71df36879f84a7ff85fe738e229f81a203461d9e5929ed1cdc48c"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the fixed make_inputs() workload, the float32 Horner kernel's relative L2 error ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)) exceeds 0.0002.",
-  "duration_s": 5.334492,
+  "claim_statement": "The kernel's left-to-right float32 accumulation over the specifically permuted columns (seed 730119) can carry absolute rounding error on the order of tens-to-hundreds (ULP ~128 at 2^25-scale partial sums), which may exceed the 10% relative error budget E <= 0.1 given true row sums are only ~8-32.",
+  "duration_s": 0.218143,
   "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
@@ -722,58 +729,108 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t12_probe.py",
-          "sha256": "ca520dd3ec7e9d1d4f3a4e47be06797edd52d8be98a56a719fa6e07c2589b713"
+          "sha256": "69b22ba24b48d40450d2b935fe7b51d5da4deedf241e3abeb670c36a365a6656"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t12_stdout.txt",
-          "sha256": "9c0ea33c5ff73fd5e97eaa71e39019238f4503b2cbeccbb1ef11fd668c1a6fe5"
+          "sha256": "d27f8ab6653533daf0c1cc5640f0df2bdd30d6e69f87d579ff6020eed0fc0e41"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+   
+...[truncated 2674 chars]
+
+### t13 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t13_probe.py",
+      "sha256": "525d067cc41523f6c5a2effc471b8f8fb62d9ee4e3e49a837107918d54507116"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t13_stdout.txt",
+      "sha256": "9bdb8ffb95bcec6d7ffd96564735bc44577d32e3d3dfb0c5700e9e90d74bcbb5"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t13_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t13_json_result.json",
+      "sha256": "7e0a9f60d5e0f2daed7cbd14457a8fc466c0dadba76a8edb8519c77408a4a619"
+    }
+  ],
+  "claim_id": "c2",
+  "claim_statement": "run(*make_inputs()) on the specified CUDA workload returns a finite (64,) float32 output equal to the kernel's sequential fp32 sums without index/stride errors (no garbage or non-finite entries).",
+  "duration_s": 4.421101,
+  "event_id": "t13",
+  "evidence_draft": {
+    "claim_id": "c2",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t13_probe.py",
+          "sha256": "525d067cc41523f6c5a2effc471b8f8fb62d9ee4e3e49a837107918d54507116"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t13_stdout.txt",
+          "sha256": "9bdb8ffb95bcec6d7ffd96564735bc44577d32e3d3dfb0c5700e9e90d74bcbb5"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t12_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca4
-...[truncated 4907 chars]
+          "path": "probes/t13_stderr.txt",
+          "sha256": "e3b0c44298fc1c
+...[truncated 1799 chars]
 
-### t13 - finalize_probe_evidence - ok
+### t14 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Ran the exact make_inputs() workload through kernel.run(), computed the float64 reference from stored float32 inputs. Relative L2 error = 4.729e-4, which exceeds the 2e-4 tolerance by ~2.4x. ||output-reference||_2 = 7.48e-6, denominator = ||reference||_2 = 0.015817 (floor not active). All outputs finite, shape (8,). The catastrophic-cancellation concern is realized: float32 Horner per-row absolute errors of 6e-7 to 5.8e-6 against reference values of 3e-5 to 9e-3 magnitude.",
-  "supports": "confirmed",
+  "summary": "On the exact seed-730119 double-permuted matrix, left-to-right fp32 sequential summation is EXACT vs the float64 (Kahan cross-checked) reference: E = 0.0, max_abs_err = 0.0, zero rows exceed relative error 0.1. The feared cancellation error does not materialize because all large terms are integer multiples of 2^20 (exactly representable, exact cancellation) and the small 0.25-granularity terms sum exactly once the accumulator returns to small scale; reference row sums are 28.5-35.75. The claimed E-budget violation is rebutted for the in-scope workload.",
+  "supports": "rebutted",
   "tool_event_id": "t12"
 }
 
-### t14 - append_evidence - ok
+### t15 - finalize_probe_evidence - ok
 
 {
-  "id": "c2.e1",
-  "summary": "Same probe t12 on the exact make_inputs() workload: ||reference||_2 = 0.015817 measured in float64 from stored float32 inputs, which is ~5.6x above the 0.001*sqrt(8) = 0.002828 floor. The floor is not active; the tolerance is genuinely relative, not effectively absolute. This contradicts c2's claim that the reference norm is below or near the floor. Per-row reference values range from -3.8e-5 to 0.00926, confirming the eps*P'(a) derivative-scale perturbation dominates over the 0.003 offset.",
-  "supports": "rebutted"
-}
-
-### t15 - update_claim_status - ok
-
-{
-  "id": "c2",
-  "status": "rebutted"
+  "claim_id": "c2",
+  "claim_status": "confirmed",
+  "evidence_id": "c2.e1",
+  "summary": "GPU run of run(*make_inputs()) produced a (64,) float32 output, all entries finite, bit-exactly matching the faithful left-to-right fp32 sequential emulation (max_abs_dev = 0.0) \u2014 no index/stride or garbage values. Combined with t12 (emulation equals float64 reference exactly), the in-scope output is both finite and contractually accurate.",
+  "supports": "confirmed",
+  "tool_event_id": "t13"
 }
 
 ### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the only in-scope contract requirement (relative L2 <= 0.0002 on the fixed make_inputs() workload vs float64 reference) is directly measured by probe t12 as violated (4.729e-4, floor inactive, all finite, shape (8,)). Claim c1 is confirmed with in-scope evidence; c2 is rebutted. The evidence already covers every stated contract element (finiteness, shape, error metric, denominator floor, float64 reference from stored float32 inputs), so no additional testable in-scope claims are warranted.",
+  "reason": "Final review: both in-scope claims are resolved with decisive runtime evidence. c1 is rebutted \u2014 the left-to-right fp32 sequential summation on the exact seed-730119 double-permuted matrix matches the float64 (Kahan cross-checked) reference exactly (E = 0.0, max_abs_err = 0.0), because all large \u00b1w terms are integer multiples of 2^20 and cancel exactly, and small 0.25-granularity terms sum exactly once the accumulator returns to small scale. c2 is confirmed \u2014 the actual GPU run of run(*make_inputs()) returned a finite (64,) float32 output bit-matching the fp32 sequential emulation with zero deviation, which combined with t12 means the contractual E <= 0.1 and finiteness requirements are satisfied. The only in-scope behavior is this single specified workload; no further testable hypotheses remain.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
   "reviewed_tool_event_count": 15,
-  "turn": 11
+  "turn": 9
 }
 
 ### t17 - record_verdict - ok
@@ -781,20 +838,20 @@ Evidence:
 {
   "confidence": 0.95,
   "decisive_claims": [
-    "c1"
+    "c2"
   ],
-  "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually assumed. This is not an excusable rounding/accumulation deviation: the contract explicitly fixes a numeric tolerance and this is a ~2.4x violation of it on the fixed workload the contract defines as the entire scope. Finiteness and shape requirements pass, but the accuracy requirement \u2014 the core of this contract \u2014 fails.",
-  "verdict": "reject"
+  "reason": "The contract covers only the single specified seed-730119 workload with E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 and all-finite outputs. Probe t12 shows the kernel's exact left-to-right fp32 sequential summation on the exact double-permuted input matrix matches the float64 (Kahan cross-checked) reference exactly (E = 0.0, max_abs_err = 0.0, zero rows exceeding tolerance), rebutting the catastrophic-cancellation concern (c1) \u2014 all large \u00b1w terms are integer multiples of 2^20 and cancel exactly. Probe t13 confirms (c2) the actual GPU run of run(*make_inputs()) returned a finite (64,) float32 output bit-identical to the fp32 sequential emulation with zero deviation, so the contract's finiteness and accuracy clauses are both satisfied on the in-scope input. No open claims remain; skeptic reviewed the latest evidence and found no new claims.",
+  "verdict": "trust"
 }
 
 ## Verdict
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-24T00:19:11Z",
+  "created_at": "2026-09-23T21:37:49Z",
   "decisive_claims": [
-    "c1"
+    "c2"
   ],
-  "reason": "Claim c1 is confirmed with in-scope evidence tied to the stated input domain. Probe t12 ran the only in-scope workload \u2014 the exact tensors from make_inputs() \u2014 through kernel.run(), computed the contractually required float64 reference from the stored float32 coefficient/point values, and measured relative L2 error = 4.729e-4 versus the problem.txt requirement \"The numerical contract requires this error to be <= 0.0002.\" The floor is inactive (||reference||_2 = 0.0158 vs 0.001*sqrt(8) = 0.00283, so the denominator is the reference norm itself, rebutting c2's floor hypothesis), outputs are finite with shape (8,), and the kernel's separate-rounding float32 Horner (enable_fp_fusion=False) is contractually assumed. This is not an excusable rounding/accumulation deviation: the contract explicitly fixes a numeric tolerance and this is a ~2.4x violation of it on the fixed workload the contract defines as the entire scope. Finiteness and shape requirements pass, but the accuracy requirement \u2014 the core of this contract \u2014 fails.",
-  "verdict": "reject"
+  "reason": "The contract covers only the single specified seed-730119 workload with E = ||out-ref||_2/max(||ref||_2,0.008) <= 0.1 and all-finite outputs. Probe t12 shows the kernel's exact left-to-right fp32 sequential summation on the exact double-permuted input matrix matches the float64 (Kahan cross-checked) reference exactly (E = 0.0, max_abs_err = 0.0, zero rows exceeding tolerance), rebutting the catastrophic-cancellation concern (c1) \u2014 all large \u00b1w terms are integer multiples of 2^20 and cancel exactly. Probe t13 confirms (c2) the actual GPU run of run(*make_inputs()) returned a finite (64,) float32 output bit-identical to the fp32 sequential emulation with zero deviation, so the contract's finiteness and accuracy clauses are both satisfied on the in-scope input. No open claims remain; skeptic reviewed the latest evidence and found no new claims.",
+  "verdict": "trust"
 }

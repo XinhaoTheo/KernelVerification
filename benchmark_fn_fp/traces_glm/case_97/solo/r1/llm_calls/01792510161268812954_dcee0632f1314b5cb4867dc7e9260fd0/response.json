@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-8664cd2e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll exhaustively test every legal FP16 value in [-10,10] against the contract tolerance.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9666e18f47171e46",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_97\\\")\\nimport kernel as K\\n\\n# enumerate every finite FP16 value in [-10,10], including signed zeros and subnormals\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nfp16 = bits.to(torch.uint16).view(torch.float16)\\nvals = fp16[torch.isfinite(fp16) & (fp16.abs() <= 10.0)]\\n# include -0.0 explicitly? -0.0 is bit 0x8000 which is finite; included\\nprint(\\\"num legal values:\\\", vals.numel(), \\\"min:\\\", vals.min().item(), \\\"max:\\\", vals.max().item())\\nx = vals.to(\\\"cuda\\\")\\nout = K.run(x)\\nref = torch.expm1(x.to(torch.float64)).to(\\\"cuda\\\")  # target in real arithmetic\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-7 + 1e-6 * ref.abs()\\nbad = err > tol\\nprint(\\\"violations:\\\", int(bad.sum()))\\nif bad.any():\\n    idxs = bad.nonzero().flatten()\\n    print(\\\"worst cases:\\\")\\n    order = (err - tol).argsort(descending=True)[:10]\\n    for i in order.tolist():\\n        print(f\\\"x={x[i].item():.6g} out={out[i].item():.9g} ref={ref[i].item():.9g} err={err[i].item():.3e} tol={tol[i].item():.3e}\\\")\\ndata = {\\n  \\\"n_legal_values\\\": int(vals.numel()),\\n  \\\"n_violations\\\": int(bad.sum()),\\n  \\\"max_abs_err\\\": float(err.max()),\\n  \\\"max_violation_margin\\\": float((err-tol).max()),\\n  \\\"worst_x\\\": float(x[int((err-tol).argmax())]),\\n}\\nprint(json.dumps(data))\\n\", \"expected_signal\": \"count of tolerance violations over the full legal FP16 domain\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The FP16 domain in [-10,10] has ~15k values (15361 values? all finite fp16 from -10 to 10 including subnormals). Exhaustive test: enumerate all finite FP16 values in [-10,10], run kernel, compare to float64 expm1. That's ≤131072 elements, one call. Run probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510162,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 549,
+    "prompt_tokens": 10574,
+    "total_tokens": 11123,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 76,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

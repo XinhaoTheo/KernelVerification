@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-2132558e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe failed due to my own conversion bug: I converted the uint16 bit patterns numerically with `.to(torch.float16)` instead of reinterpreting with `.view(torch.float16)`. Fixing and rerunning the exhaustive test.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-84a5250daff81849",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_98\\\")\\nimport kernel\\n\\nbits = np.arange(0, 65536, dtype=np.uint16)\\nv = torch.from_numpy(bits.view(np.float16).copy()).to(torch.float32)\\nmask = torch.isfinite(v) & (v.abs() <= 10.0)\\nvals = torch.from_numpy(bits[mask.numpy()].copy()).view(torch.float16).to(\\\"cuda\\\")\\nn = vals.numel()\\nprint(\\\"num legal fp16 values:\\\", n)\\n\\nout = kernel.run(vals)\\nref = torch.expm1(vals.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-7 + 1e-6 * ref.abs()\\nbad = err > tol\\nprint(\\\"num violations:\\\", int(bad.sum()))\\nidx = torch.nonzero(bad).flatten()\\nratio = err / tol\\nprint(\\\"max err/tol ratio:\\\", float(ratio.max()))\\nfor i in idx[:15]:\\n    print(float(vals[i]), float(out[i]), float(ref[i]), float(err[i]), float(tol[i]))\\nprint(\\\"output finite:\\\", bool(torch.isfinite(out).all()))\\n\\nprint(json.dumps({\\\"metric\\\":\\\"abs err vs contract tol, exhaustive FP16 in [-10,10]\\\",\\n  \\\"n\\\":n, \\\"violations\\\":int(bad.sum()), \\\"max_ratio\\\":float(ratio.max()),\\n  \\\"worst_x\\\": float(vals[int(torch.argmax(ratio))])}))\\n\", \"expected_signal\": \"count of violations\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe failed: my mask used float32 view but subnormal FP16 values — the issue: comparing FP16 abs() in float32... Actually error: values like 65520 (fp16 max) — abs<=10.0 should filter. But 37378 legal values counted yet validation failed. Problem: `x.abs() <= 10.0` on FP16 tensor with 10.0 cast to fp16 → 10.0 exactly representable, fine. isfinite on fp16 fine. Hmm — maybe torch.from_numpy of bits[mask.numpy()] — mask is a CPU bool tensor from float32 view, fine. Wait, issue: `v = bits.view(np.float16).to(torch.float32)` — torch.from_numpy on a view with non-contiguous? bits.view(np.float16) doubles length 65536→131072. Fine. Then `torch.from_numpy(bits[mask...])` where mask numpy length matches. Hmm but the fp16 -0.0 abs fine. Maybe NaN issue: isfinite works. Hmm 37378 values — but \"all input values must be finite and in [-10,10]\" raised. Maybe the .to(torch.float16) reinterpretation: bits[mask.numpy()] is uint16 array; torch.from_numpy on a boolean-mask-indexed copy → new array, fine. `.to(torch.float16)` converts uint16 integers to fp16 as integers! That's the bug — need `.view(torch.float16)`. Fix that.\n\nAlso note validate checks `x.abs() <= 10.0` — in fp16, 10.0 fine.\n\nRerun with view(torch.float16). Also chunk to keep N ≤ 131072 — 37378 fine."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510167,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 752,
+    "prompt_tokens": 13251,
+    "total_tokens": 14003,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 360,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 347,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

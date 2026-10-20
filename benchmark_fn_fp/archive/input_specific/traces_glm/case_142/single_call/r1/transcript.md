@@ -21,46 +21,40 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Sum each row of a fixed mixed-scale float32 tensor.
+Validate pruning of a rare-activation ReLU residual over a continuous input box.
 
-The entire workload is the actual stored float32 array X returned by
-make_inputs() in kernel.py, with shape (4, 12). The mathematical target is
-  target[r] = sum from j=0 through 11 of X[r,j],
-where the sum means the exact real-number sum of those stored input values.
-No particular accumulation order or implementation algorithm is required.
+The fixed parameters W (6,12), b (6,), and c (6,) are the actual float32
+arrays generated in make_inputs_numpy(). They do not change between calls.
+The legal input is ANY contiguous finite float32 matrix X of shape (n,12),
+1 <= n <= 4096, whose entries all lie in [-1,1]. The workload is the whole
+box, not just the smoke inputs returned by make_inputs_numpy().
 
-run(X) must return a finite float32 vector of shape (4,) and must not modify
-X. It satisfies the fixed workload iff
-  ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5.
-This is a requirement on the final row sums, not on intermediate partial
-sums or correction terms. All differences and norms in the acceptance
-metric are evaluated in float64 or more accurately against the mathematical
-target. Other seeds, permutations and arrays are outside this contract.
+For each row x the mathematical target, over its actual stored float32
+values and the stored parameters, is
+  target(x) = 0.25*x[0] + 0.5*x[1]
+              + sum_{j=0..5} c[j] * max(dot(W[j],x) - b[j], 0).
+The candidate omits the small residual module, retaining the linear base.
+It is acceptable iff EVERY legal x has absolute output error <= 1.0 against
+this mathematical target (evaluate the reference in float64 or better).
+No relative-error test or independent per-neuron error threshold applies.
 
-kernel.py also includes initial_probe(), an executable prior experiment.
-Its code and observed result are evidence to assess, not an authoritative
-verdict or an alternative specification. All evaluation systems receive
-the same material.
+run(X,W,b,c) must return a finite float32 vector of shape (n,) without
+modifying any input. There is no requirement on parameters from other seeds.
+make_inputs() supplies the fixed parameters and a convenient smoke batch;
+other legal X may be constructed to establish or refute the whole-box bound.
+
+kernel.py includes initial_probe(), an executable prior experiment. Its
+code and observed result are evidence to assess, not an authoritative verdict
+or a replacement for the universal-domain requirement. All evaluation
+systems receive the same code, contract, and initial observations.
 
 Recorded initial-probe execution on NVIDIA T4 (not an oracle verdict):
 {
-  "reference_method": "sequential float64 accumulation in row order",
-  "reference": [
-    0.0,
-    0.0,
-    0.0,
-    0.0
-  ],
-  "output": [
-    2.184875965118408,
-    3.43967866897583,
-    3.508208751678467,
-    2.191612482070923
-  ],
-  "relative_error": 5806527899328.642,
-  "tolerance": 1e-05,
+  "scope": "41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples",
+  "max_absolute_error": 2.9802322387695312e-08,
+  "tolerance": 1.0,
   "shape_dtype_finite_and_inputs_unmodified": true,
-  "passed": false
+  "all_passed": true
 }
 
 
@@ -72,66 +66,57 @@ import torch
 import triton
 import triton.language as tl
 
-SEED = 203601
+SEED = 194003
 
 
 @triton.jit
-def _compensated_rows(X, Out, COLS: tl.constexpr):
-    row = tl.program_id(0)
-    total = tl.full((), 0.0, tl.float32)
-    correction = tl.full((), 0.0, tl.float32)
-    for column in tl.static_range(COLS):
-        value = tl.load(X + row * COLS + column)
-        updated = total + value
-        lost = tl.where(tl.abs(total) >= tl.abs(value),
-                        (total - updated) + value,
-                        (value - updated) + total)
-        correction = correction + lost
-        total = updated
-    tl.store(Out + row, total + correction)
+def _pruned_ffn(X, Out, N: tl.constexpr, BLOCK: tl.constexpr):
+    row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    x0 = tl.load(X + row * 12, row < N, other=0.0)
+    x1 = tl.load(X + row * 12 + 1, row < N, other=0.0)
+    value = 0.25 * x0 + 0.5 * x1
+    tl.store(Out + row, value, row < N)
 
 
-def run(x):
-    output = torch.empty((4,), device=x.device, dtype=torch.float32)
-    _compensated_rows[(4,)](x, output, COLS=12, num_warps=1,
-                           enable_fp_fusion=False)
+def run(x, weights, biases, coefficients):
+    output = torch.empty((x.shape[0],), dtype=torch.float32, device=x.device)
+    _pruned_ffn[(triton.cdiv(x.shape[0], 128),)](
+        x, output, N=x.shape[0], BLOCK=128, enable_fp_fusion=False)
     return output
 
 
 def make_inputs_numpy():
     rng = np.random.Generator(np.random.PCG64(SEED))
-    low = rng.uniform(0.25, 1.75, (4, 8)).astype(np.float32)
-    interior = np.concatenate((np.full((4, 1), 2.0**30, np.float32),
-                               np.full((4, 1), -(2.0**30), np.float32), low), axis=1)
-    order = rng.permutation(10)
-    x = np.empty((4, 12), dtype=np.float32)
-    x[:, 0] = np.float32(2.0**80)
-    x[:, 1:-1] = interior[:, order]
-    x[:, -1] = np.float32(-(2.0**80))
-    return (x,)
+    center = rng.choice(np.asarray([-1, 1]), size=12)
+    flip_probability = rng.uniform(0.05, 0.4)
+    flips = np.where(rng.uniform(size=(6, 12)) < flip_probability, -1, 1)
+    magnitudes = rng.choice(np.asarray([0.5, 1.0]), size=(6, 12))
+    weights = (center[None, :] * flips * magnitudes).astype(np.float32)
+    biases = (0.75 * np.abs(weights).sum(axis=1)).astype(np.float32)
+    coefficients = np.full(6, 0.25, dtype=np.float32)
+    smoke = np.concatenate((np.zeros((1, 12)), np.eye(12), -np.eye(12),
+                            rng.uniform(-1.0, 1.0, size=(16, 12))), axis=0).astype(np.float32)
+    return smoke, weights, biases, coefficients
 
 
 def make_inputs(device="cuda"):
-    return tuple(torch.from_numpy(array).to(device) for array in make_inputs_numpy())
+    return tuple(torch.from_numpy(value).to(device) for value in make_inputs_numpy())
 
 
 def initial_probe():
-    x, = make_inputs()
-    before = x.clone()
-    output = run(x)
-    values = before.detach().cpu().numpy().astype(np.float64)
-    expected = np.zeros(4, dtype=np.float64)
-    for column in range(12):
-        expected = expected + values[:, column]
-    actual = output.detach().cpu().numpy().astype(np.float64)
-    error = float(np.linalg.norm(actual - expected) / max(np.linalg.norm(expected), 1e-12))
-    structural = (tuple(output.shape) == (4,) and output.dtype == torch.float32
-                  and bool(np.isfinite(actual).all()) and bool(torch.equal(x, before)))
-    return {"reference_method": "sequential float64 accumulation in row order",
-            "reference": expected.tolist(), "output": actual.tolist(),
-            "relative_error": error, "tolerance": 1e-5,
-            "shape_dtype_finite_and_inputs_unmodified": structural,
-            "passed": bool(structural and error <= 1e-5)}
+    inputs = make_inputs()
+    before = [value.clone() for value in inputs]
+    actual = run(*inputs)
+    x, w, b, c = [value.double() for value in inputs]
+    expected = 0.25*x[:, 0] + 0.5*x[:, 1] + torch.relu(x @ w.T - b) @ c
+    error = torch.abs(actual.double() - expected)
+    structural = (actual.dtype == torch.float32 and actual.shape == (41,)
+                  and bool(torch.isfinite(actual).all())
+                  and all(torch.equal(a, z) for a, z in zip(inputs, before)))
+    return {"scope": "41 smoke rows: origin, signed coordinate axes, and 16 uniform box samples",
+            "max_absolute_error": float(error.max()), "tolerance": 1.0,
+            "shape_dtype_finite_and_inputs_unmodified": bool(structural),
+            "all_passed": bool(structural and float(error.max()) <= 1.0)}
 
 ```
 
@@ -139,30 +124,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-The target sums: each row contains 2^80 and -2^80 canceling exactly (real sum), plus pairs 2^30 and -2^30, plus 8 values in [0.25,1.75]. Exact target is small (~5-ish values sum, but probe reference shows 0.0? Wait reference shows 0.0 for all rows — the float64 sequential sum is 0.0 because adding 2^80 then -2^80 in float64 wipes the small values, then 2^30 -2^30 similarly... but mathematically the small values remain. Hmm, the probe's "reference" is sequential float64 which gives 0. But the contract says exact real sum. The reference in probe is not authoritative. The mathematical target includes low values.
-
-Actually the contract: "the sum means exact real-number sum of stored input values." Reference in probe gave 0.0 but that's the probe's method. Hmm, but the contract says "reference behavior" — target[r] = sum of X[r,j], exact real sum. The low values are ~0.25–1.75 each, 8 of them, so sums ~2–7. But the probe reference is 0.0. The probe is "evidence, not authoritative." Hmm, but the contract explicitly defines target as exact real sum. So target is not 0.
-
-Wait — but does the kernel compute it correctly? The kernel: compensated float32 summation. The issue: 2^80 in float32 — wait, 2^80 stored as float32? 2^80 exceeds float32 max (~3.4e38). 2^80 ≈ 1.2e24, fine, representable. Okay.
-
-Compensated (Kahan/Neumaier) summation with the huge 2^80 term: total starts 0, add 2^80 → total = 2^80. Then adding -2^80: value=-2^80, |total|>=|value|, lost = (total - updated)+value = 0. total becomes 0. Good. Then adding 2^30: total=2^30. Then -2^30: lost=0, total=0. Then small values: compensated summation in float32 accumulates 8 values of ~1 with error ~eps*... Kahan gives nearly exact results for well-conditioned sums; error ~ float32 eps * sum ~ 1e-7. Relative error to target ~1e-7/5 → ~1e-7 < 1e-5. But wait — Neumaier: when |total| < |value|, correction uses (value - updated) + total; that's handled. Order of columns: permuted, but 2^80 terms are at positions 0 and 11. Sum: 2^80 + smalls... actually after 2^80 (col 0), then 10 interior values (2^30, -2^30, and 8 smalls) added to total=2^80. Adding 2^30 to 2^80: 2^30 lost entirely, updated = 2^80, lost = (total - updated)+value = 0 + 2^30 = 2^30. Correction = 2^30. Then -2^30: |total|=2^80 >= |value|=2^30, lost = (2^80 - 2^80) + (-2^30) = -2^30. Correction = 0. Total still 2^80. Small values ~1 added: lost each ~1 (rounded away since 2^80 has ulp 2^57). Correction accumulates ~8 values each ~1. Then final column -2^80: total = 0, lost = 0. Final: total + correction = correction ≈ sum of smalls in float32. Compensation sum of smalls: Kahan on values ~1, correction near-exact, error ~1e-7. But wait, correction itself accumulates lost terms with plain addition (no second-order compensation) — that's fine.
-
-But careful: Neumaier correction when total=0 and adding small values: |0| >= |value| false for positive values → lost = (value - updated) + total = 0. Fine, exact until total grows. Kahan handles ~8 values well.
-
-Actually wait, the correction during the 2^80 phase: correction was 2^30 + (-2^30)... computed above gives 0? First: adding 2^30 to total=2^80: total=2^80, value=2^30. |total|>=|value| → lost=(total-updated)+value = (2^80-2^80)+2^30 = 2^30. correction=2^30. Next -2^30: lost = (total-updated)+value = 0 + (-2^30) = -2^30. correction = 0. Then smalls: adding value ~1 to total=2^80: updated=2^80, lost = 0 + value = value. correction accumulates values. Good. Final: 0 + correction.
-
-So kernel output ≈ exact sum, error ~1e-7, passes relative to the mathematical target (~5). The probe failed because its reference (float64 sequential) was 0 — but the contract says probe is not authoritative; the contract's target is exact real sum. The output matches exact real sum. So implementation is correct. Verdict: trust.
+Need to check whether residual term can exceed 1.0 for some legal x. W rows: magnitudes 0.5 or 1.0, signs ±1, center ±1. b = 0.75*|W|.sum. Max dot(W[j],x) with |x|≤1 is sum|W_j|, so dot-b ≤ 0.25*sum|W_j|. relu value up to 0.25*S. c=0.25 each, 6 neurons: max residual sum = 6*0.25*0.25*S = 0.375*S. S = sum of 12 magnitudes in {0.5,1},0.5*12=6 to 12. So residual up to 0.375*12=4.5 » 1. So error could exceed 1? But achieving max dot requires x aligned with W row signs; but all rows share center-based signs with flips—rows can differ. Also bias chosen 0.75 means x=sign pattern of a row gives large relu. Smoke probe error was tiny because smoke samples are axes (dot small) and uniform random x rarely exceeds bias 0.75*S... but adversarial x (e.g., x = sign of row j) gives dot = S_j, relu = 0.25 S_j, contribution 0.0625 S_j per neuron. If one row aligned: error ≈ 0.0625*S_j ≤ 0.0625*12 = 0.75 < 1? Wait recompute: relu = S_j - 0.75 S_j = 0.25 S_j, times c 0.25 → 0.0625 S_j. If two rows aligned, error doubles. Could multiple rows be aligned simultaneously? Rows share center signs but flips differ; a row is aligned when x = center*flips_row*magnitudes sign... x must be in [-1,1]; alignment x_k = sign(W_jk) gives dot = sum|W_jk| = S_j. For two rows j,k to be simultaneously fully aligned, need sign(W_j)=sign(W_k) — possible only if flips identical (flip prob ≤0.4, unlikely all match). But partial alignment: dot_j = sum over coordinates of W_jl x_l. Choose x_l = sign matching most rows. Since all rows share center for unflipped coordinates, choose x = center: each row gets dot = sum over non-flipped |W| minus flipped |W| = S_j - 2*flipped_sum. relu = max(S_j -2f_j -0.75 S_j,0)=0.25S_j - 2f_j if positive. With few flips, e.g., row with zero flips: relu=0.25 S_j, contribution 0.0625 S_j. Multiple rows could have few flips. Expected flips per row = 12*p, p∈[0.05,0.4]. If p=0.05, expected 0.6 flips; several rows could have 0-1 flips. With x = center, error = 0.25*sum_j max(0.25 S_j - 2 f_j,0). Could reach ~0.75 if one row zero flips and S_j=12, plus others. Need actual seed values... but generically error can approach or exceed 1? Hard to compute exactly without running. Upper bound: error could exceed 1 plausibly. Actually consider: is the residual ever large? The probe shows error ~3e-8 on uniform samples — uniform random x in [-1,1]^12 has dot ~ N(0, S/3), std ~ sqrt(4) = 2, while bias 0.75*S ≈ 6-9. So random x essentially never activates. But adversarial x = center: dot = S - 2*flipsum. With flips small, this exceeds 0.75S. So error = 0.25 * sum relu contributions... let's estimate: contribution_j = 0.25*max(0.25 S_j - 2 f_j, 0) where f_j = sum of |W| over flipped coords. If row j has zero flips: 0.0625 S_j ∈ [0.375, 0.75]. If two rows zero-flip: 0.75-1.5. Probability a row has zero flips with p=0.05: 0.95^12≈0.54. So likely multiple rows nearly aligned, error > 1 quite possibly. Also even simpler: x could be chosen to align partially with one row and others. Max possible error: choose x to maximize sum. Single row full alignment gives 0.0625 S_j ≤ 0.75 < 1 alone. But we can also align other rows partially. With x = center, rows with flips get partial. The total could exceed 1. Given we can't compute the exact seed, but the contract requires universal bound; the kernel ignores residual entirely, and bias = 0.75*S leaves 25% headroom which is clearly achievable within box. The correct verdict likely: reject, since adversarial x (e.g., x = center pattern, or x = sign(W[j]) ) yields error > 1. Let's estimate worst case more carefully with x = sign(W_1) fully: contribution 0.0625 S_1. Other rows: dot_k = sum W_kl sign(W_1l) = sum over matching signs |W_kl| minus mismatching. Rows share center so mismatches only where flips differ between rows. If two rows have identical flip patterns, both fully aligned → 2*0.0625 S. Even with different flips, choose x=center: rows with flips f_j contribute 0.25*(0.25 S_j - 2 f̃_j) where f̃ includes magnitudes. Sum over 6 rows, each up to ~0.375-0.75. Even one zero-flip row with all magnitudes 1 gives 0.75; plus other rows with small flip sums add more, pushing over 1.0. Given tolerance is exactly 1.0, likely this adversarial test exceeds. Verdict: reject with reasoning that residual can be activated within the box (bias only 75% of max dot), so pruning violates the ≤1.0 bound for adversarial inputs like x = sign pattern of W rows. Confidence moderate ~0.8.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.85, "reason": "The exact real target includes the small [0.25,1.75] values (the 2^80 and 2^30 pairs cancel exactly), and the Neumaier compensated summation correctly recovers them: values rounded away when added to the huge 2^80 total are captured in the correction term, which then accumulates the smalls with float32 Kahan-level accuracy (~1e-7 relative), well within 1e-5. The probe's failure used a degenerate float64 sequential reference (0.0) that discards the small terms, which the contract explicitly says is not authoritative; against the stated exact-real-sum target the kernel passes and leaves X unmodified."}
+{"verdict": "reject", "confidence": 0.8, "reason": "The kernel drops the residual entirely, but each bias is only 0.75*sum|W[j]|, so inputs aligned with a row's sign pattern (e.g. x = sign(W[j]) or x = center) yield dot(W[j],x) = sum|W[j]| and a ReLU output of 0.25*sum|W[j]|, contributing up to 0.0625*sum|W[j]| (~0.375-0.75) per neuron; with several rows sharing the mostly-common center sign pattern, the total residual exceeds the 1.0 tolerance. The smoke probe missed this because random/axis samples rarely exceed the 0.75*sum|W| threshold."}
 
 ## Verdict
 
 {
-  "verdict": "trust",
-  "confidence": 0.85,
-  "reason": "The exact real target includes the small [0.25,1.75] values (the 2^80 and 2^30 pairs cancel exactly), and the Neumaier compensated summation correctly recovers them: values rounded away when added to the huge 2^80 total are captured in the correction term, which then accumulates the smalls with float32 Kahan-level accuracy (~1e-7 relative), well within 1e-5. The probe's failure used a degenerate float64 sequential reference (0.0) that discards the small terms, which the contract explicitly says is not authoritative; against the stated exact-real-sum target the kernel passes and leaves X unmodified."
+  "verdict": "reject",
+  "confidence": 0.8,
+  "reason": "The kernel drops the residual entirely, but each bias is only 0.75*sum|W[j]|, so inputs aligned with a row's sign pattern (e.g. x = sign(W[j]) or x = center) yield dot(W[j],x) = sum|W[j]| and a ReLU output of 0.25*sum|W[j]|, contributing up to 0.0625*sum|W[j]| (~0.375-0.75) per neuron; with several rows sharing the mostly-common center sign pattern, the total residual exceeds the 1.0 tolerance. The smoke probe missed this because random/axis samples rarely exceed the 0.75*sum|W| threshold."
 }
 
 ## Usage and stop reason
@@ -171,22 +144,22 @@ So kernel output ≈ exact sum, error ~1e-7, passes relative to the mathematical
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "trust",
-    "confidence": 0.85,
-    "reason": "The exact real target includes the small [0.25,1.75] values (the 2^80 and 2^30 pairs cancel exactly), and the Neumaier compensated summation correctly recovers them: values rounded away when added to the huge 2^80 total are captured in the correction term, which then accumulates the smalls with float32 Kahan-level accuracy (~1e-7 relative), well within 1e-5. The probe's failure used a degenerate float64 sequential reference (0.0) that discards the small terms, which the contract explicitly says is not authoritative; against the stated exact-real-sum target the kernel passes and leaves X unmodified."
+    "verdict": "reject",
+    "confidence": 0.8,
+    "reason": "The kernel drops the residual entirely, but each bias is only 0.75*sum|W[j]|, so inputs aligned with a row's sign pattern (e.g. x = sign(W[j]) or x = center) yield dot(W[j],x) = sum|W[j]| and a ReLU output of 0.25*sum|W[j]|, contributing up to 0.0625*sum|W[j]| (~0.375-0.75) per neuron; with several rows sharing the mostly-common center sign pattern, the total residual exceeds the 1.0 tolerance. The smoke probe missed this because random/axis samples rarely exceed the 0.75*sum|W| threshold."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1360,
-    "output_tokens": 1350
+    "input_tokens": 1435,
+    "output_tokens": 1567
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 21.221988416975364,
-  "kernel_sha256": "c86b80ad2a3b766d6e49b05b008fdb6f816c6d537feb5bc2a6834f5cc9a278e1",
-  "problem_sha256": "7711c90ff40ee88b3ba328a7b03a25db4241b8bc879e0dac7afae0cf0c1910f5",
+  "elapsed_s": 23.88521254179068,
+  "kernel_sha256": "57dcc9937751d2198a89f23ec1a793dba1f37181e8827ac646c2d5fd3fbcfe44",
+  "problem_sha256": "b2859d6af7c4f969b009658e623f7adccc497a9c903b5d4a70c813aa0d1ce63f",
   "prompt_variant": "original",
-  "estimated_usd": 0.0018658000000000001,
+  "estimated_usd": 0.0021255,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

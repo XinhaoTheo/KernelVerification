@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-897d5bef",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes: c1 (intrinsic polynomial error in FP64 over all representable |x|≤1), c2 (actual kernel output vs FP64 reference for FP16 values near |x|=1), and c3 (kernel output vs reference for large magnitudes up to 65504). None confound each other, so they batch together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9e008fa8f41647ae",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_99\\\")\\nimport kernel as K\\n\\n# All representable FP16 values with 0 <= |x| <= 1.0\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nvals = bits.to(torch.uint16).view(torch.float16) if hasattr(torch, 'uint16') else torch.tensor(bits.numpy(), dtype=torch.float16)\\n# robust: use bit view\\nvals = torch.arange(65536, dtype=torch.int32).to(torch.int16).view(torch.float16)\\nvals = vals[torch.isfinite(vals)]\\nm = vals.abs()\\nsub = vals[(m > 0) & (m <= 1.0)]\\nx = sub.to(torch.float64)\\n\\ndef poly64(t):\\n    sq = t*t\\n    p = -0.0011264356\\n    p = p*sq + 0.0059712074\\n    p = p*sq - 0.015329496\\n    p = p*sq + 0.027586811\\n    p = p*sq - 0.043983627\\n    p = p*sq + 0.074917369\\n    p = p*sq - 0.16666223\\n    p = p*sq + 0.99999994\\n    return t*p\\n\\napprox = poly64(m.to(torch.float64)[(m>0)&(m<=1.0)].to(torch.float64)) if False else None\\nmag = sub.abs().to(torch.float64)\\napprox = poly64(mag)\\nexact = torch.asinh(mag)\\nerr = (approx - exact).abs()\\ni = err.argmax()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"intrinsic FP64 polynomial error over all representable FP16 |x| in (0,1]\\\",\\n    \\\"n_values\\\": int(sub.numel()),\\n    \\\"max_abs_err\\\": float(err[i]),\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"worst_x\\\": float(sub[i]),\\n    \\\"exceeds_1e-6\\\": bool((err > 1e-6).any()),\\n    \\\"n_exceed\\\": int((err > 1e-6).sum()),\\n}))\", \"expected_signal\": \"max intrinsic polynomial error vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b755b2b033f8a9c4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_99\\\")\\nimport kernel as K\\n\\nvals = torch.arange(65536, dtype=torch.int32).to(torch.int16).view(torch.float16)\\nvals = vals[torch.isfinite(vals)]\\nm = vals.abs()\\n# values in the polynomial branch region, focused near the boundary 1.0\\nsub = vals[(m > 0.5) & (m <= 1.0)]\\nsub = sub.cuda()\\nout = K.run(sub)\\nref = torch.asinh(sub.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\ni = err.argmax()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"kernel FP32 output absolute error vs FP64 asinh, FP16 |x| in (0.5,1.0]\\\",\\n    \\\"n_values\\\": int(sub.numel()),\\n    \\\"max_abs_err\\\": float(err[i]),\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"worst_x\\\": float(sub[i].to(torch.float64)),\\n    \\\"n_exceed_1e-6\\\": int((err > 1e-6).sum()),\\n    \\\"exceeds_1e-6\\\": bool((err > 1e-6).any()),\\n}))\", \"expected_signal\": \"kernel output error near |x|=1 vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-9e4453163e102631",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_99\\\")\\nimport kernel as K\\n\\nvals = torch.arange(65536, dtype=torch.int32).to(torch.int16).view(torch.float16)\\nvals = vals[torch.isfinite(vals)]\\nm = vals.abs()\\n# outer-branch large magnitudes, up to 65504\\nsub = vals[m >= 1024]\\nsub = sub.cuda()\\nout = K.run(sub)\\nref = torch.asinh(sub.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\ni = err.argmax()\\norder = err.argsort(descending=True)\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"kernel FP32 outer-branch output absolute error vs FP64 asinh, |x| in [1024, 65504]\\\",\\n    \\\"n_values\\\": int(sub.numel()),\\n    \\\"max_abs_err\\\": float(err[i]),\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"worst_x\\\": float(sub[i].to(torch.float64)),\\n    \\\"worst_5\\\": [[float(sub[j].to(torch.float64)), float(err[j])] for j in order[:5]],\\n    \\\"n_exceed_1e-6\\\": int((err > 1e-6).sum()),\\n    \\\"exceeds_1e-6\\\": bool((err > 1e-6).any()),\\n}))\", \"expected_signal\": \"kernel output error for large |x| vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Three independent probes: sweep all FP16 values |x|≤1 (c1/c2 combined—but keep separate). Actually c1 (intrinsic polynomial error in exact arithmetic) and c2 (kernel output near 1.0) are distinct: c1 can be tested by evaluating polynomial in FP64 (CPU), c2 by running kernel on GPU over values ≤1. c3: run kernel over large magnitudes. All independent — launch three run_claim_probes together.\n\nProbe code: import kernel from /root/cases/case_99/kernel.py. Build full FP16 value set (all finite FP16: 65504 down). For c3 use large magnitudes, N ≤ 131072. Full positive FP16 set is ~30720 values + sign = 61440 — fine.\n\nc1: FP64 polynomial vs FP64 asinh over all representable |x|≤1.\nc2: GPU run on all FP16 values with 0.5<|x|≤1.05 (say) compared to reference.\nc3: GPU run on |x|≥1024 magnitudes up to 65504."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510292,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1497,
+    "prompt_tokens": 21462,
+    "total_tokens": 22959,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 241,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,42 +1,41 @@
 {
   "artifact": {
     "artifact_files": [
-      "__pycache__/kernel.cpython-311.pyc",
       "kernel.py",
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_89",
+    "entry": "case_83",
     "has_error": null,
-    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 451, 't': 512, 'd': 32, 'decay': 0.999, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 1.0, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
     "passed": null,
     "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
     "rounds": null,
-    "session_dir": "/root/pilot_cases/case_89",
+    "session_dir": "/root/pilot_cases/case_83",
     "status": "unverified",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-30T08:59:18Z",
+      "created_at": "2026-09-30T08:50:17Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-30T09:00:15Z",
+          "created_at": "2026-09-30T08:51:08Z",
           "data": {
-            "E": 0.0019861506409589447,
+            "E": 0.004019616219081861,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t10_probe.py",
-                "sha256": "0c5a237a584c4fd25f628ced84213e84ad6b0e8a545d2812df9a4b45f156d769"
+                "sha256": "6ad6a747922595719e118ad7e3e0db97e3920e7a876c56cd0b3ce867ec2f21ea"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t10_stdout.txt",
-                "sha256": "94028fab2fa5dfb7b93e17a3422deff00554cfea654d3a733fc1bd72427f72fd"
+                "sha256": "10d2aad09c78876650654526a0afdeb37a71129213cecf71403e87050361285a"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -48,166 +47,223 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t10_json_result.json",
-                "sha256": "21826fc98712d9de2146be288a9dcc70731d53f923c2f409fabe995870ca1128"
+                "sha256": "666afa8756b6d0dc42385dd80822765e81b9f042902d92cfa37b8daf64319e9b"
               }
             ],
-            "budget_violation": false,
-            "denom": 315.5695026056802,
-            "duration_s": 4.814035,
-            "err_max_abs": 0.019514182644670086,
-            "err_rms": 0.004896629452088806,
+            "budget": 0.003,
+            "duration_s": 6.335423,
+            "err_norm": 2.128089434646328,
             "exit_code": 0,
-            "expected_signal": "E > 0.003 confirms fp16 accumulation budget violation; E <= 0.003 rebuts",
+            "expected_signal": "E relative error on exact workload vs 0.003 budget",
             "finite": true,
+            "growth_rel_by_t": [
+              [
+                0,
+                0.000204
+              ],
+              [
+                63,
+                0.001216
+              ],
+              [
+                159,
+                0.001342
+              ],
+              [
+                319,
+                0.002134
+              ],
+              [
+                479,
+                0.003079
+              ],
+              [
+                639,
+                0.005901
+              ]
+            ],
             "json_parse_error": null,
             "json_result": {
-              "E": 0.0019861506409589447,
-              "N": 16384,
-              "budget_violation": false,
-              "denom": 315.5695026056802,
-              "err_max_abs": 0.019514182644670086,
-              "err_norm": 0.6267685698673672,
-              "err_norm_last_quarter": 5.186705442215327,
-              "err_rms": 0.004896629452088806,
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "denom": 529.4260244408146,
+              "err_norm": 2.128089434646328,
               "finite": true,
-              "metric": "E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload",
-              "peak_h": 4.0449694272229975,
-              "per_t_err_t511": 0.04682329079315816,
-              "ref_norm": 315.5695026056802,
-              "tolerance": 0.003
+              "growth": [
+                [
+                  0,
+                  2.0515675210474696e-06,
+                  0.00020421974491784513
+                ],
+                [
+                  63,
+                  0.0007789108690756297,
+                  0.001216156372170738
+                ],
+                [
+                  159,
+                  0.002144642547438705,
+                  0.0013424834465221613
+                ],
+                [
+                  319,
+                  0.006829644492111001,
+                  0.0021340250170316676
+                ],
+                [
+                  479,
+                  0.014776370429147003,
+                  0.0030785532954747505
+                ],
+                [
+                  639,
+                  0.03777192828745859,
+                  0.005900842289775617
+                ]
+              ],
+              "max_abs_err": 0.07155016483739018,
+              "passes": false,
+              "ref_norm": 529.4260244408146,
+              "rel_err_tail_576_639": 0.005506693210877705,
+              "shape": [
+                640,
+                32
+              ]
             },
-            "ref_norm": 315.5695026056802,
+            "max_abs_err": 0.07155016483739018,
+            "passes": false,
+            "ref_norm": 529.4260244408146,
+            "rel_err_tail_576_639": 0.005506693210877705,
+            "shape": [
+              640,
+              32
+            ],
             "stderr": "",
-            "stdout": "{\"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload\", \"E\": 0.0019861506409589447, \"tolerance\": 0.003, \"budget_violation\": false, \"ref_norm\": 315.5695026056802, \"denom\": 315.5695026056802, \"err_norm\": 0.6267685698673672, \"err_rms\": 0.004896629452088806, \"err_max_abs\": 0.019514182644670086, \"finite\": true, \"N\": 16384, \"err_norm_last_quarter\": 5.186705442215327, \"peak_h\": 4.0449694272229975, \"per_t_err_t511\": 0.04682329079315816}\n",
+            "stdout": "{\"E\": 0.004019616219081861, \"budget\": 0.003, \"passes\": false, \"finite\": true, \"ref_norm\": 529.4260244408146, \"denom\": 529.4260244408146, \"err_norm\": 2.128089434646328, \"max_abs_err\": 0.07155016483739018, \"rel_err_tail_576_639\": 0.005506693210877705, \"growth\": [[0, 2.0515675210474696e-06, 0.00020421974491784513], [63, 0.0007789108690756297, 0.001216156372170738], [159, 0.002144642547438705, 0.0013424834465221613], [319, 0.006829644492111001, 0.0021340250170316676], [479, 0.014776370429147003, 0.0030785532954747505], [639, 0.03777192828745859, 0.005900842289775617]], \"shape\": [640, 32]}\n",
             "timed_out": false,
-            "timeout_s": 60,
-            "tolerance": 0.003
+            "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Exact-workload probe on make_inputs() (t=512, d=32): kernel output vs fp64 reference on same fp32 inputs gives E = 0.00199 <= 0.003 budget (denominator = ref_norm = 315.57, err_norm = 0.627), all outputs finite. The fp16 round-trip accumulation stays within the compliance budget, so c1's predicted violation is rebutted; peak h ~4.04 as the refined description model predicted.",
-          "supports": "rebutted",
+          "summary": "Kernel output on exact make_inputs workload (t=640, d=32, seed 452) gives E = 0.00402 vs the contract budget 0.003 \u2014 a budget violation (34% over budget). Outputs are finite, but per-row relative error grows monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639, with tail (t=576..639) relative error 0.0055, matching the predicted undamped accumulation of per-state fp16 rounding in the unit-decay recurrence.",
+          "supports": "confirmed",
           "tool_event_id": "t10"
         }
       ],
       "id": "c1",
       "raised_by": "skeptic",
-      "rationale": "Per-step fp16 quantization error of h (std ~0.004 at h~10 where fp16 ulp is ~0.0078) passes through the 0.999 contraction with steady-state error std ~ rounding/sqrt(2*(1-0.999)) \u2248 0.09 per element, giving ||err||_2 \u2248 11.5 vs ||ref||_2 \u2248 1280 and E \u2248 0.009 \u2014 about 3x the 0.003 budget. Symbolic estimate needs a runtime probe on the exact seeded workload to confirm or rebut.",
+      "rationale": "With a=1.0 the rounding errors are never damped; at h magnitude ~m the per-step fp16 rounding error is ~m\u00b72^-11, and these errors accumulate (roughly as a random walk) across 640 steps, so total deviation may rival or exceed the 0.003 relative budget depending on reference norm growth (~0.01\u00b7t).",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "Compliance requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32, decay 0.999, b~0.01 bias); the reference is float64 recurrence on the same float32 inputs."
+          "summary": "Contract defines the single workload (make_inputs: t=640, d=32, decay=1.0, noise=0.001, bias=0.01) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs."
+        },
+        {
+          "source": "kernel.py line 13",
+          "summary": "h = h.to(tl.float16).to(tl.float32) quantizes each propagated state to fp16, while the reference evaluates the same recurrence in float64."
         }
       ],
-      "scope_rationale": "The contract fixes the exact workload (make_inputs, t=512, d=32, decay 0.999, noise 0.001, bias 0.01) and requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 vs a float64 reference on the same float32 inputs; any output-error accumulation on this exact workload is in scope.",
-      "statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01).",
-      "status": "rebutted",
-      "updated_at": "2026-09-30T09:00:15Z"
+      "scope_rationale": "problem.txt fixes the exact workload (make_inputs: t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs; a budget violation on this single workload is precisely the in-scope defect the contract defines.",
+      "statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:51:08Z"
     }
   ],
   "convergence": null,
   "description_model": {
     "contract_model": [
-      "Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.",
-      "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).",
-      "Reference: same recurrence evaluated in float64 on the same float32 inputs.",
-      "Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.",
-      "Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness.",
-      "Unchanged: single seeded recurrence workload (t=512, d=32, a=0.999, b~0.01), fp64 reference on same fp32 inputs, E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 plus finiteness, N=16384."
+      "Single fixed workload: recurrence family, t=640, d=32, a=1.0 (all entries), b = N(0,0.001)+0.01 per element, seed 452, inputs rounded to float32 on CPU before transfer (kernel.py CONFIG/make_inputs).",
+      "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; must return ALL 640x32 states.",
+      "Reference: same float32 inputs evaluated in float64; error metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(numel)); require finite outputs and E <= 0.003.",
+      "Reduced precision arithmetic is explicitly permitted if budget met; scope is this finite workload only, not all inputs."
     ],
     "kernel_model": [
-      "_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential \u2014 no parallel-scan reordering issue.",
-      "State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.",
-      "run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).",
-      "All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) \u2248 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone.",
-      "Magnitude refinement: h grows as h[t] = 10*(1-0.999^t); 0.999^512 = e^{-0.512} = 0.599, so h peaks near 4.0 at t=511, never reaching the fixed point 10 \u2014 the earlier '~10 steady state' estimate was wrong for this finite horizon.",
-      "Consequently fp16 ulp at the largest states is ~0.0039 (binade [4,8)), rounding error std ~0.001 per step late in the sequence, ~3-4x smaller during the early transient when h < 1.",
-      "Error propagation: accumulated quantization error e[t] = 0.999*e[t-1] + rounding(t); its std at t=511 is ~ rounding/sqrt(1-0.999^2) ~ 0.001/0.0447 ~ 0.022-0.09 per element depending on the effective rounding scale, and ||ref||_2 is near sqrt(mean h^2 * N) ~ sqrt(16384 * ~4-6) ~ 256-300, not 1280.",
-      "Stored outputs are exactly the post-rounding fp32 values, so the output error is purely the state-drift error; there is no additional store rounding.",
-      "Symbolic estimates for E span roughly 0.002-0.01 \u2014 straddling the 0.003 budget \u2014 so this cannot be settled analytically; a runtime probe on the exact seeded workload is required."
+      "Triton kernel iterates t=0..639 sequentially over D=32 lanes in one program, computing h = a*h + b.",
+      "Each state is quantized to fp16 then back to fp32 before storing (line 13), i.e. the recurrence propagates fp16-rounded states; accumulation products/sums are fp32 with fp fusion disabled.",
+      "run() launches a single program with grid (1,) and writes all T*D states to out (empty_like(b)).",
+      "Output dtype is float32 (empty_like of b); inputs a,b are float32 per make_inputs.",
+      "With a[0]..a[639]=1.0 exactly and b\u2248N(0.001\u00b2)+0.01, the recurrence reduces to a running sum h[t]=\u03a3b[0..t], dominated by the deterministic bias term 0.01\u00b7t, reaching \u22486.4 per lane at t=640 (noise contributes ~sqrt(t)\u00b70.001 \u2248 0.025).",
+      "fp16 relative spacing is 2^-11\u22484.9e-4; each state quantized at line 13 incurs an absolute rounding error up to ~|h|\u00b72^-11 (up to ~3e-3 near t=640), and since a=1.0 every past error persists undamped in all later states.",
+      "Naive worst-case accumulated deviation at time t is ~\u03a3_s 0.01\u00b7s\u00b72^-11 \u2248 0.01\u00b7t\u00b2/2\u00b72048 \u2248 2.0 at t=640; random rounding signs reduce this (random-walk-like), but even sqrt-of-sum scaling (\u22480.03\u20130.05 absolute vs |h|\u22486.4) implies per-lane relative error ~0.005\u20130.008 at the tail, above the 0.003 budget. This is the quantitative prediction the Experimenter's runtime E computation should confirm or rebut."
     ],
     "open_questions": [],
     "risk_map": [
-      "fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference \u2014 with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) \u2248 ||ref||_2 \u2248 sqrt(16384*~100) \u2248 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.",
-      "Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison \u2014 Skeptic should compute both terms numerically rather than reason symbolically.",
-      "Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.",
-      "Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope).",
-      "Refined c1 surface: the decisive numbers for E are the accumulated fp16 state-drift norm vs ||ref||_2 ~ 256-300; symbolic estimates straddle the budget (roughly E ~ 0.002-0.01), so a single exact-workload probe computing E directly is both necessary and sufficient evidence.",
-      "Probe design note: the transient matters \u2014 most ||ref||_2 mass and most accumulated error sit in the last ~half of the t range, so an elementwise/per-timestep error breakdown would show whether any late-step drift dominates.",
-      "Edge effects: early steps h~0.01 are near fp16 subnormal/low-precision region but absolute error there is tiny (ulp ~ 1e-5), so early-step error is negligible; risk concentrates in late steps.",
-      "Remaining low risks: contiguity (make_inputs produces contiguous tensors, kernel uses flat t*D+d indexing), finiteness (all values within fp16 range, no overflow)."
+      "Cumulative error: h grows toward bias/(1-decay) ~ 0.01/(1-1)=divergent when a=1.0; with a=1.0 exactly, h[t] = sum of b[0..t], i.e. a random walk reaching magnitude ~ sqrt(t)*noise ~ 0.025, while fp16 rounding per step (eps ~ 6e-5 relative near h) accumulates over 640 steps.",
+      "fp16 rounding error relative to fp32 state: each step rounds h to fp16 (~5e-4 relative), errors accumulate in a decay=1 recurrence without damping; must check whether E stays under 0.003.",
+      "fp16 range: h stays small (|h| << 65504), so overflow unlikely; subnormal/flush behavior not expected to matter at these magnitudes.",
+      "enable_fp_fusion=False avoids fma contraction; single-thread loop is deterministic but slow \u2014 performance is out of contract scope.",
+      "Indexing assumes contiguous row-major (t*D + d) layout; make_inputs returns contiguous tensors, so in-scope OK.",
+      "Primary risk (claim c1): undamped fp16 state rounding in a unit-decay recurrence; deterministic estimate strongly suggests E>0.003 on this workload. Decisive evidence is the actual E computed on the exact make_inputs output vs the float64 reference, not any analytic bound.",
+      "Early states (t small, |h| small) contribute negligible error; the budget is most threatened by late states \u2014 a probe should report error growth over t as well as the aggregate E.",
+      "Error metric denominator: max(||ref||_2, 0.001\u00b7sqrt(20480)) \u2014 ||ref||_2 will be \u226b0.045 (states span 0.01..6.4), so the norm branch dominates; no subtlety in the denominator."
     ],
     "scope_notes": [
-      "Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\", \"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\", \"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\"]",
-      "Scope unchanged: only the single make_inputs() workload counts; verdict is on E <= 0.003 + finiteness on that workload, not general correctness."
+      "Only the exact make_inputs workload (t=640, d=32, seed 452, decay 1.0, noise 0.001, bias 0.01) is in scope; no other shapes/distributions.",
+      "Contract permits reduced precision; the sole compliance question is E <= 0.003 and finiteness on this workload.",
+      "Judge is trust/reject/needs_more_evidence on finite-workload compliance, not general correctness."
     ]
   },
   "description_tasks": [],
   "description_updates": [
     {
       "contract_model": [
-        "Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.",
-        "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).",
-        "Reference: same recurrence evaluated in float64 on the same float32 inputs.",
-        "Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.",
-        "Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness."
+        "Single fixed workload: recurrence family, t=640, d=32, a=1.0 (all entries), b = N(0,0.001)+0.01 per element, seed 452, inputs rounded to float32 on CPU before transfer (kernel.py CONFIG/make_inputs).",
+        "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; must return ALL 640x32 states.",
+        "Reference: same float32 inputs evaluated in float64; error metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(numel)); require finite outputs and E <= 0.003.",
+        "Reduced precision arithmetic is explicitly permitted if budget met; scope is this finite workload only, not all inputs."
       ],
-      "created_at": "2026-09-30T08:58:58Z",
+      "created_at": "2026-09-30T08:49:53Z",
       "created_by": "describer",
       "id": "du1",
       "impact_on_claims": [],
       "kernel_model": [
-        "_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential \u2014 no parallel-scan reordering issue.",
-        "State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.",
-        "run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).",
-        "All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) \u2248 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone."
+        "Triton kernel iterates t=0..639 sequentially over D=32 lanes in one program, computing h = a*h + b.",
+        "Each state is quantized to fp16 then back to fp32 before storing (line 13), i.e. the recurrence propagates fp16-rounded states; accumulation products/sums are fp32 with fp fusion disabled.",
+        "run() launches a single program with grid (1,) and writes all T*D states to out (empty_like(b)).",
+        "Output dtype is float32 (empty_like of b); inputs a,b are float32 per make_inputs."
       ],
       "open_questions": [],
       "risk_map": [
-        "fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference \u2014 with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) \u2248 ||ref||_2 \u2248 sqrt(16384*~100) \u2248 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.",
-        "Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison \u2014 Skeptic should compute both terms numerically rather than reason symbolically.",
-        "Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.",
-        "Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope)."
+        "Cumulative error: h grows toward bias/(1-decay) ~ 0.01/(1-1)=divergent when a=1.0; with a=1.0 exactly, h[t] = sum of b[0..t], i.e. a random walk reaching magnitude ~ sqrt(t)*noise ~ 0.025, while fp16 rounding per step (eps ~ 6e-5 relative near h) accumulates over 640 steps.",
+        "fp16 rounding error relative to fp32 state: each step rounds h to fp16 (~5e-4 relative), errors accumulate in a decay=1 recurrence without damping; must check whether E stays under 0.003.",
+        "fp16 range: h stays small (|h| << 65504), so overflow unlikely; subnormal/flush behavior not expected to matter at these magnitudes.",
+        "enable_fp_fusion=False avoids fma contraction; single-thread loop is deterministic but slow \u2014 performance is out of contract scope.",
+        "Indexing assumes contiguous row-major (t*D + d) layout; make_inputs returns contiguous tensors, so in-scope OK."
       ],
       "scope_notes": [
-        "Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\", \"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\", \"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\"]"
+        "Only the exact make_inputs workload (t=640, d=32, seed 452, decay 1.0, noise 0.001, bias 0.01) is in scope; no other shapes/distributions.",
+        "Contract permits reduced precision; the sole compliance question is E <= 0.003 and finiteness on this workload.",
+        "Judge is trust/reject/needs_more_evidence on finite-workload compliance, not general correctness."
       ],
-      "summary": "case_89: linear recurrence kernel (h[t]=a[t]*h[t-1]+b[t]) over t=512,d=32 with a=0.999 decay and b~0.01 bias; kernel runs one sequential Triton program that rounds h to float16 at every step. Compliance judged solely by relative L2 error E<=0.003 vs float64 reference on this exact workload.",
+      "summary": "Case_83: Triton sequential recurrence kernel h[t]=a*h[t-1]+b over t=640,d=32 with fp16 rounding of every state; contract allows reduced precision within E<=0.003 on the single fixed workload (a=1.0, b=N(0,0.001)+0.01).",
       "task_ids": [],
       "turn": 2
     },
     {
-      "contract_model": [
-        "Unchanged: single seeded recurrence workload (t=512, d=32, a=0.999, b~0.01), fp64 reference on same fp32 inputs, E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 plus finiteness, N=16384."
-      ],
-      "created_at": "2026-09-30T08:59:47Z",
+      "contract_model": [],
+      "created_at": "2026-09-30T08:50:36Z",
       "created_by": "describer",
       "id": "du2",
       "impact_on_claims": [],
       "kernel_model": [
-        "Magnitude refinement: h grows as h[t] = 10*(1-0.999^t); 0.999^512 = e^{-0.512} = 0.599, so h peaks near 4.0 at t=511, never reaching the fixed point 10 \u2014 the earlier '~10 steady state' estimate was wrong for this finite horizon.",
-        "Consequently fp16 ulp at the largest states is ~0.0039 (binade [4,8)), rounding error std ~0.001 per step late in the sequence, ~3-4x smaller during the early transient when h < 1.",
-        "Error propagation: accumulated quantization error e[t] = 0.999*e[t-1] + rounding(t); its std at t=511 is ~ rounding/sqrt(1-0.999^2) ~ 0.001/0.0447 ~ 0.022-0.09 per element depending on the effective rounding scale, and ||ref||_2 is near sqrt(mean h^2 * N) ~ sqrt(16384 * ~4-6) ~ 256-300, not 1280.",
-        "Stored outputs are exactly the post-rounding fp32 values, so the output error is purely the state-drift error; there is no additional store rounding.",
-        "Symbolic estimates for E span roughly 0.002-0.01 \u2014 straddling the 0.003 budget \u2014 so this cannot be settled analytically; a runtime probe on the exact seeded workload is required."
+        "With a[0]..a[639]=1.0 exactly and b\u2248N(0.001\u00b2)+0.01, the recurrence reduces to a running sum h[t]=\u03a3b[0..t], dominated by the deterministic bias term 0.01\u00b7t, reaching \u22486.4 per lane at t=640 (noise contributes ~sqrt(t)\u00b70.001 \u2248 0.025).",
+        "fp16 relative spacing is 2^-11\u22484.9e-4; each state quantized at line 13 incurs an absolute rounding error up to ~|h|\u00b72^-11 (up to ~3e-3 near t=640), and since a=1.0 every past error persists undamped in all later states.",
+        "Naive worst-case accumulated deviation at time t is ~\u03a3_s 0.01\u00b7s\u00b72^-11 \u2248 0.01\u00b7t\u00b2/2\u00b72048 \u2248 2.0 at t=640; random rounding signs reduce this (random-walk-like), but even sqrt-of-sum scaling (\u22480.03\u20130.05 absolute vs |h|\u22486.4) implies per-lane relative error ~0.005\u20130.008 at the tail, above the 0.003 budget. This is the quantitative prediction the Experimenter's runtime E computation should confirm or rebut."
       ],
       "open_questions": [],
       "risk_map": [
-        "Refined c1 surface: the decisive numbers for E are the accumulated fp16 state-drift norm vs ||ref||_2 ~ 256-300; symbolic estimates straddle the budget (roughly E ~ 0.002-0.01), so a single exact-workload probe computing E directly is both necessary and sufficient evidence.",
-        "Probe design note: the transient matters \u2014 most ||ref||_2 mass and most accumulated error sit in the last ~half of the t range, so an elementwise/per-timestep error breakdown would show whether any late-step drift dominates.",
-        "Edge effects: early steps h~0.01 are near fp16 subnormal/low-precision region but absolute error there is tiny (ulp ~ 1e-5), so early-step error is negligible; risk concentrates in late steps.",
-        "Remaining low risks: contiguity (make_inputs produces contiguous tensors, kernel uses flat t*D+d indexing), finiteness (all values within fp16 range, no overflow)."
+        "Primary risk (claim c1): undamped fp16 state rounding in a unit-decay recurrence; deterministic estimate strongly suggests E>0.003 on this workload. Decisive evidence is the actual E computed on the exact make_inputs output vs the float64 reference, not any analytic bound.",
+        "Early states (t small, |h| small) contribute negligible error; the budget is most threatened by late states \u2014 a probe should report error growth over t as well as the aggregate E.",
+        "Error metric denominator: max(||ref||_2, 0.001\u00b7sqrt(20480)) \u2014 ||ref||_2 will be \u226b0.045 (states span 0.01..6.4), so the norm branch dominates; no subtlety in the denominator."
       ],
-      "scope_notes": [
-        "Scope unchanged: only the single make_inputs() workload counts; verdict is on E <= 0.003 + finiteness on that workload, not general correctness."
-      ],
-      "summary": "Refined magnitude analysis for c1: h peaks near 4.0 (not 10) at t=512 since 0.999^512 = 0.599, shrinking per-step fp16 rounding to ulp ~0.0039 and ||ref||_2 to ~256-300; symbolic E estimates now straddle the 0.003 budget (roughly 0.002-0.01), making a direct runtime E measurement on the exact seeded workload the decisive evidence.",
+      "scope_notes": [],
+      "summary": "Quantitative refinement of case_83 description: h grows as a deterministic ~0.01\u00b7t drift to \u22486.4, per-step fp16 rounding error (~|h|\u00b72^-11) persists undamped, and accumulated deviation estimates for late states sit near or above the 0.003 relative budget \u2014 decisive resolution requires the runtime E computation on the exact workload.",
       "task_ids": [],
       "turn": 5
     }
   ],
-  "entry": "case_89",
+  "entry": "case_83",
   "history": [
     {
       "duration_s": null,
@@ -217,25 +273,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_89"
+            "entry": "case_83"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_89"
+            "entry": "case_83"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_89"
+            "entry": "case_83"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_89",
+            "entry": "case_83",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -244,133 +300,38 @@
       "usage": null
     },
     {
-      "duration_s": 17.644288996,
+      "duration_s": 12.862539995,
       "role": "describer",
       "round": 2,
-      "text": "I have all the context I need. The kernel is a linear recurrence h[t] = a[t]*h[t-1] + b[t] over t=512, d=32, implemented sequentially in a single Triton program, with each state rounded to float16 before storing \u2014 an explicit precision-loss risk worth flagging against the E <= 0.003 budget. Recording the description model now.",
+      "text": "",
       "tool_calls": [
         {
           "args": {
             "contract_model": [
-              "Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.",
-              "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).",
-              "Reference: same recurrence evaluated in float64 on the same float32 inputs.",
-              "Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.",
-              "Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness."
+              "Single fixed workload: recurrence family, t=640, d=32, a=1.0 (all entries), b = N(0,0.001)+0.01 per element, seed 452, inputs rounded to float32 on CPU before transfer (kernel.py CONFIG/make_inputs).",
+              "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; must return ALL 640x32 states.",
+              "Reference: same float32 inputs evaluated in float64; error metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(numel)); require finite outputs and E <= 0.003.",
+              "Reduced precision arithmetic is explicitly permitted if budget met; scope is this finite workload only, not all inputs."
             ],
             "kernel_model": [
-              "_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential \u2014 no parallel-scan reordering issue.",
-              "State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.",
-              "run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).",
-              "All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) \u2248 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone."
+              "Triton kernel iterates t=0..639 sequentially over D=32 lanes in one program, computing h = a*h + b.",
+              "Each state is quantized to fp16 then back to fp32 before storing (line 13), i.e. the recurrence propagates fp16-rounded states; accumulation products/sums are fp32 with fp fusion disabled.",
+              "run() launches a single program with grid (1,) and writes all T*D states to out (empty_like(b)).",
+              "Output dtype is float32 (empty_like of b); inputs a,b are float32 per make_inputs."
             ],
             "risk_map": [
-              "fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference \u2014 with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) \u2248 ||ref||_2 \u2248 sqrt(16384*~100) \u2248 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.",
-              "Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison \u2014 Skeptic should compute both terms numerically rather than reason symbolically.",
-              "Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.",
-              "Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope)."
-            ],
-            "scope_notes": "Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\", \"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\", \"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\"]",
-            "summary": "case_89: linear recurrence kernel (h[t]=a[t]*h[t-1]+b[t]) over t=512,d=32 with a=0.999 decay and b~0.01 bias; kernel runs one sequential Triton program that rounds h to float16 at every step. Compliance judged solely by relative L2 error E<=0.003 vs float64 reference on this exact workload."
-          },
-          "tool": "record_description_update"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 17.644,
-        "input_tokens": 5681,
-        "output_tokens": 971
-      }
-    },
-    {
-      "duration_s": 11.496022720999974,
-      "role": "skeptic",
-      "round": 3,
-      "text": "The core risk is the fp16 round-trip of the state at every one of 512 steps. Quick math: h converges to ~b/(1-a) \u2248 10, fp16 ulp near 10 is ~0.0078 (rounding error ~0.004 per step), and the 0.999-contraction gives an error steady-state std of roughly 0.004/\u221a(2\u00b70.001) \u2248 0.09 per element \u2014 implying E \u2248 0.09\u00b7128/1280 \u2248 0.009, potentially ~3\u00d7 the 0.003 budget. This is directly in scope and needs a runtime probe.",
-      "tool_calls": [
-        {
-          "args": {
-            "rationale": "Per-step fp16 quantization error of h (std ~0.004 at h~10 where fp16 ulp is ~0.0078) passes through the 0.999 contraction with steady-state error std ~ rounding/sqrt(2*(1-0.999)) \u2248 0.09 per element, giving ||err||_2 \u2248 11.5 vs ||ref||_2 \u2248 1280 and E \u2248 0.009 \u2014 about 3x the 0.003 budget. Symbolic estimate needs a runtime probe on the exact seeded workload to confirm or rebut.",
-            "scope": "in_scope",
-            "scope_evidence": [
-              {
-                "source": "problem.txt",
-                "summary": "Compliance requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32, decay 0.999, b~0.01 bias); the reference is float64 recurrence on the same float32 inputs."
-              }
-            ],
-            "statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01)."
-          },
-          "tool": "record_claim"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 11.496,
-        "input_tokens": 13091,
-        "output_tokens": 673
-      }
-    },
-    {
-      "duration_s": 8.203754739000033,
-      "role": "skeptic",
-      "round": 4,
-      "text": "The earlier claim call was rejected for missing `scope_rationale`; re-sending it correctly now. The key risk stands: per-step fp16 rounding of the state through the 0.999-contraction accumulates an error that likely exceeds the E \u2264 0.003 budget.",
-      "tool_calls": [
-        {
-          "args": {
-            "rationale": "Per-step fp16 quantization error of h (std ~0.004 at h~10 where fp16 ulp is ~0.0078) passes through the 0.999 contraction with steady-state error std ~ rounding/sqrt(2*(1-0.999)) \u2248 0.09 per element, giving ||err||_2 \u2248 11.5 vs ||ref||_2 \u2248 1280 and E \u2248 0.009 \u2014 about 3x the 0.003 budget. Symbolic estimate needs a runtime probe on the exact seeded workload to confirm or rebut.",
-            "scope": "in_scope",
-            "scope_evidence": [
-              {
-                "source": "problem.txt",
-                "summary": "Compliance requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32, decay 0.999, b~0.01 bias); the reference is float64 recurrence on the same float32 inputs."
-              }
-            ],
-            "scope_rationale": "The contract fixes the exact workload (make_inputs, t=512, d=32, decay 0.999, noise 0.001, bias 0.01) and requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 vs a float64 reference on the same float32 inputs; any output-error accumulation on this exact workload is in scope.",
-            "statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01)."
-          },
-          "tool": "record_claim"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 8.204,
-        "input_tokens": 14206,
-        "output_tokens": 499
-      }
-    },
-    {
-      "duration_s": 29.30346922199999,
-      "role": "describer",
-      "round": 5,
-      "text": "The open claim c1 hinges on accumulated fp16 rounding error, but my earlier model overestimated the steady state: with only t=512 steps and decay 0.999, h grows as 10*(1-0.999^t) \u2248 10*(1-e^{-0.512}) \u2248 4.0 at t=511 \u2014 it never reaches the ~10 fixed point. That changes the fp16 ulp (\u22480.0039 at h\u22484 vs \u22480.0078 at 10) and both numerator and denominator of E. I'll record this refinement so Skeptic/Experimenter probe the right magnitudes.",
-      "tool_calls": [
-        {
-          "args": {
-            "contract_model": [
-              "Unchanged: single seeded recurrence workload (t=512, d=32, a=0.999, b~0.01), fp64 reference on same fp32 inputs, E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 plus finiteness, N=16384."
-            ],
-            "kernel_model": [
-              "Magnitude refinement: h grows as h[t] = 10*(1-0.999^t); 0.999^512 = e^{-0.512} = 0.599, so h peaks near 4.0 at t=511, never reaching the fixed point 10 \u2014 the earlier '~10 steady state' estimate was wrong for this finite horizon.",
-              "Consequently fp16 ulp at the largest states is ~0.0039 (binade [4,8)), rounding error std ~0.001 per step late in the sequence, ~3-4x smaller during the early transient when h < 1.",
-              "Error propagation: accumulated quantization error e[t] = 0.999*e[t-1] + rounding(t); its std at t=511 is ~ rounding/sqrt(1-0.999^2) ~ 0.001/0.0447 ~ 0.022-0.09 per element depending on the effective rounding scale, and ||ref||_2 is near sqrt(mean h^2 * N) ~ sqrt(16384 * ~4-6) ~ 256-300, not 1280.",
-              "Stored outputs are exactly the post-rounding fp32 values, so the output error is purely the state-drift error; there is no additional store rounding.",
-              "Symbolic estimates for E span roughly 0.002-0.01 \u2014 straddling the 0.003 budget \u2014 so this cannot be settled analytically; a runtime probe on the exact seeded workload is required."
-            ],
-            "risk_map": [
-              "Refined c1 surface: the decisive numbers for E are the accumulated fp16 state-drift norm vs ||ref||_2 ~ 256-300; symbolic estimates straddle the budget (roughly E ~ 0.002-0.01), so a single exact-workload probe computing E directly is both necessary and sufficient evidence.",
-              "Probe design note: the transient matters \u2014 most ||ref||_2 mass and most accumulated error sit in the last ~half of the t range, so an elementwise/per-timestep error breakdown would show whether any late-step drift dominates.",
-              "Edge effects: early steps h~0.01 are near fp16 subnormal/low-precision region but absolute error there is tiny (ulp ~ 1e-5), so early-step error is negligible; risk concentrates in late steps.",
-              "Remaining low risks: contiguity (make_inputs produces contiguous tensors, kernel uses flat t*D+d indexing), finiteness (all values within fp16 range, no overflow)."
+              "Cumulative error: h grows toward bias/(1-decay) ~ 0.01/(1-1)=divergent when a=1.0; with a=1.0 exactly, h[t] = sum of b[0..t], i.e. a random walk reaching magnitude ~ sqrt(t)*noise ~ 0.025, while fp16 rounding per step (eps ~ 6e-5 relative near h) accumulates over 640 steps.",
+              "fp16 rounding error relative to fp32 state: each step rounds h to fp16 (~5e-4 relative), errors accumulate in a decay=1 recurrence without damping; must check whether E stays under 0.003.",
+              "fp16 range: h stays small (|h| << 65504), so overflow unlikely; subnormal/flush behavior not expected to matter at these magnitudes.",
+              "enable_fp_fusion=False avoids fma contraction; single-thread loop is deterministic but slow \u2014 performance is out of contract scope.",
+              "Indexing assumes contiguous row-major (t*D + d) layout; make_inputs returns contiguous tensors, so in-scope OK."
             ],
             "scope_notes": [
-              "Scope unchanged: only the single make_inputs() workload counts; verdict is on E <= 0.003 + finiteness on that workload, not general correctness."
+              "Only the exact make_inputs workload (t=640, d=32, seed 452, decay 1.0, noise 0.001, bias 0.01) is in scope; no other shapes/distributions.",
+              "Contract permits reduced precision; the sole compliance question is E <= 0.003 and finiteness on this workload.",
+              "Judge is trust/reject/needs_more_evidence on finite-workload compliance, not general correctness."
             ],
-            "summary": "Refined magnitude analysis for c1: h peaks near 4.0 (not 10) at t=512 since 0.999^512 = 0.599, shrinking per-step fp16 rounding to ulp ~0.0039 and ||ref||_2 to ~256-300; symbolic E estimates now straddle the 0.003 budget (roughly 0.002-0.01), making a direct runtime E measurement on the exact seeded workload the decisive evidence."
+            "summary": "Case_83: Triton sequential recurrence kernel h[t]=a*h[t-1]+b over t=640,d=32 with fp16 rounding of every state; contract allows reduced precision within E<=0.003 on the single fixed workload (a=1.0, b=N(0,0.001)+0.01)."
           },
           "tool": "record_description_update"
         }
@@ -378,20 +339,118 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 29.303,
-        "input_tokens": 14616,
-        "output_tokens": 1551
+        "duration_s": 12.863,
+        "input_tokens": 5617,
+        "output_tokens": 746
       }
     },
     {
-      "duration_s": 6.217199675000018,
+      "duration_s": 16.199977108,
       "role": "skeptic",
-      "round": 6,
-      "text": "The single high-risk surface (fp16 round-trip accumulation vs the E\u22640.003 budget) is already captured by open claim c1 with proper in-scope evidence. Remaining risks (contiguity, finiteness) are covered by the same exact-workload probe the Experimenter will run against c1. No additional in-scope claims are warranted.",
+      "round": 3,
+      "text": "The central risk here is deterministic: the kernel quantizes every recurrence state to fp16 while the reference accumulates in fp64, and with decay=1.0 there is no damping of rounding errors over 640 steps. The bias makes h grow linearly (~0.01\u00b7t, reaching ~6.4), so per-step fp16 rounding error grows proportionally and accumulates as a random walk. This is exactly the in-scope compliance question (E \u2264 0.003 on this one workload), so I'll record it as the primary claim; the fp16 store also directly caps output fidelity. I'll record the accumulation claim now.",
       "tool_calls": [
         {
           "args": {
-            "reason": "The only contract-relevant risk \u2014 accumulated fp16 rounding of the recurrence state exceeding the E<=0.003 budget on the exact seeded workload \u2014 is already recorded as open claim c1 with in-scope evidence from problem.txt. Remaining risks (contiguity of the flat t*D+d indexing, output finiteness, no-fp-fusion) are either structurally safe on this fixed contiguous make_inputs workload or will be checked by the same exact-workload E probe that decides c1, so no additional claims are needed.",
+            "rationale": "With a=1.0 the rounding errors are never damped; at h magnitude ~m the per-step fp16 rounding error is ~m\u00b72^-11, and these errors accumulate (roughly as a random walk) across 640 steps, so total deviation may rival or exceed the 0.003 relative budget depending on reference norm growth (~0.01\u00b7t).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract defines the single workload (make_inputs: t=640, d=32, decay=1.0, noise=0.001, bias=0.01) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs."
+              },
+              {
+                "source": "kernel.py line 13",
+                "summary": "h = h.to(tl.float16).to(tl.float32) quantizes each propagated state to fp16, while the reference evaluates the same recurrence in float64."
+              }
+            ],
+            "statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.2,
+        "input_tokens": 12001,
+        "output_tokens": 736
+      }
+    },
+    {
+      "duration_s": 7.646125340000001,
+      "role": "skeptic",
+      "round": 4,
+      "text": "The prior claim submission was rejected only for a missing field \u2014 resending it with scope_rationale included.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "With a=1.0 the rounding errors are never damped; at h magnitude ~m the per-step fp16 rounding error is ~m\u00b72^-11, and these errors accumulate (roughly as a random walk) across 640 steps, so total deviation may rival or exceed the 0.003 relative budget depending on reference norm growth (~0.01\u00b7t).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract defines the single workload (make_inputs: t=640, d=32, decay=1.0, noise=0.001, bias=0.01) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs."
+              },
+              {
+                "source": "kernel.py line 13",
+                "summary": "h = h.to(tl.float16).to(tl.float32) quantizes each propagated state to fp16, while the reference evaluates the same recurrence in float64."
+              }
+            ],
+            "scope_rationale": "problem.txt fixes the exact workload (make_inputs: t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs; a budget violation on this single workload is precisely the in-scope defect the contract defines.",
+            "statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.646,
+        "input_tokens": 13104,
+        "output_tokens": 490
+      }
+    },
+    {
+      "duration_s": 19.134665422000005,
+      "role": "describer",
+      "round": 5,
+      "text": "The description model is already accurate, but I can sharpen it quantitatively for the open claim c1: with decay=1.0, h[t] \u2248 0.01\u00b7t (a deterministic drift, not just a random walk \u2014 the bias accumulates linearly), so per-step fp16 rounding error grows proportionally and each error persists undamped in the recurrence. A rough worst-case accumulation suggests per-element relative deviation at t=640 on the order of t\u00b72^-12 \u2248 0.15, far above 0.003, though random rounding signs reduce this somewhat \u2014 that's exactly the calculation the Experimenter's runtime probe should confirm. I'll record this refinement.",
+      "tool_calls": [
+        {
+          "args": {
+            "kernel_model": [
+              "With a[0]..a[639]=1.0 exactly and b\u2248N(0.001\u00b2)+0.01, the recurrence reduces to a running sum h[t]=\u03a3b[0..t], dominated by the deterministic bias term 0.01\u00b7t, reaching \u22486.4 per lane at t=640 (noise contributes ~sqrt(t)\u00b70.001 \u2248 0.025).",
+              "fp16 relative spacing is 2^-11\u22484.9e-4; each state quantized at line 13 incurs an absolute rounding error up to ~|h|\u00b72^-11 (up to ~3e-3 near t=640), and since a=1.0 every past error persists undamped in all later states.",
+              "Naive worst-case accumulated deviation at time t is ~\u03a3_s 0.01\u00b7s\u00b72^-11 \u2248 0.01\u00b7t\u00b2/2\u00b72048 \u2248 2.0 at t=640; random rounding signs reduce this (random-walk-like), but even sqrt-of-sum scaling (\u22480.03\u20130.05 absolute vs |h|\u22486.4) implies per-lane relative error ~0.005\u20130.008 at the tail, above the 0.003 budget. This is the quantitative prediction the Experimenter's runtime E computation should confirm or rebut."
+            ],
+            "risk_map": [
+              "Primary risk (claim c1): undamped fp16 state rounding in a unit-decay recurrence; deterministic estimate strongly suggests E>0.003 on this workload. Decisive evidence is the actual E computed on the exact make_inputs output vs the float64 reference, not any analytic bound.",
+              "Early states (t small, |h| small) contribute negligible error; the budget is most threatened by late states \u2014 a probe should report error growth over t as well as the aggregate E.",
+              "Error metric denominator: max(||ref||_2, 0.001\u00b7sqrt(20480)) \u2014 ||ref||_2 will be \u226b0.045 (states span 0.01..6.4), so the norm branch dominates; no subtlety in the denominator."
+            ],
+            "summary": "Quantitative refinement of case_83 description: h grows as a deterministic ~0.01\u00b7t drift to \u22486.4, per-step fp16 rounding error (~|h|\u00b72^-11) persists undamped, and accumulated deviation estimates for late states sit near or above the 0.003 relative budget \u2014 decisive resolution requires the runtime E computation on the exact workload."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 19.135,
+        "input_tokens": 13559,
+        "output_tokens": 1007
+      }
+    },
+    {
+      "duration_s": 7.066079850999998,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The core in-scope risk (undamped fp16 state rounding violating the E \u2264 0.003 budget on the exact fixed workload) is already recorded as c1 with proper scope evidence, and the description model now includes the quantitative accumulation estimate. Other potential issues (non-contiguous layouts, other shapes/dtypes) are explicitly out of scope per the contract's single-workload statement, and finiteness/overflow is not plausible at these magnitudes. I have no additional high-quality in-scope claims to add; the decisive next step is the Experimenter's runtime E computation.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The only in-scope compliance question is E <= 0.003 and finiteness on the single fixed make_inputs workload; that risk is fully captured by open claim c1 (undamped per-state fp16 rounding in the unit-decay recurrence). All other candidate concerns (non-contiguous inputs, other shapes/dtypes, overflow) are out of scope under problem.txt's single-workload contract or implausible at the workload's magnitudes (~6.4 max state vs fp16 max 65504). No further in-scope claims are warranted before the runtime E computation.",
             "reviewed_claims": [
               "c1"
             ]
@@ -402,22 +461,22 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 6.217,
-        "input_tokens": 22168,
-        "output_tokens": 250
+        "duration_s": 7.066,
+        "input_tokens": 20044,
+        "output_tokens": 302
       }
     },
     {
-      "duration_s": 8.738601617000029,
+      "duration_s": 9.559907058000007,
       "role": "experimenter",
       "round": 7,
-      "text": "I'll run the decisive exact-workload probe for claim c1, computing E directly on the seeded inputs with an fp64 reference.",
+      "text": "I'll run the decisive runtime probe for c1: compute the kernel's output on the exact make_inputs workload and compare against a float64 reference, reporting the contract error metric E plus error growth over t.",
       "tool_calls": [
         {
           "args": {
             "claim_id": "c1",
-            "code": "import json, sys\nsys.path.insert(0, \"/root/pilot_cases/case_89\")\nimport kernel, torch, numpy as np\n\na, b = kernel.make_inputs()\nout = kernel.run(a, b).double().cpu().numpy()\n\n# fp64 reference on same fp32 inputs\na64 = a.double().cpu().numpy(); b64 = b.double().cpu().numpy()\nref = np.empty_like(b64)\nh = np.zeros(b64.shape[1])\nfor t in range(a64.shape[0]):\n    h = a64[t] * h + b64[t]\n    ref[t] = h\n\nerr = out - ref\nN = out.size\nref_norm = np.linalg.norm(ref)\ndenom = max(ref_norm, 0.001 * np.sqrt(N))\nE = np.linalg.norm(err) / denom\nfinite = bool(np.isfinite(out).all())\nper_t = np.linalg.norm(err, axis=1)\nprint(json.dumps({\n    \"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload\",\n    \"E\": E, \"tolerance\": 0.003, \"budget_violation\": bool(E > 0.003),\n    \"ref_norm\": ref_norm, \"denom\": denom, \"err_norm\": np.linalg.norm(err),\n    \"err_rms\": float(np.sqrt((err**2).mean())), \"err_max_abs\": float(np.abs(err).max()),\n    \"finite\": finite, \"N\": N,\n    \"err_norm_last_quarter\": float(per_t[384:].sum()),\n    \"peak_h\": float(ref.max()), \"per_t_err_t511\": float(per_t[-1]),\n}))",
-            "expected_signal": "E > 0.003 confirms fp16 accumulation budget violation; E <= 0.003 rebuts"
+            "code": "import json, sys, types\nimport numpy as np, torch\n\nsys.path.insert(0, \"/root/pilot_cases/case_83\")\nimport kernel as K\n\na, b = K.make_inputs()\nout = K.run(a, b)\nout32 = out.detach().cpu().numpy().astype(np.float64)\na64 = a.detach().cpu().numpy().astype(np.float64)\nb64 = b.detach().cpu().numpy().astype(np.float64)\n\n# float64 reference on same inputs\nref = np.empty_like(b64)\nh = np.zeros(b64.shape[1], dtype=np.float64)\nfor t in range(b64.shape[0]):\n    h = a64[t] * h + b64[t]\n    ref[t] = h\n\nnumel = ref.size\ndenom = max(np.linalg.norm(ref), 0.001 * np.sqrt(numel))\nerr = out32 - ref\nE = np.linalg.norm(err) / denom\n\n# error growth over time (per-t row RMS error and relative to row norms)\nrow_err = np.sqrt((err ** 2).mean(axis=1))\nrow_ref = np.sqrt((ref ** 2).mean(axis=1))\ngrowth = [(t, float(row_err[t]), float(row_err[t] / row_ref[t])) for t in (0, 63, 159, 319, 479, 639)]\nrel_tail = float(np.linalg.norm(err[576:]) / np.linalg.norm(ref[576:]))\n\nprint(json.dumps({\n    \"E\": float(E), \"budget\": 0.003, \"passes\": bool(E <= 0.003),\n    \"finite\": bool(np.isfinite(out32).all()),\n    \"ref_norm\": float(np.linalg.norm(ref)), \"denom\": float(denom),\n    \"err_norm\": float(np.linalg.norm(err)),\n    \"max_abs_err\": float(np.abs(err).max()),\n    \"rel_err_tail_576_639\": rel_tail,\n    \"growth\": growth,\n    \"shape\": list(out32.shape),\n}, default=float))\n",
+            "expected_signal": "E relative error on exact workload vs 0.003 budget"
           },
           "tool": "run_claim_probe"
         }
@@ -425,33 +484,63 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 8.739,
-        "input_tokens": 23281,
-        "output_tokens": 450
+        "duration_s": 9.56,
+        "input_tokens": 21227,
+        "output_tokens": 519
       }
     },
     {
-      "duration_s": 7.863632341000027,
+      "duration_s": 9.053105649999992,
       "role": "experimenter",
       "round": 8,
-      "text": "The exact-workload probe is decisive: E = 0.00199 \u2264 0.003, all outputs finite, so the fp16 accumulation stays within budget and claim c1 is rebutted.",
+      "text": "The runtime probe on the exact workload confirms the budget violation: E = 0.00402 > 0.003, with error growing over t and tail relative error ~0.0055. Finalizing this as confirmed evidence for c1.",
       "tool_calls": [
         {
           "args": {
             "data": {
-              "E": 0.0019861506409589447,
-              "budget_violation": false,
-              "denom": 315.5695026056802,
-              "err_max_abs": 0.019514182644670086,
-              "err_rms": 0.004896629452088806,
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "err_norm": 2.128089434646328,
               "finite": true,
-              "ref_norm": 315.5695026056802,
-              "tolerance": 0.003
+              "growth_rel_by_t": [
+                [
+                  0,
+                  0.000204
+                ],
+                [
+                  63,
+                  0.001216
+                ],
+                [
+                  159,
+                  0.001342
+                ],
+                [
+                  319,
+                  0.002134
+                ],
+                [
+                  479,
+                  0.003079
+                ],
+                [
+                  639,
+                  0.005901
+                ]
+              ],
+              "max_abs_err": 0.07155016483739018,
+              "passes": false,
+              "ref_norm": 529.4260244408146,
+              "rel_err_tail_576_639": 0.005506693210877705,
+              "shape": [
+                640,
+                32
+              ]
             },
             "event_id": "t10",
-            "status": "rebutted",
-            "summary": "Exact-workload probe on make_inputs() (t=512, d=32): kernel output vs fp64 reference on same fp32 inputs gives E = 0.00199 <= 0.003 budget (denominator = ref_norm = 315.57, err_norm = 0.627), all outputs finite. The fp16 round-trip accumulation stays within the compliance budget, so c1's predicted violation is rebutted; peak h ~4.04 as the refined description model predicted.",
-            "supports": "rebutted"
+            "status": "confirmed",
+            "summary": "Kernel output on exact make_inputs workload (t=640, d=32, seed 452) gives E = 0.00402 vs the contract budget 0.003 \u2014 a budget violation (34% over budget). Outputs are finite, but per-row relative error grows monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639, with tail (t=576..639) relative error 0.0055, matching the predicted undamped accumulation of per-state fp16 rounding in the unit-decay recurrence.",
+            "supports": "confirmed"
           },
           "tool": "finalize_probe_evidence"
         }
@@ -459,20 +548,20 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 7.864,
-        "input_tokens": 26281,
-        "output_tokens": 332
+        "duration_s": 9.053,
+        "input_tokens": 24909,
+        "output_tokens": 435
       }
     },
     {
-      "duration_s": 5.491815867000014,
+      "duration_s": 6.3239984270000065,
       "role": "skeptic",
       "round": 9,
-      "text": "The decisive exact-workload probe already ran: E = 0.00199 \u2264 0.003 with all outputs finite, so claim c1 (fp16 accumulation budget violation) is rebutted on the only in-scope workload. No new material in-scope problems have surfaced.",
+      "text": "The runtime probe decisively confirms claim c1: E = 0.00402 > 0.003 budget on the exact in-scope workload, with error growth matching the predicted undamped fp16 accumulation. No new material issues \u2014 I'll close the review.",
       "tool_calls": [
         {
           "args": {
-            "reason": "Final review: the single contract-relevant risk (accumulated fp16 state rounding exceeding the E<=0.003 budget on the exact seeded workload) was recorded as c1 and decisively settled by the exact-workload runtime probe (E = 0.00199 <= 0.003, all outputs finite, denominator = ref_norm = 315.57). No new evidence exposes any additional in-scope, testable defect; contiguity, finiteness, and ordering are structurally safe on this fixed contiguous workload and were covered by the same probe.",
+            "reason": "Final review: the decisive runtime probe (t10) confirms the sole in-scope claim c1 \u2014 on the exact make_inputs workload, E = 0.00402 vs the contract budget 0.003 (34% over), with outputs finite and per-row relative error growing monotonically to ~5.9e-3 at t=639, matching the undamped fp16 state-rounding mechanism. This fully covers the single-workload compliance question defined by problem.txt; no other concerns (other shapes/dtypes, contiguity, overflow at |h|~6.4) are in scope or plausible. No new claims warranted.",
             "reviewed_claims": [
               "c1"
             ]
@@ -483,25 +572,25 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.492,
-        "input_tokens": 29645,
-        "output_tokens": 216
+        "duration_s": 6.324,
+        "input_tokens": 30322,
+        "output_tokens": 229
       }
     },
     {
-      "duration_s": 8.366736663999973,
+      "duration_s": 7.430528667999994,
       "role": "judge",
       "round": 10,
-      "text": "The single in-scope claim (c1, fp16 accumulation budget violation) was decisively rebutted by the exact-workload probe: E = 0.00199 \u2264 0.003, all outputs finite, matching the contract's compliance criterion exactly. Skeptic has signed off with no new claims. Recording the verdict.",
+      "text": "The decisive probe on the exact contracted workload confirms a budget violation: E = 0.00402 > 0.003, with error growth matching the undamped fp16 accumulation mechanism. Claim c1 is in-scope, confirmed by direct runtime evidence, the Skeptic signed off with no new claims, and no open claims remain. Recording a reject verdict.",
       "tool_calls": [
         {
           "args": {
-            "confidence": 0.95,
+            "confidence": 0.97,
             "decisive_claims": [
               "c1"
             ],
-            "reason": "The contract requires only finite outputs and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32). The only in-scope risk claim c1 \u2014 that per-step fp16 rounding of the recurrence state accumulates error violating the budget \u2014 was tested by the exact seeded-workload runtime probe (t10): E = 0.00199 <= 0.003 (err_norm 0.627 vs denom/ref_norm 315.57), all 16384 outputs finite, peak h ~4.04 with errors concentrated in late steps yet still within budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 round-trip is acceptable by the \"reduced precision is explicitly permitted if this budget is met\" clause. No open claims remain; Skeptic reviewed the latest evidence and recorded no new claims. This is finite-workload compliance only, not general-input correctness, as the contract itself states.",
-            "verdict": "trust"
+            "reason": "The sole in-scope compliance question is E <= 0.003 and finiteness on the exact make_inputs workload (t=640, d=32, seed 452, decay=1.0). Claim c1 is in_scope with scope evidence citing problem.txt's exact workload and kernel.py line 13 (per-state fp16 rounding), and the runtime probe (t10) on the exact inputs shows E = 0.00402 > 0.003 budget (34% over), outputs finite, with per-row relative error growing monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639 \u2014 exactly the signature of undamped fp16 state-rounding accumulation in the unit-decay recurrence. The contract explicitly permits reduced precision only if the budget is met; here it is not, so this is a confirmed contract violation. No open claims remain and the Skeptic reviewed the latest evidence with no new claims.",
+            "verdict": "reject"
           },
           "tool": "record_verdict"
         }
@@ -509,16 +598,16 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 8.367,
-        "input_tokens": 29878,
-        "output_tokens": 361
+        "duration_s": 7.431,
+        "input_tokens": 30393,
+        "output_tokens": 321
       }
     }
   ],
   "skeptic_review": {
-    "created_at": "2026-09-30T09:00:20Z",
+    "created_at": "2026-09-30T08:51:14Z",
     "decision": "no_new_claims",
-    "reason": "Final review: the single contract-relevant risk (accumulated fp16 state rounding exceeding the E<=0.003 budget on the exact seeded workload) was recorded as c1 and decisively settled by the exact-workload runtime probe (E = 0.00199 <= 0.003, all outputs finite, denominator = ref_norm = 315.57). No new evidence exposes any additional in-scope, testable defect; contiguity, finiteness, and ordering are structurally safe on this fixed contiguous workload and were covered by the same probe.",
+    "reason": "Final review: the decisive runtime probe (t10) confirms the sole in-scope claim c1 \u2014 on the exact make_inputs workload, E = 0.00402 vs the contract budget 0.003 (34% over), with outputs finite and per-row relative error growing monotonically to ~5.9e-3 at t=639, matching the undamped fp16 state-rounding mechanism. This fully covers the single-workload compliance question defined by problem.txt; no other concerns (other shapes/dtypes, contiguity, overflow at |h|~6.4) are in scope or plausible. No new claims warranted.",
     "reviewed_claims": [
       "c1"
     ],
@@ -539,24 +628,23 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_89"
+        "entry": "case_83"
       },
-      "created_at": "2026-09-30T08:58:40Z",
+      "created_at": "2026-09-30T08:49:38Z",
       "id": "t1",
       "output": {
         "artifact_files": [
-          "__pycache__/kernel.cpython-311.pyc",
           "kernel.py",
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_89",
+        "entry": "case_83",
         "has_error": null,
-        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 451, 't': 512, 'd': 32, 'decay': 0.999, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _kernel(A, B, O, T: tl.constexpr, D: tl.constexpr):\n    d = tl.arange(0, D)\n    h = tl.full((D,), 0.0, tl.float32)\n    for t in range(T):\n        a = tl.load(A + t * D + d)\n        b = tl.load(B + t * D + d)\n        h = a * h + b\n        h = h.to(tl.float16).to(tl.float32)\n        tl.store(O + t * D + d, h)\n\ndef run(a, b):\n    t, d = a.shape\n    out = torch.empty_like(b)\n    _kernel[(1,)](a, b, out, t, d, enable_fp_fusion=False)\n    return out\n\nCONFIG = {'family': 'recurrence', 'seed': 452, 't': 640, 'd': 32, 'decay': 1.0, 'noise': 0.001, 'bias': 0.01}\n\ndef make_inputs(device=\"cuda\"):\n    import numpy as np\n    cfg = CONFIG\n    # CPU NumPy PCG64; all inputs are then rounded once to binary32.\n    rng = np.random.Generator(np.random.PCG64(cfg[\"seed\"]))\n    def tensor(x):\n        return torch.from_numpy(np.asarray(x, dtype=np.float32).copy()).to(device)\n    if cfg[\"family\"] == \"attention\":\n        n, d = cfg[\"n\"], cfg[\"d\"]\n        q = rng.standard_normal(d)\n        k = rng.standard_normal((n, d)) * cfg[\"scale\"]\n        # Structured value offset controls cancellation in the output.\n        v = rng.standard_normal((n, d))\n        q32, k32 = q.astype(np.float32), k.astype(np.float32)\n        z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)\n        p = np.exp(z - z.max()); p /= p.sum()\n        v -= cfg[\"center\"] * (p @ v)[None, :]\n        return tensor(q32), tensor(k32), tensor(v)\n    if cfg[\"family\"] == \"quantization\":\n        m, k = cfg[\"m\"], cfg[\"k\"]\n        w = rng.standard_normal((m, k)).astype(np.float32)\n        x = rng.standard_normal(k)\n        # Mix a weight direction with an independently sampled direction.\n        direction = w.astype(np.float64).sum(axis=0)\n        direction /= np.linalg.norm(direction)\n        x /= np.linalg.norm(x)\n        x = cfg[\"mix\"] * direction + (1.0 - cfg[\"mix\"]) * x\n        wf = w.astype(np.float64)\n        scale = np.max(np.abs(wf), axis=1, keepdims=True) / 7.0\n        residual = (np.clip(np.floor(wf / scale + 0.5), -7, 7) * scale - wf).sum(axis=0)\n        residual /= np.linalg.norm(residual)\n        x += cfg[\"residual\"] * residual\n        return tensor(x), tensor(w)\n    t, d = cfg[\"t\"], cfg[\"d\"]\n    a = np.full((t, d), cfg[\"decay\"], dtype=np.float64)\n    b = rng.standard_normal((t, d)) * cfg[\"noise\"]\n    b += cfg[\"bias\"]\n    return tensor(a), tensor(b)\n",
         "passed": null,
         "problem_text": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
         "rounds": null,
-        "session_dir": "/root/pilot_cases/case_89",
+        "session_dir": "/root/pilot_cases/case_83",
         "status": "unverified",
         "test_code": ""
       },
@@ -565,13 +653,13 @@
     },
     {
       "args": {
-        "entry": "case_89"
+        "entry": "case_83"
       },
-      "created_at": "2026-09-30T08:58:40Z",
+      "created_at": "2026-09-30T08:49:38Z",
       "id": "t2",
       "output": {
         "content": "Evaluate this implementation's numerical compliance on a SINGLE fully specified workload.\nThe workload is exactly make_inputs() in kernel.py (NumPy 2.2.6 PCG64 on CPU,\nrounded to float32 before transfer). No additional inputs or shapes are in scope.\nTarget: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0. All shapes are supported powers\nof two where required. The operation is:\nh[0] = a[0] * 0 + b[0]; h[t] = a[t] * h[t-1] + b[t]. Return ALL states.\nThe reference is the mathematical operation evaluated in float64 on the SAME\nfloat32 input values. Define E = ||output-reference||_2 /\nmax(||reference||_2, 0.001*sqrt(number_of_output_elements)), flattening tensors.\nThe implementation satisfies the contract iff all outputs are finite and E <= 0.003.\nReduced precision and approximate arithmetic are explicitly permitted if this\nbudget is met. Their presence alone is neither a defect nor proof of compliance.\nJudge trust for compliance, reject for a budget violation, or needs_more_evidence.\nThis is finite-workload compliance, NOT a claim of correctness for all inputs.\n",
-        "entry": "case_89",
+        "entry": "case_83",
         "exists": true,
         "path": "problem.txt"
       },
@@ -580,22 +668,17 @@
     },
     {
       "args": {
-        "entry": "case_89"
+        "entry": "case_83"
       },
-      "created_at": "2026-09-30T08:58:40Z",
+      "created_at": "2026-09-30T08:49:38Z",
       "id": "t3",
       "output": {
-        "entry": "case_89",
+        "entry": "case_83",
         "files": [
-          {
-            "kind": "other",
-            "path": "__pycache__/kernel.cpython-311.pyc",
-            "size_bytes": 5655
-          },
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 2419
+            "size_bytes": 2417
           },
           {
             "kind": "metadata",
@@ -614,14 +697,14 @@
     },
     {
       "args": {
-        "entry": "case_89",
+        "entry": "case_83",
         "path": "meta.json"
       },
-      "created_at": "2026-09-30T08:58:40Z",
+      "created_at": "2026-09-30T08:49:38Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_89\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
-        "entry": "case_89",
+        "content": "{\n  \"name\": \"case_83\",\n  \"status\": \"unverified\",\n  \"passed\": null\n}\n",
+        "entry": "case_83",
         "kind": "metadata",
         "path": "meta.json",
         "size_chars": 68,
@@ -633,85 +716,93 @@
     {
       "args": {
         "contract_model": [
-          "Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.",
-          "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).",
-          "Reference: same recurrence evaluated in float64 on the same float32 inputs.",
-          "Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.",
-          "Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness."
+          "Single fixed workload: recurrence family, t=640, d=32, a=1.0 (all entries), b = N(0,0.001)+0.01 per element, seed 452, inputs rounded to float32 on CPU before transfer (kernel.py CONFIG/make_inputs).",
+          "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; must return ALL 640x32 states.",
+          "Reference: same float32 inputs evaluated in float64; error metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(numel)); require finite outputs and E <= 0.003.",
+          "Reduced precision arithmetic is explicitly permitted if budget met; scope is this finite workload only, not all inputs."
         ],
         "kernel_model": [
-          "_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential \u2014 no parallel-scan reordering issue.",
-          "State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.",
-          "run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).",
-          "All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) \u2248 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone."
+          "Triton kernel iterates t=0..639 sequentially over D=32 lanes in one program, computing h = a*h + b.",
+          "Each state is quantized to fp16 then back to fp32 before storing (line 13), i.e. the recurrence propagates fp16-rounded states; accumulation products/sums are fp32 with fp fusion disabled.",
+          "run() launches a single program with grid (1,) and writes all T*D states to out (empty_like(b)).",
+          "Output dtype is float32 (empty_like of b); inputs a,b are float32 per make_inputs."
         ],
         "risk_map": [
-          "fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference \u2014 with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) \u2248 ||ref||_2 \u2248 sqrt(16384*~100) \u2248 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.",
-          "Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison \u2014 Skeptic should compute both terms numerically rather than reason symbolically.",
-          "Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.",
-          "Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope)."
+          "Cumulative error: h grows toward bias/(1-decay) ~ 0.01/(1-1)=divergent when a=1.0; with a=1.0 exactly, h[t] = sum of b[0..t], i.e. a random walk reaching magnitude ~ sqrt(t)*noise ~ 0.025, while fp16 rounding per step (eps ~ 6e-5 relative near h) accumulates over 640 steps.",
+          "fp16 rounding error relative to fp32 state: each step rounds h to fp16 (~5e-4 relative), errors accumulate in a decay=1 recurrence without damping; must check whether E stays under 0.003.",
+          "fp16 range: h stays small (|h| << 65504), so overflow unlikely; subnormal/flush behavior not expected to matter at these magnitudes.",
+          "enable_fp_fusion=False avoids fma contraction; single-thread loop is deterministic but slow \u2014 performance is out of contract scope.",
+          "Indexing assumes contiguous row-major (t*D + d) layout; make_inputs returns contiguous tensors, so in-scope OK."
         ],
-        "scope_notes": "Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\", \"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\", \"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\"]",
-        "summary": "case_89: linear recurrence kernel (h[t]=a[t]*h[t-1]+b[t]) over t=512,d=32 with a=0.999 decay and b~0.01 bias; kernel runs one sequential Triton program that rounds h to float16 at every step. Compliance judged solely by relative L2 error E<=0.003 vs float64 reference on this exact workload."
+        "scope_notes": [
+          "Only the exact make_inputs workload (t=640, d=32, seed 452, decay 1.0, noise 0.001, bias 0.01) is in scope; no other shapes/distributions.",
+          "Contract permits reduced precision; the sole compliance question is E <= 0.003 and finiteness on this workload.",
+          "Judge is trust/reject/needs_more_evidence on finite-workload compliance, not general correctness."
+        ],
+        "summary": "Case_83: Triton sequential recurrence kernel h[t]=a*h[t-1]+b over t=640,d=32 with fp16 rounding of every state; contract allows reduced precision within E<=0.003 on the single fixed workload (a=1.0, b=N(0,0.001)+0.01)."
       },
-      "created_at": "2026-09-30T08:58:58Z",
+      "created_at": "2026-09-30T08:49:53Z",
       "id": "t5",
       "output": {
         "description_model": {
           "contract_model": [
-            "Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.",
-            "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).",
-            "Reference: same recurrence evaluated in float64 on the same float32 inputs.",
-            "Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.",
-            "Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness."
+            "Single fixed workload: recurrence family, t=640, d=32, a=1.0 (all entries), b = N(0,0.001)+0.01 per element, seed 452, inputs rounded to float32 on CPU before transfer (kernel.py CONFIG/make_inputs).",
+            "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; must return ALL 640x32 states.",
+            "Reference: same float32 inputs evaluated in float64; error metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(numel)); require finite outputs and E <= 0.003.",
+            "Reduced precision arithmetic is explicitly permitted if budget met; scope is this finite workload only, not all inputs."
           ],
           "kernel_model": [
-            "_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential \u2014 no parallel-scan reordering issue.",
-            "State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.",
-            "run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).",
-            "All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) \u2248 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone."
+            "Triton kernel iterates t=0..639 sequentially over D=32 lanes in one program, computing h = a*h + b.",
+            "Each state is quantized to fp16 then back to fp32 before storing (line 13), i.e. the recurrence propagates fp16-rounded states; accumulation products/sums are fp32 with fp fusion disabled.",
+            "run() launches a single program with grid (1,) and writes all T*D states to out (empty_like(b)).",
+            "Output dtype is float32 (empty_like of b); inputs a,b are float32 per make_inputs."
           ],
           "open_questions": [],
           "risk_map": [
-            "fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference \u2014 with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) \u2248 ||ref||_2 \u2248 sqrt(16384*~100) \u2248 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.",
-            "Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison \u2014 Skeptic should compute both terms numerically rather than reason symbolically.",
-            "Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.",
-            "Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope)."
+            "Cumulative error: h grows toward bias/(1-decay) ~ 0.01/(1-1)=divergent when a=1.0; with a=1.0 exactly, h[t] = sum of b[0..t], i.e. a random walk reaching magnitude ~ sqrt(t)*noise ~ 0.025, while fp16 rounding per step (eps ~ 6e-5 relative near h) accumulates over 640 steps.",
+            "fp16 rounding error relative to fp32 state: each step rounds h to fp16 (~5e-4 relative), errors accumulate in a decay=1 recurrence without damping; must check whether E stays under 0.003.",
+            "fp16 range: h stays small (|h| << 65504), so overflow unlikely; subnormal/flush behavior not expected to matter at these magnitudes.",
+            "enable_fp_fusion=False avoids fma contraction; single-thread loop is deterministic but slow \u2014 performance is out of contract scope.",
+            "Indexing assumes contiguous row-major (t*D + d) layout; make_inputs returns contiguous tensors, so in-scope OK."
           ],
           "scope_notes": [
-            "Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\", \"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\", \"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\"]"
+            "Only the exact make_inputs workload (t=640, d=32, seed 452, decay 1.0, noise 0.001, bias 0.01) is in scope; no other shapes/distributions.",
+            "Contract permits reduced precision; the sole compliance question is E <= 0.003 and finiteness on this workload.",
+            "Judge is trust/reject/needs_more_evidence on finite-workload compliance, not general correctness."
           ]
         },
         "resolved_tasks": [],
         "update": {
           "contract_model": [
-            "Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.",
-            "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).",
-            "Reference: same recurrence evaluated in float64 on the same float32 inputs.",
-            "Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.",
-            "Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness."
+            "Single fixed workload: recurrence family, t=640, d=32, a=1.0 (all entries), b = N(0,0.001)+0.01 per element, seed 452, inputs rounded to float32 on CPU before transfer (kernel.py CONFIG/make_inputs).",
+            "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; must return ALL 640x32 states.",
+            "Reference: same float32 inputs evaluated in float64; error metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(numel)); require finite outputs and E <= 0.003.",
+            "Reduced precision arithmetic is explicitly permitted if budget met; scope is this finite workload only, not all inputs."
           ],
-          "created_at": "2026-09-30T08:58:58Z",
+          "created_at": "2026-09-30T08:49:53Z",
           "created_by": "describer",
           "id": "du1",
           "impact_on_claims": [],
           "kernel_model": [
-            "_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential \u2014 no parallel-scan reordering issue.",
-            "State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.",
-            "run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).",
-            "All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) \u2248 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone."
+            "Triton kernel iterates t=0..639 sequentially over D=32 lanes in one program, computing h = a*h + b.",
+            "Each state is quantized to fp16 then back to fp32 before storing (line 13), i.e. the recurrence propagates fp16-rounded states; accumulation products/sums are fp32 with fp fusion disabled.",
+            "run() launches a single program with grid (1,) and writes all T*D states to out (empty_like(b)).",
+            "Output dtype is float32 (empty_like of b); inputs a,b are float32 per make_inputs."
           ],
           "open_questions": [],
           "risk_map": [
-            "fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference \u2014 with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) \u2248 ||ref||_2 \u2248 sqrt(16384*~100) \u2248 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.",
-            "Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison \u2014 Skeptic should compute both terms numerically rather than reason symbolically.",
-            "Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.",
-            "Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope)."
+            "Cumulative error: h grows toward bias/(1-decay) ~ 0.01/(1-1)=divergent when a=1.0; with a=1.0 exactly, h[t] = sum of b[0..t], i.e. a random walk reaching magnitude ~ sqrt(t)*noise ~ 0.025, while fp16 rounding per step (eps ~ 6e-5 relative near h) accumulates over 640 steps.",
+            "fp16 rounding error relative to fp32 state: each step rounds h to fp16 (~5e-4 relative), errors accumulate in a decay=1 recurrence without damping; must check whether E stays under 0.003.",
+            "fp16 range: h stays small (|h| << 65504), so overflow unlikely; subnormal/flush behavior not expected to matter at these magnitudes.",
+            "enable_fp_fusion=False avoids fma contraction; single-thread loop is deterministic but slow \u2014 performance is out of contract scope.",
+            "Indexing assumes contiguous row-major (t*D + d) layout; make_inputs returns contiguous tensors, so in-scope OK."
           ],
           "scope_notes": [
-            "Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\", \"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\", \"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\"]"
+            "Only the exact make_inputs workload (t=640, d=32, seed 452, decay 1.0, noise 0.001, bias 0.01) is in scope; no other shapes/distributions.",
+            "Contract permits reduced precision; the sole compliance question is E <= 0.003 and finiteness on this workload.",
+            "Judge is trust/reject/needs_more_evidence on finite-workload compliance, not general correctness."
           ],
-          "summary": "case_89: linear recurrence kernel (h[t]=a[t]*h[t-1]+b[t]) over t=512,d=32 with a=0.999 decay and b~0.01 bias; kernel runs one sequential Triton program that rounds h to float16 at every step. Compliance judged solely by relative L2 error E<=0.003 vs float64 reference on this exact workload.",
+          "summary": "Case_83: Triton sequential recurrence kernel h[t]=a*h[t-1]+b over t=640,d=32 with fp16 rounding of every state; contract allows reduced precision within E<=0.003 on the single fixed workload (a=1.0, b=N(0,0.001)+0.01).",
           "task_ids": [],
           "turn": 2
         }
@@ -721,17 +812,21 @@
     },
     {
       "args": {
-        "rationale": "Per-step fp16 quantization error of h (std ~0.004 at h~10 where fp16 ulp is ~0.0078) passes through the 0.999 contraction with steady-state error std ~ rounding/sqrt(2*(1-0.999)) \u2248 0.09 per element, giving ||err||_2 \u2248 11.5 vs ||ref||_2 \u2248 1280 and E \u2248 0.009 \u2014 about 3x the 0.003 budget. Symbolic estimate needs a runtime probe on the exact seeded workload to confirm or rebut.",
+        "rationale": "With a=1.0 the rounding errors are never damped; at h magnitude ~m the per-step fp16 rounding error is ~m\u00b72^-11, and these errors accumulate (roughly as a random walk) across 640 steps, so total deviation may rival or exceed the 0.003 relative budget depending on reference norm growth (~0.01\u00b7t).",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Compliance requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32, decay 0.999, b~0.01 bias); the reference is float64 recurrence on the same float32 inputs."
+            "summary": "Contract defines the single workload (make_inputs: t=640, d=32, decay=1.0, noise=0.001, bias=0.01) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs."
+          },
+          {
+            "source": "kernel.py line 13",
+            "summary": "h = h.to(tl.float16).to(tl.float32) quantizes each propagated state to fp16, while the reference evaluates the same recurrence in float64."
           }
         ],
-        "statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01)."
+        "statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload."
       },
-      "created_at": "2026-09-30T08:59:09Z",
+      "created_at": "2026-09-30T08:50:09Z",
       "id": "t6",
       "output": {
         "error": {
@@ -749,129 +844,118 @@
     },
     {
       "args": {
-        "rationale": "Per-step fp16 quantization error of h (std ~0.004 at h~10 where fp16 ulp is ~0.0078) passes through the 0.999 contraction with steady-state error std ~ rounding/sqrt(2*(1-0.999)) \u2248 0.09 per element, giving ||err||_2 \u2248 11.5 vs ||ref||_2 \u2248 1280 and E \u2248 0.009 \u2014 about 3x the 0.003 budget. Symbolic estimate needs a runtime probe on the exact seeded workload to confirm or rebut.",
+        "rationale": "With a=1.0 the rounding errors are never damped; at h magnitude ~m the per-step fp16 rounding error is ~m\u00b72^-11, and these errors accumulate (roughly as a random walk) across 640 steps, so total deviation may rival or exceed the 0.003 relative budget depending on reference norm growth (~0.01\u00b7t).",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Compliance requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32, decay 0.999, b~0.01 bias); the reference is float64 recurrence on the same float32 inputs."
+            "summary": "Contract defines the single workload (make_inputs: t=640, d=32, decay=1.0, noise=0.001, bias=0.01) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs."
+          },
+          {
+            "source": "kernel.py line 13",
+            "summary": "h = h.to(tl.float16).to(tl.float32) quantizes each propagated state to fp16, while the reference evaluates the same recurrence in float64."
           }
         ],
-        "scope_rationale": "The contract fixes the exact workload (make_inputs, t=512, d=32, decay 0.999, noise 0.001, bias 0.01) and requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 vs a float64 reference on the same float32 inputs; any output-error accumulation on this exact workload is in scope.",
-        "statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01)."
+        "scope_rationale": "problem.txt fixes the exact workload (make_inputs: t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs; a budget violation on this single workload is precisely the in-scope defect the contract defines.",
+        "statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload."
       },
-      "created_at": "2026-09-30T08:59:18Z",
+      "created_at": "2026-09-30T08:50:17Z",
       "id": "t7",
       "output": {
-        "created_at": "2026-09-30T08:59:18Z",
+        "created_at": "2026-09-30T08:50:17Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "skeptic",
-        "rationale": "Per-step fp16 quantization error of h (std ~0.004 at h~10 where fp16 ulp is ~0.0078) passes through the 0.999 contraction with steady-state error std ~ rounding/sqrt(2*(1-0.999)) \u2248 0.09 per element, giving ||err||_2 \u2248 11.5 vs ||ref||_2 \u2248 1280 and E \u2248 0.009 \u2014 about 3x the 0.003 budget. Symbolic estimate needs a runtime probe on the exact seeded workload to confirm or rebut.",
+        "rationale": "With a=1.0 the rounding errors are never damped; at h magnitude ~m the per-step fp16 rounding error is ~m\u00b72^-11, and these errors accumulate (roughly as a random walk) across 640 steps, so total deviation may rival or exceed the 0.003 relative budget depending on reference norm growth (~0.01\u00b7t).",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Compliance requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32, decay 0.999, b~0.01 bias); the reference is float64 recurrence on the same float32 inputs."
+            "summary": "Contract defines the single workload (make_inputs: t=640, d=32, decay=1.0, noise=0.001, bias=0.01) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs."
+          },
+          {
+            "source": "kernel.py line 13",
+            "summary": "h = h.to(tl.float16).to(tl.float32) quantizes each propagated state to fp16, while the reference evaluates the same recurrence in float64."
           }
         ],
-        "scope_rationale": "The contract fixes the exact workload (make_inputs, t=512, d=32, decay 0.999, noise 0.001, bias 0.01) and requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 vs a float64 reference on the same float32 inputs; any output-error accumulation on this exact workload is in scope.",
-        "statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01).",
+        "scope_rationale": "problem.txt fixes the exact workload (make_inputs: t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs; a budget violation on this single workload is precisely the in-scope defect the contract defines.",
+        "statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload.",
         "status": "open",
-        "updated_at": "2026-09-30T08:59:18Z"
+        "updated_at": "2026-09-30T08:50:17Z"
       },
       "status": "ok",
       "tool": "record_claim"
     },
     {
       "args": {
-        "contract_model": [
-          "Unchanged: single seeded recurrence workload (t=512, d=32, a=0.999, b~0.01), fp64 reference on same fp32 inputs, E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 plus finiteness, N=16384."
-        ],
         "kernel_model": [
-          "Magnitude refinement: h grows as h[t] = 10*(1-0.999^t); 0.999^512 = e^{-0.512} = 0.599, so h peaks near 4.0 at t=511, never reaching the fixed point 10 \u2014 the earlier '~10 steady state' estimate was wrong for this finite horizon.",
-          "Consequently fp16 ulp at the largest states is ~0.0039 (binade [4,8)), rounding error std ~0.001 per step late in the sequence, ~3-4x smaller during the early transient when h < 1.",
-          "Error propagation: accumulated quantization error e[t] = 0.999*e[t-1] + rounding(t); its std at t=511 is ~ rounding/sqrt(1-0.999^2) ~ 0.001/0.0447 ~ 0.022-0.09 per element depending on the effective rounding scale, and ||ref||_2 is near sqrt(mean h^2 * N) ~ sqrt(16384 * ~4-6) ~ 256-300, not 1280.",
-          "Stored outputs are exactly the post-rounding fp32 values, so the output error is purely the state-drift error; there is no additional store rounding.",
-          "Symbolic estimates for E span roughly 0.002-0.01 \u2014 straddling the 0.003 budget \u2014 so this cannot be settled analytically; a runtime probe on the exact seeded workload is required."
+          "With a[0]..a[639]=1.0 exactly and b\u2248N(0.001\u00b2)+0.01, the recurrence reduces to a running sum h[t]=\u03a3b[0..t], dominated by the deterministic bias term 0.01\u00b7t, reaching \u22486.4 per lane at t=640 (noise contributes ~sqrt(t)\u00b70.001 \u2248 0.025).",
+          "fp16 relative spacing is 2^-11\u22484.9e-4; each state quantized at line 13 incurs an absolute rounding error up to ~|h|\u00b72^-11 (up to ~3e-3 near t=640), and since a=1.0 every past error persists undamped in all later states.",
+          "Naive worst-case accumulated deviation at time t is ~\u03a3_s 0.01\u00b7s\u00b72^-11 \u2248 0.01\u00b7t\u00b2/2\u00b72048 \u2248 2.0 at t=640; random rounding signs reduce this (random-walk-like), but even sqrt-of-sum scaling (\u22480.03\u20130.05 absolute vs |h|\u22486.4) implies per-lane relative error ~0.005\u20130.008 at the tail, above the 0.003 budget. This is the quantitative prediction the Experimenter's runtime E computation should confirm or rebut."
         ],
         "risk_map": [
-          "Refined c1 surface: the decisive numbers for E are the accumulated fp16 state-drift norm vs ||ref||_2 ~ 256-300; symbolic estimates straddle the budget (roughly E ~ 0.002-0.01), so a single exact-workload probe computing E directly is both necessary and sufficient evidence.",
-          "Probe design note: the transient matters \u2014 most ||ref||_2 mass and most accumulated error sit in the last ~half of the t range, so an elementwise/per-timestep error breakdown would show whether any late-step drift dominates.",
-          "Edge effects: early steps h~0.01 are near fp16 subnormal/low-precision region but absolute error there is tiny (ulp ~ 1e-5), so early-step error is negligible; risk concentrates in late steps.",
-          "Remaining low risks: contiguity (make_inputs produces contiguous tensors, kernel uses flat t*D+d indexing), finiteness (all values within fp16 range, no overflow)."
+          "Primary risk (claim c1): undamped fp16 state rounding in a unit-decay recurrence; deterministic estimate strongly suggests E>0.003 on this workload. Decisive evidence is the actual E computed on the exact make_inputs output vs the float64 reference, not any analytic bound.",
+          "Early states (t small, |h| small) contribute negligible error; the budget is most threatened by late states \u2014 a probe should report error growth over t as well as the aggregate E.",
+          "Error metric denominator: max(||ref||_2, 0.001\u00b7sqrt(20480)) \u2014 ||ref||_2 will be \u226b0.045 (states span 0.01..6.4), so the norm branch dominates; no subtlety in the denominator."
         ],
-        "scope_notes": [
-          "Scope unchanged: only the single make_inputs() workload counts; verdict is on E <= 0.003 + finiteness on that workload, not general correctness."
-        ],
-        "summary": "Refined magnitude analysis for c1: h peaks near 4.0 (not 10) at t=512 since 0.999^512 = 0.599, shrinking per-step fp16 rounding to ulp ~0.0039 and ||ref||_2 to ~256-300; symbolic E estimates now straddle the 0.003 budget (roughly 0.002-0.01), making a direct runtime E measurement on the exact seeded workload the decisive evidence."
+        "summary": "Quantitative refinement of case_83 description: h grows as a deterministic ~0.01\u00b7t drift to \u22486.4, per-step fp16 rounding error (~|h|\u00b72^-11) persists undamped, and accumulated deviation estimates for late states sit near or above the 0.003 relative budget \u2014 decisive resolution requires the runtime E computation on the exact workload."
       },
-      "created_at": "2026-09-30T08:59:47Z",
+      "created_at": "2026-09-30T08:50:36Z",
       "id": "t8",
       "output": {
         "description_model": {
           "contract_model": [
-            "Single fixed workload: make_inputs() with seed 451, family=recurrence, t=512, d=32, a filled with decay=0.999 (float64 then rounded to float32), b = PCG64 normals*0.001 + 0.01 bias.",
-            "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; return all states (512x32 outputs).",
-            "Reference: same recurrence evaluated in float64 on the same float32 inputs.",
-            "Compliance: all outputs finite and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003, with N = 16384 elements.",
-            "Reduced precision is explicitly permitted if budget is met; this is finite-workload compliance only, not general-input correctness.",
-            "Unchanged: single seeded recurrence workload (t=512, d=32, a=0.999, b~0.01), fp64 reference on same fp32 inputs, E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 plus finiteness, N=16384."
+            "Single fixed workload: recurrence family, t=640, d=32, a=1.0 (all entries), b = N(0,0.001)+0.01 per element, seed 452, inputs rounded to float32 on CPU before transfer (kernel.py CONFIG/make_inputs).",
+            "Operation: h[0]=a[0]*0+b[0]; h[t]=a[t]*h[t-1]+b[t]; must return ALL 640x32 states.",
+            "Reference: same float32 inputs evaluated in float64; error metric E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(numel)); require finite outputs and E <= 0.003.",
+            "Reduced precision arithmetic is explicitly permitted if budget met; scope is this finite workload only, not all inputs."
           ],
           "kernel_model": [
-            "_kernel runs one Triton program (grid (1,)) with a scalar loop over t=0..511 and vector lanes over d=0..31, so the recurrence is strictly sequential \u2014 no parallel-scan reordering issue.",
-            "State h is float32; each step computes h = a*h + b in fp32, then forces h through fp16 round-trip (h.to(fp16).to(fp32)) before storing, injecting ~2^-11 relative rounding every timestep.",
-            "run() reads shape from a, allocates out via empty_like(b), passes T and D as constexpr, and sets enable_fp_fusion=False (no fused multiply-add drift; error is purely the fp16 quantization).",
-            "All intermediate and output tensors on this workload are small (b ~0.01 scale, h converges near b/(1-a) \u2248 10), well inside fp16 dynamic range, so no overflow/inf risk is expected from values alone.",
-            "Magnitude refinement: h grows as h[t] = 10*(1-0.999^t); 0.999^512 = e^{-0.512} = 0.599, so h peaks near 4.0 at t=511, never reaching the fixed point 10 \u2014 the earlier '~10 steady state' estimate was wrong for this finite horizon.",
-            "Consequently fp16 ulp at the largest states is ~0.0039 (binade [4,8)), rounding error std ~0.001 per step late in the sequence, ~3-4x smaller during the early transient when h < 1.",
-            "Error propagation: accumulated quantization error e[t] = 0.999*e[t-1] + rounding(t); its std at t=511 is ~ rounding/sqrt(1-0.999^2) ~ 0.001/0.0447 ~ 0.022-0.09 per element depending on the effective rounding scale, and ||ref||_2 is near sqrt(mean h^2 * N) ~ sqrt(16384 * ~4-6) ~ 256-300, not 1280.",
-            "Stored outputs are exactly the post-rounding fp32 values, so the output error is purely the state-drift error; there is no additional store rounding.",
-            "Symbolic estimates for E span roughly 0.002-0.01 \u2014 straddling the 0.003 budget \u2014 so this cannot be settled analytically; a runtime probe on the exact seeded workload is required."
+            "Triton kernel iterates t=0..639 sequentially over D=32 lanes in one program, computing h = a*h + b.",
+            "Each state is quantized to fp16 then back to fp32 before storing (line 13), i.e. the recurrence propagates fp16-rounded states; accumulation products/sums are fp32 with fp fusion disabled.",
+            "run() launches a single program with grid (1,) and writes all T*D states to out (empty_like(b)).",
+            "Output dtype is float32 (empty_like of b); inputs a,b are float32 per make_inputs.",
+            "With a[0]..a[639]=1.0 exactly and b\u2248N(0.001\u00b2)+0.01, the recurrence reduces to a running sum h[t]=\u03a3b[0..t], dominated by the deterministic bias term 0.01\u00b7t, reaching \u22486.4 per lane at t=640 (noise contributes ~sqrt(t)\u00b70.001 \u2248 0.025).",
+            "fp16 relative spacing is 2^-11\u22484.9e-4; each state quantized at line 13 incurs an absolute rounding error up to ~|h|\u00b72^-11 (up to ~3e-3 near t=640), and since a=1.0 every past error persists undamped in all later states.",
+            "Naive worst-case accumulated deviation at time t is ~\u03a3_s 0.01\u00b7s\u00b72^-11 \u2248 0.01\u00b7t\u00b2/2\u00b72048 \u2248 2.0 at t=640; random rounding signs reduce this (random-walk-like), but even sqrt-of-sum scaling (\u22480.03\u20130.05 absolute vs |h|\u22486.4) implies per-lane relative error ~0.005\u20130.008 at the tail, above the 0.003 budget. This is the quantitative prediction the Experimenter's runtime E computation should confirm or rebut."
           ],
           "open_questions": [],
           "risk_map": [
-            "fp16 rounding of h at every one of 512 steps: accumulated rounding error grows like a random walk vs the fp64 reference \u2014 with effective steady state ~10 and fp16 ulp ~0.005-0.01, per-element error could accumulate to O(0.05-0.1), while the tolerance denominator max(||ref||_2, 0.001*128) \u2248 ||ref||_2 \u2248 sqrt(16384*~100) \u2248 1280, giving E budget ~3.84 absolute RMS; the key question is whether accumulated error stays within that.",
-            "Note the denominator floor is 0.001*sqrt(N)=0.128 and ref norm is large, so E is likely dominated by relative comparison \u2014 Skeptic should compute both terms numerically rather than reason symbolically.",
-            "Potential systematic bias: fp16 round-to-nearest is unbiased per step, but repeated rounding through a contraction (a=0.999) may or may not damp error; needs runtime evidence.",
-            "Contiguity assumption: kernel indexes with flat t*D+d strides, assuming a, b contiguous row-major (make_inputs produces contiguous tensors, so low risk in scope).",
-            "Refined c1 surface: the decisive numbers for E are the accumulated fp16 state-drift norm vs ||ref||_2 ~ 256-300; symbolic estimates straddle the budget (roughly E ~ 0.002-0.01), so a single exact-workload probe computing E directly is both necessary and sufficient evidence.",
-            "Probe design note: the transient matters \u2014 most ||ref||_2 mass and most accumulated error sit in the last ~half of the t range, so an elementwise/per-timestep error breakdown would show whether any late-step drift dominates.",
-            "Edge effects: early steps h~0.01 are near fp16 subnormal/low-precision region but absolute error there is tiny (ulp ~ 1e-5), so early-step error is negligible; risk concentrates in late steps.",
-            "Remaining low risks: contiguity (make_inputs produces contiguous tensors, kernel uses flat t*D+d indexing), finiteness (all values within fp16 range, no overflow)."
+            "Cumulative error: h grows toward bias/(1-decay) ~ 0.01/(1-1)=divergent when a=1.0; with a=1.0 exactly, h[t] = sum of b[0..t], i.e. a random walk reaching magnitude ~ sqrt(t)*noise ~ 0.025, while fp16 rounding per step (eps ~ 6e-5 relative near h) accumulates over 640 steps.",
+            "fp16 rounding error relative to fp32 state: each step rounds h to fp16 (~5e-4 relative), errors accumulate in a decay=1 recurrence without damping; must check whether E stays under 0.003.",
+            "fp16 range: h stays small (|h| << 65504), so overflow unlikely; subnormal/flush behavior not expected to matter at these magnitudes.",
+            "enable_fp_fusion=False avoids fma contraction; single-thread loop is deterministic but slow \u2014 performance is out of contract scope.",
+            "Indexing assumes contiguous row-major (t*D + d) layout; make_inputs returns contiguous tensors, so in-scope OK.",
+            "Primary risk (claim c1): undamped fp16 state rounding in a unit-decay recurrence; deterministic estimate strongly suggests E>0.003 on this workload. Decisive evidence is the actual E computed on the exact make_inputs output vs the float64 reference, not any analytic bound.",
+            "Early states (t small, |h| small) contribute negligible error; the budget is most threatened by late states \u2014 a probe should report error growth over t as well as the aggregate E.",
+            "Error metric denominator: max(||ref||_2, 0.001\u00b7sqrt(20480)) \u2014 ||ref||_2 will be \u226b0.045 (states span 0.01..6.4), so the norm branch dominates; no subtlety in the denominator."
           ],
           "scope_notes": [
-            "Only the single seeded workload (t=512, d=32, decay=0.999, noise=0.001, bias=0.01) is in scope; no other shapes, decays, or distributions count.\", \"Hardware/software pinned: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; input generation on CPU NumPy 2.2.6 PCG64 rounded once to float32 before transfer.\", \"Verdict options are trust / reject / needs_more_evidence, judged on E <= 0.003 plus finiteness, not general correctness.\"]",
-            "Scope unchanged: only the single make_inputs() workload counts; verdict is on E <= 0.003 + finiteness on that workload, not general correctness."
+            "Only the exact make_inputs workload (t=640, d=32, seed 452, decay 1.0, noise 0.001, bias 0.01) is in scope; no other shapes/distributions.",
+            "Contract permits reduced precision; the sole compliance question is E <= 0.003 and finiteness on this workload.",
+            "Judge is trust/reject/needs_more_evidence on finite-workload compliance, not general correctness."
           ]
         },
         "resolved_tasks": [],
         "update": {
-          "contract_model": [
-            "Unchanged: single seeded recurrence workload (t=512, d=32, a=0.999, b~0.01), fp64 reference on same fp32 inputs, E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 plus finiteness, N=16384."
-          ],
-          "created_at": "2026-09-30T08:59:47Z",
+          "contract_model": [],
+          "created_at": "2026-09-30T08:50:36Z",
           "created_by": "describer",
           "id": "du2",
           "impact_on_claims": [],
           "kernel_model": [
-            "Magnitude refinement: h grows as h[t] = 10*(1-0.999^t); 0.999^512 = e^{-0.512} = 0.599, so h peaks near 4.0 at t=511, never reaching the fixed point 10 \u2014 the earlier '~10 steady state' estimate was wrong for this finite horizon.",
-            "Consequently fp16 ulp at the largest states is ~0.0039 (binade [4,8)), rounding error std ~0.001 per step late in the sequence, ~3-4x smaller during the early transient when h < 1.",
-            "Error propagation: accumulated quantization error e[t] = 0.999*e[t-1] + rounding(t); its std at t=511 is ~ rounding/sqrt(1-0.999^2) ~ 0.001/0.0447 ~ 0.022-0.09 per element depending on the effective rounding scale, and ||ref||_2 is near sqrt(mean h^2 * N) ~ sqrt(16384 * ~4-6) ~ 256-300, not 1280.",
-            "Stored outputs are exactly the post-rounding fp32 values, so the output error is purely the state-drift error; there is no additional store rounding.",
-            "Symbolic estimates for E span roughly 0.002-0.01 \u2014 straddling the 0.003 budget \u2014 so this cannot be settled analytically; a runtime probe on the exact seeded workload is required."
+            "With a[0]..a[639]=1.0 exactly and b\u2248N(0.001\u00b2)+0.01, the recurrence reduces to a running sum h[t]=\u03a3b[0..t], dominated by the deterministic bias term 0.01\u00b7t, reaching \u22486.4 per lane at t=640 (noise contributes ~sqrt(t)\u00b70.001 \u2248 0.025).",
+            "fp16 relative spacing is 2^-11\u22484.9e-4; each state quantized at line 13 incurs an absolute rounding error up to ~|h|\u00b72^-11 (up to ~3e-3 near t=640), and since a=1.0 every past error persists undamped in all later states.",
+            "Naive worst-case accumulated deviation at time t is ~\u03a3_s 0.01\u00b7s\u00b72^-11 \u2248 0.01\u00b7t\u00b2/2\u00b72048 \u2248 2.0 at t=640; random rounding signs reduce this (random-walk-like), but even sqrt-of-sum scaling (\u22480.03\u20130.05 absolute vs |h|\u22486.4) implies per-lane relative error ~0.005\u20130.008 at the tail, above the 0.003 budget. This is the quantitative prediction the Experimenter's runtime E computation should confirm or rebut."
           ],
           "open_questions": [],
           "risk_map": [
-            "Refined c1 surface: the decisive numbers for E are the accumulated fp16 state-drift norm vs ||ref||_2 ~ 256-300; symbolic estimates straddle the budget (roughly E ~ 0.002-0.01), so a single exact-workload probe computing E directly is both necessary and sufficient evidence.",
-            "Probe design note: the transient matters \u2014 most ||ref||_2 mass and most accumulated error sit in the last ~half of the t range, so an elementwise/per-timestep error breakdown would show whether any late-step drift dominates.",
-            "Edge effects: early steps h~0.01 are near fp16 subnormal/low-precision region but absolute error there is tiny (ulp ~ 1e-5), so early-step error is negligible; risk concentrates in late steps.",
-            "Remaining low risks: contiguity (make_inputs produces contiguous tensors, kernel uses flat t*D+d indexing), finiteness (all values within fp16 range, no overflow)."
+            "Primary risk (claim c1): undamped fp16 state rounding in a unit-decay recurrence; deterministic estimate strongly suggests E>0.003 on this workload. Decisive evidence is the actual E computed on the exact make_inputs output vs the float64 reference, not any analytic bound.",
+            "Early states (t small, |h| small) contribute negligible error; the budget is most threatened by late states \u2014 a probe should report error growth over t as well as the aggregate E.",
+            "Error metric denominator: max(||ref||_2, 0.001\u00b7sqrt(20480)) \u2014 ||ref||_2 will be \u226b0.045 (states span 0.01..6.4), so the norm branch dominates; no subtlety in the denominator."
           ],
-          "scope_notes": [
-            "Scope unchanged: only the single make_inputs() workload counts; verdict is on E <= 0.003 + finiteness on that workload, not general correctness."
-          ],
-          "summary": "Refined magnitude analysis for c1: h peaks near 4.0 (not 10) at t=512 since 0.999^512 = 0.599, shrinking per-step fp16 rounding to ulp ~0.0039 and ||ref||_2 to ~256-300; symbolic E estimates now straddle the 0.003 budget (roughly 0.002-0.01), making a direct runtime E measurement on the exact seeded workload the decisive evidence.",
+          "scope_notes": [],
+          "summary": "Quantitative refinement of case_83 description: h grows as a deterministic ~0.01\u00b7t drift to \u22486.4, per-step fp16 rounding error (~|h|\u00b72^-11) persists undamped, and accumulated deviation estimates for late states sit near or above the 0.003 relative budget \u2014 decisive resolution requires the runtime E computation on the exact workload.",
           "task_ids": [],
           "turn": 5
         }
@@ -881,17 +965,17 @@
     },
     {
       "args": {
-        "reason": "The only contract-relevant risk \u2014 accumulated fp16 rounding of the recurrence state exceeding the E<=0.003 budget on the exact seeded workload \u2014 is already recorded as open claim c1 with in-scope evidence from problem.txt. Remaining risks (contiguity of the flat t*D+d indexing, output finiteness, no-fp-fusion) are either structurally safe on this fixed contiguous make_inputs workload or will be checked by the same exact-workload E probe that decides c1, so no additional claims are needed.",
+        "reason": "The only in-scope compliance question is E <= 0.003 and finiteness on the single fixed make_inputs workload; that risk is fully captured by open claim c1 (undamped per-state fp16 rounding in the unit-decay recurrence). All other candidate concerns (non-contiguous inputs, other shapes/dtypes, overflow) are out of scope under problem.txt's single-workload contract or implausible at the workload's magnitudes (~6.4 max state vs fp16 max 65504). No further in-scope claims are warranted before the runtime E computation.",
         "reviewed_claims": [
           "c1"
         ]
       },
-      "created_at": "2026-09-30T08:59:53Z",
+      "created_at": "2026-09-30T08:50:43Z",
       "id": "t9",
       "output": {
-        "created_at": "2026-09-30T08:59:53Z",
+        "created_at": "2026-09-30T08:50:43Z",
         "decision": "no_new_claims",
-        "reason": "The only contract-relevant risk \u2014 accumulated fp16 rounding of the recurrence state exceeding the E<=0.003 budget on the exact seeded workload \u2014 is already recorded as open claim c1 with in-scope evidence from problem.txt. Remaining risks (contiguity of the flat t*D+d indexing, output finiteness, no-fp-fusion) are either structurally safe on this fixed contiguous make_inputs workload or will be checked by the same exact-workload E probe that decides c1, so no additional claims are needed.",
+        "reason": "The only in-scope compliance question is E <= 0.003 and finiteness on the single fixed make_inputs workload; that risk is fully captured by open claim c1 (undamped per-state fp16 rounding in the unit-decay recurrence). All other candidate concerns (non-contiguous inputs, other shapes/dtypes, overflow) are out of scope under problem.txt's single-workload contract or implausible at the workload's magnitudes (~6.4 max state vs fp16 max 65504). No further in-scope claims are warranted before the runtime E computation.",
         "reviewed_claims": [
           "c1"
         ],
@@ -905,10 +989,10 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "import json, sys\nsys.path.insert(0, \"/root/pilot_cases/case_89\")\nimport kernel, torch, numpy as np\n\na, b = kernel.make_inputs()\nout = kernel.run(a, b).double().cpu().numpy()\n\n# fp64 reference on same fp32 inputs\na64 = a.double().cpu().numpy(); b64 = b.double().cpu().numpy()\nref = np.empty_like(b64)\nh = np.zeros(b64.shape[1])\nfor t in range(a64.shape[0]):\n    h = a64[t] * h + b64[t]\n    ref[t] = h\n\nerr = out - ref\nN = out.size\nref_norm = np.linalg.norm(ref)\ndenom = max(ref_norm, 0.001 * np.sqrt(N))\nE = np.linalg.norm(err) / denom\nfinite = bool(np.isfinite(out).all())\nper_t = np.linalg.norm(err, axis=1)\nprint(json.dumps({\n    \"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload\",\n    \"E\": E, \"tolerance\": 0.003, \"budget_violation\": bool(E > 0.003),\n    \"ref_norm\": ref_norm, \"denom\": denom, \"err_norm\": np.linalg.norm(err),\n    \"err_rms\": float(np.sqrt((err**2).mean())), \"err_max_abs\": float(np.abs(err).max()),\n    \"finite\": finite, \"N\": N,\n    \"err_norm_last_quarter\": float(per_t[384:].sum()),\n    \"peak_h\": float(ref.max()), \"per_t_err_t511\": float(per_t[-1]),\n}))",
-        "expected_signal": "E > 0.003 confirms fp16 accumulation budget violation; E <= 0.003 rebuts"
+        "code": "import json, sys, types\nimport numpy as np, torch\n\nsys.path.insert(0, \"/root/pilot_cases/case_83\")\nimport kernel as K\n\na, b = K.make_inputs()\nout = K.run(a, b)\nout32 = out.detach().cpu().numpy().astype(np.float64)\na64 = a.detach().cpu().numpy().astype(np.float64)\nb64 = b.detach().cpu().numpy().astype(np.float64)\n\n# float64 reference on same inputs\nref = np.empty_like(b64)\nh = np.zeros(b64.shape[1], dtype=np.float64)\nfor t in range(b64.shape[0]):\n    h = a64[t] * h + b64[t]\n    ref[t] = h\n\nnumel = ref.size\ndenom = max(np.linalg.norm(ref), 0.001 * np.sqrt(numel))\nerr = out32 - ref\nE = np.linalg.norm(err) / denom\n\n# error growth over time (per-t row RMS error and relative to row norms)\nrow_err = np.sqrt((err ** 2).mean(axis=1))\nrow_ref = np.sqrt((ref ** 2).mean(axis=1))\ngrowth = [(t, float(row_err[t]), float(row_err[t] / row_ref[t])) for t in (0, 63, 159, 319, 479, 639)]\nrel_tail = float(np.linalg.norm(err[576:]) / np.linalg.norm(ref[576:]))\n\nprint(json.dumps({\n    \"E\": float(E), \"budget\": 0.003, \"passes\": bool(E <= 0.003),\n    \"finite\": bool(np.isfinite(out32).all()),\n    \"ref_norm\": float(np.linalg.norm(ref)), \"denom\": float(denom),\n    \"err_norm\": float(np.linalg.norm(err)),\n    \"max_abs_err\": float(np.abs(err).max()),\n    \"rel_err_tail_576_639\": rel_tail,\n    \"growth\": growth,\n    \"shape\": list(out32.shape),\n}, default=float))\n",
+        "expected_signal": "E relative error on exact workload vs 0.003 budget"
       },
-      "created_at": "2026-09-30T09:00:07Z",
+      "created_at": "2026-09-30T08:50:59Z",
       "id": "t10",
       "output": {
         "artifacts": [
@@ -916,13 +1000,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t10_probe.py",
-            "sha256": "0c5a237a584c4fd25f628ced84213e84ad6b0e8a545d2812df9a4b45f156d769"
+            "sha256": "6ad6a747922595719e118ad7e3e0db97e3920e7a876c56cd0b3ce867ec2f21ea"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t10_stdout.txt",
-            "sha256": "94028fab2fa5dfb7b93e17a3422deff00554cfea654d3a733fc1bd72427f72fd"
+            "sha256": "10d2aad09c78876650654526a0afdeb37a71129213cecf71403e87050361285a"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -934,13 +1018,13 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t10_json_result.json",
-            "sha256": "21826fc98712d9de2146be288a9dcc70731d53f923c2f409fabe995870ca1128"
+            "sha256": "666afa8756b6d0dc42385dd80822765e81b9f042902d92cfa37b8daf64319e9b"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01).",
-        "cwd": "/root/pilot_cases/case_89",
-        "duration_s": 4.814035,
+        "claim_statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload.",
+        "cwd": "/root/pilot_cases/case_83",
+        "duration_s": 6.335423,
         "event_id": "t10",
         "evidence_draft": {
           "claim_id": "c1",
@@ -950,13 +1034,13 @@
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t10_probe.py",
-                "sha256": "0c5a237a584c4fd25f628ced84213e84ad6b0e8a545d2812df9a4b45f156d769"
+                "sha256": "6ad6a747922595719e118ad7e3e0db97e3920e7a876c56cd0b3ce867ec2f21ea"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t10_stdout.txt",
-                "sha256": "94028fab2fa5dfb7b93e17a3422deff00554cfea654d3a733fc1bd72427f72fd"
+                "sha256": "10d2aad09c78876650654526a0afdeb37a71129213cecf71403e87050361285a"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -968,31 +1052,62 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t10_json_result.json",
-                "sha256": "21826fc98712d9de2146be288a9dcc70731d53f923c2f409fabe995870ca1128"
+                "sha256": "666afa8756b6d0dc42385dd80822765e81b9f042902d92cfa37b8daf64319e9b"
               }
             ],
-            "duration_s": 4.814035,
+            "duration_s": 6.335423,
             "exit_code": 0,
-            "expected_signal": "E > 0.003 confirms fp16 accumulation budget violation; E <= 0.003 rebuts",
+            "expected_signal": "E relative error on exact workload vs 0.003 budget",
             "json_parse_error": null,
             "json_result": {
-              "E": 0.0019861506409589447,
-              "N": 16384,
-              "budget_violation": false,
-              "denom": 315.5695026056802,
-              "err_max_abs": 0.019514182644670086,
-              "err_norm": 0.6267685698673672,
-              "err_norm_last_quarter": 5.186705442215327,
-              "err_rms": 0.004896629452088806,
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "denom": 529.4260244408146,
+              "err_norm": 2.128089434646328,
               "finite": true,
-              "metric": "E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload",
-              "peak_h": 4.0449694272229975,
-              "per_t_err_t511": 0.04682329079315816,
-              "ref_norm": 315.5695026056802,
-              "tolerance": 0.003
+              "growth": [
+                [
+                  0,
+                  2.0515675210474696e-06,
+                  0.00020421974491784513
+                ],
+                [
+                  63,
+                  0.0007789108690756297,
+                  0.001216156372170738
+                ],
+                [
+                  159,
+                  0.002144642547438705,
+                  0.0013424834465221613
+                ],
+                [
+                  319,
+                  0.006829644492111001,
+                  0.0021340250170316676
+                ],
+                [
+                  479,
+                  0.014776370429147003,
+                  0.0030785532954747505
+                ],
+                [
+                  639,
+                  0.03777192828745859,
+                  0.005900842289775617
+                ]
+              ],
+              "max_abs_err": 0.07155016483739018,
+              "passes": false,
+              "ref_norm": 529.4260244408146,
+              "rel_err_tail_576_639": 0.005506693210877705,
+              "shape": [
+                640,
+                32
+              ]
             },
             "stderr": "",
-            "stdout": "{\"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload\", \"E\": 0.0019861506409589447, \"tolerance\": 0.003, \"budget_violation\": false, \"ref_norm\": 315.5695026056802, \"denom\": 315.5695026056802, \"err_norm\": 0.6267685698673672, \"err_rms\": 0.004896629452088806, \"err_max_abs\": 0.019514182644670086, \"finite\": true, \"N\": 16384, \"err_norm_last_quarter\": 5.186705442215327, \"peak_h\": 4.0449694272229975, \"per_t_err_t511\": 0.04682329079315816}\n",
+            "stdout": "{\"E\": 0.004019616219081861, \"budget\": 0.003, \"passes\": false, \"finite\": true, \"ref_norm\": 529.4260244408146, \"denom\": 529.4260244408146, \"err_norm\": 2.128089434646328, \"max_abs_err\": 0.07155016483739018, \"rel_err_tail_576_639\": 0.005506693210877705, \"growth\": [[0, 2.0515675210474696e-06, 0.00020421974491784513], [63, 0.0007789108690756297, 0.001216156372170738], [159, 0.002144642547438705, 0.0013424834465221613], [319, 0.006829644492111001, 0.0021340250170316676], [479, 0.014776370429147003, 0.0030785532954747505], [639, 0.03777192828745859, 0.005900842289775617]], \"shape\": [640, 32]}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -1002,23 +1117,54 @@
           "tool_event_id": "t10"
         },
         "exit_code": 0,
-        "expected_signal": "E > 0.003 confirms fp16 accumulation budget violation; E <= 0.003 rebuts",
+        "expected_signal": "E relative error on exact workload vs 0.003 budget",
         "json_parse_error": null,
         "json_result": {
-          "E": 0.0019861506409589447,
-          "N": 16384,
-          "budget_violation": false,
-          "denom": 315.5695026056802,
-          "err_max_abs": 0.019514182644670086,
-          "err_norm": 0.6267685698673672,
-          "err_norm_last_quarter": 5.186705442215327,
-          "err_rms": 0.004896629452088806,
+          "E": 0.004019616219081861,
+          "budget": 0.003,
+          "denom": 529.4260244408146,
+          "err_norm": 2.128089434646328,
           "finite": true,
-          "metric": "E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload",
-          "peak_h": 4.0449694272229975,
-          "per_t_err_t511": 0.04682329079315816,
-          "ref_norm": 315.5695026056802,
-          "tolerance": 0.003
+          "growth": [
+            [
+              0,
+              2.0515675210474696e-06,
+              0.00020421974491784513
+            ],
+            [
+              63,
+              0.0007789108690756297,
+              0.001216156372170738
+            ],
+            [
+              159,
+              0.002144642547438705,
+              0.0013424834465221613
+            ],
+            [
+              319,
+              0.006829644492111001,
+              0.0021340250170316676
+            ],
+            [
+              479,
+              0.014776370429147003,
+              0.0030785532954747505
+            ],
+            [
+              639,
+              0.03777192828745859,
+              0.005900842289775617
+            ]
+          ],
+          "max_abs_err": 0.07155016483739018,
+          "passes": false,
+          "ref_norm": 529.4260244408146,
+          "rel_err_tail_576_639": 0.005506693210877705,
+          "shape": [
+            640,
+            32
+          ]
         },
         "sandbox": {
           "cpu_limit_s": 90,
@@ -1028,7 +1174,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "{\"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload\", \"E\": 0.0019861506409589447, \"tolerance\": 0.003, \"budget_violation\": false, \"ref_norm\": 315.5695026056802, \"denom\": 315.5695026056802, \"err_norm\": 0.6267685698673672, \"err_rms\": 0.004896629452088806, \"err_max_abs\": 0.019514182644670086, \"finite\": true, \"N\": 16384, \"err_norm_last_quarter\": 5.186705442215327, \"peak_h\": 4.0449694272229975, \"per_t_err_t511\": 0.04682329079315816}\n",
+        "stdout": "{\"E\": 0.004019616219081861, \"budget\": 0.003, \"passes\": false, \"finite\": true, \"ref_norm\": 529.4260244408146, \"denom\": 529.4260244408146, \"err_norm\": 2.128089434646328, \"max_abs_err\": 0.07155016483739018, \"rel_err_tail_576_639\": 0.005506693210877705, \"growth\": [[0, 2.0515675210474696e-06, 0.00020421974491784513], [63, 0.0007789108690756297, 0.001216156372170738], [159, 0.002144642547438705, 0.0013424834465221613], [319, 0.006829644492111001, 0.0021340250170316676], [479, 0.014776370429147003, 0.0030785532954747505], [639, 0.03777192828745859, 0.005900842289775617]], \"shape\": [640, 32]}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -1039,43 +1185,73 @@
     {
       "args": {
         "data": {
-          "E": 0.0019861506409589447,
-          "budget_violation": false,
-          "denom": 315.5695026056802,
-          "err_max_abs": 0.019514182644670086,
-          "err_rms": 0.004896629452088806,
+          "E": 0.004019616219081861,
+          "budget": 0.003,
+          "err_norm": 2.128089434646328,
           "finite": true,
-          "ref_norm": 315.5695026056802,
-          "tolerance": 0.003
+          "growth_rel_by_t": [
+            [
+              0,
+              0.000204
+            ],
+            [
+              63,
+              0.001216
+            ],
+            [
+              159,
+              0.001342
+            ],
+            [
+              319,
+              0.002134
+            ],
+            [
+              479,
+              0.003079
+            ],
+            [
+              639,
+              0.005901
+            ]
+          ],
+          "max_abs_err": 0.07155016483739018,
+          "passes": false,
+          "ref_norm": 529.4260244408146,
+          "rel_err_tail_576_639": 0.005506693210877705,
+          "shape": [
+            640,
+            32
+          ]
         },
         "event_id": "t10",
-        "status": "rebutted",
-        "summary": "Exact-workload probe on make_inputs() (t=512, d=32): kernel output vs fp64 reference on same fp32 inputs gives E = 0.00199 <= 0.003 budget (denominator = ref_norm = 315.57, err_norm = 0.627), all outputs finite. The fp16 round-trip accumulation stays within the compliance budget, so c1's predicted violation is rebutted; peak h ~4.04 as the refined description model predicted.",
-        "supports": "rebutted"
+        "status": "confirmed",
+        "summary": "Kernel output on exact make_inputs workload (t=640, d=32, seed 452) gives E = 0.00402 vs the contract budget 0.003 \u2014 a budget violation (34% over budget). Outputs are finite, but per-row relative error grows monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639, with tail (t=576..639) relative error 0.0055, matching the predicted undamped accumulation of per-state fp16 rounding in the unit-decay recurrence.",
+        "supports": "confirmed"
       },
-      "created_at": "2026-09-30T09:00:15Z",
+      "created_at": "2026-09-30T08:51:08Z",
       "id": "t11",
       "output": {
         "claim": {
-          "created_at": "2026-09-30T08:59:18Z",
+          "created_at": "2026-09-30T08:50:17Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-30T09:00:15Z",
+              "created_at": "2026-09-30T08:51:08Z",
               "data": {
-                "E": 0.0019861506409589447,
+                "E": 0.004019616219081861,
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
                     "path": "probes/t10_probe.py",
-                    "sha256": "0c5a237a584c4fd25f628ced84213e84ad6b0e8a545d2812df9a4b45f156d769"
+                    "sha256": "6ad6a747922595719e118ad7e3e0db97e3920e7a876c56cd0b3ce867ec2f21ea"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t10_stdout.txt",
-                    "sha256": "94028fab2fa5dfb7b93e17a3422deff00554cfea654d3a733fc1bd72427f72fd"
+                    "sha256": "10d2aad09c78876650654526a0afdeb37a71129213cecf71403e87050361285a"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -1087,80 +1263,145 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t10_json_result.json",
-                    "sha256": "21826fc98712d9de2146be288a9dcc70731d53f923c2f409fabe995870ca1128"
+                    "sha256": "666afa8756b6d0dc42385dd80822765e81b9f042902d92cfa37b8daf64319e9b"
                   }
                 ],
-                "budget_violation": false,
-                "denom": 315.5695026056802,
-                "duration_s": 4.814035,
-                "err_max_abs": 0.019514182644670086,
-                "err_rms": 0.004896629452088806,
+                "budget": 0.003,
+                "duration_s": 6.335423,
+                "err_norm": 2.128089434646328,
                 "exit_code": 0,
-                "expected_signal": "E > 0.003 confirms fp16 accumulation budget violation; E <= 0.003 rebuts",
+                "expected_signal": "E relative error on exact workload vs 0.003 budget",
                 "finite": true,
+                "growth_rel_by_t": [
+                  [
+                    0,
+                    0.000204
+                  ],
+                  [
+                    63,
+                    0.001216
+                  ],
+                  [
+                    159,
+                    0.001342
+                  ],
+                  [
+                    319,
+                    0.002134
+                  ],
+                  [
+                    479,
+                    0.003079
+                  ],
+                  [
+                    639,
+                    0.005901
+                  ]
+                ],
                 "json_parse_error": null,
                 "json_result": {
-                  "E": 0.0019861506409589447,
-                  "N": 16384,
-                  "budget_violation": false,
-                  "denom": 315.5695026056802,
-                  "err_max_abs": 0.019514182644670086,
-                  "err_norm": 0.6267685698673672,
-                  "err_norm_last_quarter": 5.186705442215327,
-                  "err_rms": 0.004896629452088806,
+                  "E": 0.004019616219081861,
+                  "budget": 0.003,
+                  "denom": 529.4260244408146,
+                  "err_norm": 2.128089434646328,
                   "finite": true,
-                  "metric": "E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload",
-                  "peak_h": 4.0449694272229975,
-                  "per_t_err_t511": 0.04682329079315816,
-                  "ref_norm": 315.5695026056802,
-                  "tolerance": 0.003
+                  "growth": [
+                    [
+                      0,
+                      2.0515675210474696e-06,
+                      0.00020421974491784513
+                    ],
+                    [
+                      63,
+                      0.0007789108690756297,
+                      0.001216156372170738
+                    ],
+                    [
+                      159,
+                      0.002144642547438705,
+                      0.0013424834465221613
+                    ],
+                    [
+                      319,
+                      0.006829644492111001,
+                      0.0021340250170316676
+                    ],
+                    [
+                      479,
+                      0.014776370429147003,
+                      0.0030785532954747505
+                    ],
+                    [
+                      639,
+                      0.03777192828745859,
+                      0.005900842289775617
+                    ]
+                  ],
+                  "max_abs_err": 0.07155016483739018,
+                  "passes": false,
+                  "ref_norm": 529.4260244408146,
+                  "rel_err_tail_576_639": 0.005506693210877705,
+                  "shape": [
+                    640,
+                    32
+                  ]
                 },
-                "ref_norm": 315.5695026056802,
+                "max_abs_err": 0.07155016483739018,
+                "passes": false,
+                "ref_norm": 529.4260244408146,
+                "rel_err_tail_576_639": 0.005506693210877705,
+                "shape": [
+                  640,
+                  32
+                ],
                 "stderr": "",
-                "stdout": "{\"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload\", \"E\": 0.0019861506409589447, \"tolerance\": 0.003, \"budget_violation\": false, \"ref_norm\": 315.5695026056802, \"denom\": 315.5695026056802, \"err_norm\": 0.6267685698673672, \"err_rms\": 0.004896629452088806, \"err_max_abs\": 0.019514182644670086, \"finite\": true, \"N\": 16384, \"err_norm_last_quarter\": 5.186705442215327, \"peak_h\": 4.0449694272229975, \"per_t_err_t511\": 0.04682329079315816}\n",
+                "stdout": "{\"E\": 0.004019616219081861, \"budget\": 0.003, \"passes\": false, \"finite\": true, \"ref_norm\": 529.4260244408146, \"denom\": 529.4260244408146, \"err_norm\": 2.128089434646328, \"max_abs_err\": 0.07155016483739018, \"rel_err_tail_576_639\": 0.005506693210877705, \"growth\": [[0, 2.0515675210474696e-06, 0.00020421974491784513], [63, 0.0007789108690756297, 0.001216156372170738], [159, 0.002144642547438705, 0.0013424834465221613], [319, 0.006829644492111001, 0.0021340250170316676], [479, 0.014776370429147003, 0.0030785532954747505], [639, 0.03777192828745859, 0.005900842289775617]], \"shape\": [640, 32]}\n",
                 "timed_out": false,
-                "timeout_s": 60,
-                "tolerance": 0.003
+                "timeout_s": 60
               },
               "id": "c1.e1",
               "kind": "runtime_probe",
-              "summary": "Exact-workload probe on make_inputs() (t=512, d=32): kernel output vs fp64 reference on same fp32 inputs gives E = 0.00199 <= 0.003 budget (denominator = ref_norm = 315.57, err_norm = 0.627), all outputs finite. The fp16 round-trip accumulation stays within the compliance budget, so c1's predicted violation is rebutted; peak h ~4.04 as the refined description model predicted.",
-              "supports": "rebutted",
+              "summary": "Kernel output on exact make_inputs workload (t=640, d=32, seed 452) gives E = 0.00402 vs the contract budget 0.003 \u2014 a budget violation (34% over budget). Outputs are finite, but per-row relative error grows monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639, with tail (t=576..639) relative error 0.0055, matching the predicted undamped accumulation of per-state fp16 rounding in the unit-decay recurrence.",
+              "supports": "confirmed",
               "tool_event_id": "t10"
             }
           ],
           "id": "c1",
           "raised_by": "skeptic",
-          "rationale": "Per-step fp16 quantization error of h (std ~0.004 at h~10 where fp16 ulp is ~0.0078) passes through the 0.999 contraction with steady-state error std ~ rounding/sqrt(2*(1-0.999)) \u2248 0.09 per element, giving ||err||_2 \u2248 11.5 vs ||ref||_2 \u2248 1280 and E \u2248 0.009 \u2014 about 3x the 0.003 budget. Symbolic estimate needs a runtime probe on the exact seeded workload to confirm or rebut.",
+          "rationale": "With a=1.0 the rounding errors are never damped; at h magnitude ~m the per-step fp16 rounding error is ~m\u00b72^-11, and these errors accumulate (roughly as a random walk) across 640 steps, so total deviation may rival or exceed the 0.003 relative budget depending on reference norm growth (~0.01\u00b7t).",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "Compliance requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32, decay 0.999, b~0.01 bias); the reference is float64 recurrence on the same float32 inputs."
+              "summary": "Contract defines the single workload (make_inputs: t=640, d=32, decay=1.0, noise=0.001, bias=0.01) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs."
+            },
+            {
+              "source": "kernel.py line 13",
+              "summary": "h = h.to(tl.float16).to(tl.float32) quantizes each propagated state to fp16, while the reference evaluates the same recurrence in float64."
             }
           ],
-          "scope_rationale": "The contract fixes the exact workload (make_inputs, t=512, d=32, decay 0.999, noise 0.001, bias 0.01) and requires E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 vs a float64 reference on the same float32 inputs; any output-error accumulation on this exact workload is in scope.",
-          "statement": "The per-step float16 round-trip of the recurrence state (kernel.py line 13, h.to(tl.float16).to(tl.float32)) accumulates error over t=512 that violates the E <= 0.003 budget on the specified workload (t=512, d=32, decay=0.999, b\u22480.01).",
-          "status": "rebutted",
-          "updated_at": "2026-09-30T09:00:15Z"
+          "scope_rationale": "problem.txt fixes the exact workload (make_inputs: t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452) and requires E = ||output - float64 reference||_2 / max(||ref||_2, 0.001*sqrt(numel)) <= 0.003 on exactly these inputs; a budget violation on this single workload is precisely the in-scope defect the contract defines.",
+          "statement": "On the exact make_inputs workload (t=640, d=32, a=1.0, b=N(0,0.001)+0.01, seed 452), the kernel's per-state fp16 rounding (kernel.py line 13) accumulates undamped over 640 steps and may push the relative error E above the contract budget of 0.003, causing a budget violation on this fixed workload.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:51:08Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-30T09:00:15Z",
+          "created_at": "2026-09-30T08:51:08Z",
           "data": {
-            "E": 0.0019861506409589447,
+            "E": 0.004019616219081861,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t10_probe.py",
-                "sha256": "0c5a237a584c4fd25f628ced84213e84ad6b0e8a545d2812df9a4b45f156d769"
+                "sha256": "6ad6a747922595719e118ad7e3e0db97e3920e7a876c56cd0b3ce867ec2f21ea"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t10_stdout.txt",
-                "sha256": "94028fab2fa5dfb7b93e17a3422deff00554cfea654d3a733fc1bd72427f72fd"
+                "sha256": "10d2aad09c78876650654526a0afdeb37a71129213cecf71403e87050361285a"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -1172,45 +1413,106 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t10_json_result.json",
-                "sha256": "21826fc98712d9de2146be288a9dcc70731d53f923c2f409fabe995870ca1128"
+                "sha256": "666afa8756b6d0dc42385dd80822765e81b9f042902d92cfa37b8daf64319e9b"
               }
             ],
-            "budget_violation": false,
-            "denom": 315.5695026056802,
-            "duration_s": 4.814035,
-            "err_max_abs": 0.019514182644670086,
-            "err_rms": 0.004896629452088806,
+            "budget": 0.003,
+            "duration_s": 6.335423,
+            "err_norm": 2.128089434646328,
             "exit_code": 0,
-            "expected_signal": "E > 0.003 confirms fp16 accumulation budget violation; E <= 0.003 rebuts",
+            "expected_signal": "E relative error on exact workload vs 0.003 budget",
             "finite": true,
+            "growth_rel_by_t": [
+              [
+                0,
+                0.000204
+              ],
+              [
+                63,
+                0.001216
+              ],
+              [
+                159,
+                0.001342
+              ],
+              [
+                319,
+                0.002134
+              ],
+              [
+                479,
+                0.003079
+              ],
+              [
+                639,
+                0.005901
+              ]
+            ],
             "json_parse_error": null,
             "json_result": {
-              "E": 0.0019861506409589447,
-              "N": 16384,
-              "budget_violation": false,
-              "denom": 315.5695026056802,
-              "err_max_abs": 0.019514182644670086,
-              "err_norm": 0.6267685698673672,
-              "err_norm_last_quarter": 5.186705442215327,
-              "err_rms": 0.004896629452088806,
+              "E": 0.004019616219081861,
+              "budget": 0.003,
+              "denom": 529.4260244408146,
+              "err_norm": 2.128089434646328,
               "finite": true,
-              "metric": "E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload",
-              "peak_h": 4.0449694272229975,
-              "per_t_err_t511": 0.04682329079315816,
-              "ref_norm": 315.5695026056802,
-              "tolerance": 0.003
+              "growth": [
+                [
+                  0,
+                  2.0515675210474696e-06,
+                  0.00020421974491784513
+                ],
+                [
+                  63,
+                  0.0007789108690756297,
+                  0.001216156372170738
+                ],
+                [
+                  159,
+                  0.002144642547438705,
+                  0.0013424834465221613
+                ],
+                [
+                  319,
+                  0.006829644492111001,
+                  0.0021340250170316676
+                ],
+                [
+                  479,
+                  0.014776370429147003,
+                  0.0030785532954747505
+                ],
+                [
+                  639,
+                  0.03777192828745859,
+                  0.005900842289775617
+                ]
+              ],
+              "max_abs_err": 0.07155016483739018,
+              "passes": false,
+              "ref_norm": 529.4260244408146,
+              "rel_err_tail_576_639": 0.005506693210877705,
+              "shape": [
+                640,
+                32
+              ]
             },
-            "ref_norm": 315.5695026056802,
+            "max_abs_err": 0.07155016483739018,
+            "passes": false,
+            "ref_norm": 529.4260244408146,
+            "rel_err_tail_576_639": 0.005506693210877705,
+            "shape": [
+              640,
+              32
+            ],
             "stderr": "",
-            "stdout": "{\"metric\": \"E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)), fp64 reference on exact seeded workload\", \"E\": 0.0019861506409589447, \"tolerance\": 0.003, \"budget_violation\": false, \"ref_norm\": 315.5695026056802, \"denom\": 315.5695026056802, \"err_norm\": 0.6267685698673672, \"err_rms\": 0.004896629452088806, \"err_max_abs\": 0.019514182644670086, \"finite\": true, \"N\": 16384, \"err_norm_last_quarter\": 5.186705442215327, \"peak_h\": 4.0449694272229975, \"per_t_err_t511\": 0.04682329079315816}\n",
+            "stdout": "{\"E\": 0.004019616219081861, \"budget\": 0.003, \"passes\": false, \"finite\": true, \"ref_norm\": 529.4260244408146, \"denom\": 529.4260244408146, \"err_norm\": 2.128089434646328, \"max_abs_err\": 0.07155016483739018, \"rel_err_tail_576_639\": 0.005506693210877705, \"growth\": [[0, 2.0515675210474696e-06, 0.00020421974491784513], [63, 0.0007789108690756297, 0.001216156372170738], [159, 0.002144642547438705, 0.0013424834465221613], [319, 0.006829644492111001, 0.0021340250170316676], [479, 0.014776370429147003, 0.0030785532954747505], [639, 0.03777192828745859, 0.005900842289775617]], \"shape\": [640, 32]}\n",
             "timed_out": false,
-            "timeout_s": 60,
-            "tolerance": 0.003
+            "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Exact-workload probe on make_inputs() (t=512, d=32): kernel output vs fp64 reference on same fp32 inputs gives E = 0.00199 <= 0.003 budget (denominator = ref_norm = 315.57, err_norm = 0.627), all outputs finite. The fp16 round-trip accumulation stays within the compliance budget, so c1's predicted violation is rebutted; peak h ~4.04 as the refined description model predicted.",
-          "supports": "rebutted",
+          "summary": "Kernel output on exact make_inputs workload (t=640, d=32, seed 452) gives E = 0.00402 vs the contract budget 0.003 \u2014 a budget violation (34% over budget). Outputs are finite, but per-row relative error grows monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639, with tail (t=576..639) relative error 0.0055, matching the predicted undamped accumulation of per-state fp16 rounding in the unit-decay recurrence.",
+          "supports": "confirmed",
           "tool_event_id": "t10"
         }
       },
@@ -1219,17 +1521,17 @@
     },
     {
       "args": {
-        "reason": "Final review: the single contract-relevant risk (accumulated fp16 state rounding exceeding the E<=0.003 budget on the exact seeded workload) was recorded as c1 and decisively settled by the exact-workload runtime probe (E = 0.00199 <= 0.003, all outputs finite, denominator = ref_norm = 315.57). No new evidence exposes any additional in-scope, testable defect; contiguity, finiteness, and ordering are structurally safe on this fixed contiguous workload and were covered by the same probe.",
+        "reason": "Final review: the decisive runtime probe (t10) confirms the sole in-scope claim c1 \u2014 on the exact make_inputs workload, E = 0.00402 vs the contract budget 0.003 (34% over), with outputs finite and per-row relative error growing monotonically to ~5.9e-3 at t=639, matching the undamped fp16 state-rounding mechanism. This fully covers the single-workload compliance question defined by problem.txt; no other concerns (other shapes/dtypes, contiguity, overflow at |h|~6.4) are in scope or plausible. No new claims warranted.",
         "reviewed_claims": [
           "c1"
         ]
       },
-      "created_at": "2026-09-30T09:00:20Z",
+      "created_at": "2026-09-30T08:51:14Z",
       "id": "t12",
       "output": {
-        "created_at": "2026-09-30T09:00:20Z",
+        "created_at": "2026-09-30T08:51:14Z",
         "decision": "no_new_claims",
-        "reason": "Final review: the single contract-relevant risk (accumulated fp16 state rounding exceeding the E<=0.003 budget on the exact seeded workload) was recorded as c1 and decisively settled by the exact-workload runtime probe (E = 0.00199 <= 0.003, all outputs finite, denominator = ref_norm = 315.57). No new evidence exposes any additional in-scope, testable defect; contiguity, finiteness, and ordering are structurally safe on this fixed contiguous workload and were covered by the same probe.",
+        "reason": "Final review: the decisive runtime probe (t10) confirms the sole in-scope claim c1 \u2014 on the exact make_inputs workload, E = 0.00402 vs the contract budget 0.003 (34% over), with outputs finite and per-row relative error growing monotonically to ~5.9e-3 at t=639, matching the undamped fp16 state-rounding mechanism. This fully covers the single-workload compliance question defined by problem.txt; no other concerns (other shapes/dtypes, contiguity, overflow at |h|~6.4) are in scope or plausible. No new claims warranted.",
         "reviewed_claims": [
           "c1"
         ],
@@ -1242,35 +1544,35 @@
     },
     {
       "args": {
-        "confidence": 0.95,
+        "confidence": 0.97,
         "decisive_claims": [
           "c1"
         ],
-        "reason": "The contract requires only finite outputs and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32). The only in-scope risk claim c1 \u2014 that per-step fp16 rounding of the recurrence state accumulates error violating the budget \u2014 was tested by the exact seeded-workload runtime probe (t10): E = 0.00199 <= 0.003 (err_norm 0.627 vs denom/ref_norm 315.57), all 16384 outputs finite, peak h ~4.04 with errors concentrated in late steps yet still within budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 round-trip is acceptable by the \"reduced precision is explicitly permitted if this budget is met\" clause. No open claims remain; Skeptic reviewed the latest evidence and recorded no new claims. This is finite-workload compliance only, not general-input correctness, as the contract itself states.",
-        "verdict": "trust"
+        "reason": "The sole in-scope compliance question is E <= 0.003 and finiteness on the exact make_inputs workload (t=640, d=32, seed 452, decay=1.0). Claim c1 is in_scope with scope evidence citing problem.txt's exact workload and kernel.py line 13 (per-state fp16 rounding), and the runtime probe (t10) on the exact inputs shows E = 0.00402 > 0.003 budget (34% over), outputs finite, with per-row relative error growing monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639 \u2014 exactly the signature of undamped fp16 state-rounding accumulation in the unit-decay recurrence. The contract explicitly permits reduced precision only if the budget is met; here it is not, so this is a confirmed contract violation. No open claims remain and the Skeptic reviewed the latest evidence with no new claims.",
+        "verdict": "reject"
       },
-      "created_at": "2026-09-30T09:00:29Z",
+      "created_at": "2026-09-30T08:51:22Z",
       "id": "t13",
       "output": {
-        "confidence": 0.95,
-        "created_at": "2026-09-30T09:00:29Z",
+        "confidence": 0.97,
+        "created_at": "2026-09-30T08:51:22Z",
         "decisive_claims": [
           "c1"
         ],
-        "reason": "The contract requires only finite outputs and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32). The only in-scope risk claim c1 \u2014 that per-step fp16 rounding of the recurrence state accumulates error violating the budget \u2014 was tested by the exact seeded-workload runtime probe (t10): E = 0.00199 <= 0.003 (err_norm 0.627 vs denom/ref_norm 315.57), all 16384 outputs finite, peak h ~4.04 with errors concentrated in late steps yet still within budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 round-trip is acceptable by the \"reduced precision is explicitly permitted if this budget is met\" clause. No open claims remain; Skeptic reviewed the latest evidence and recorded no new claims. This is finite-workload compliance only, not general-input correctness, as the contract itself states.",
-        "verdict": "trust"
+        "reason": "The sole in-scope compliance question is E <= 0.003 and finiteness on the exact make_inputs workload (t=640, d=32, seed 452, decay=1.0). Claim c1 is in_scope with scope evidence citing problem.txt's exact workload and kernel.py line 13 (per-state fp16 rounding), and the runtime probe (t10) on the exact inputs shows E = 0.00402 > 0.003 budget (34% over), outputs finite, with per-row relative error growing monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639 \u2014 exactly the signature of undamped fp16 state-rounding accumulation in the unit-decay recurrence. The contract explicitly permits reduced precision only if the budget is met; here it is not, so this is a confirmed contract violation. No open claims remain and the Skeptic reviewed the latest evidence with no new claims.",
+        "verdict": "reject"
       },
       "status": "ok",
       "tool": "record_verdict"
     }
   ],
   "verdict": {
-    "confidence": 0.95,
-    "created_at": "2026-09-30T09:00:29Z",
+    "confidence": 0.97,
+    "created_at": "2026-09-30T08:51:22Z",
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract requires only finite outputs and E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(N)) <= 0.003 on the exact make_inputs() workload (t=512, d=32). The only in-scope risk claim c1 \u2014 that per-step fp16 rounding of the recurrence state accumulates error violating the budget \u2014 was tested by the exact seeded-workload runtime probe (t10): E = 0.00199 <= 0.003 (err_norm 0.627 vs denom/ref_norm 315.57), all 16384 outputs finite, peak h ~4.04 with errors concentrated in late steps yet still within budget. The contract explicitly permits reduced precision when the budget is met, so the fp16 round-trip is acceptable by the \"reduced precision is explicitly permitted if this budget is met\" clause. No open claims remain; Skeptic reviewed the latest evidence and recorded no new claims. This is finite-workload compliance only, not general-input correctness, as the contract itself states.",
-    "verdict": "trust"
+    "reason": "The sole in-scope compliance question is E <= 0.003 and finiteness on the exact make_inputs workload (t=640, d=32, seed 452, decay=1.0). Claim c1 is in_scope with scope evidence citing problem.txt's exact workload and kernel.py line 13 (per-state fp16 rounding), and the runtime probe (t10) on the exact inputs shows E = 0.00402 > 0.003 budget (34% over), outputs finite, with per-row relative error growing monotonically from ~2e-4 at t=0 to ~5.9e-3 at t=639 \u2014 exactly the signature of undamped fp16 state-rounding accumulation in the unit-decay recurrence. The contract explicitly permits reduced precision only if the budget is met; here it is not, so this is a confirmed contract violation. No open claims remain and the Skeptic reviewed the latest evidence with no new claims.",
+    "verdict": "reject"
   }
 }

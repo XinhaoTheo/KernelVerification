@@ -1,0 +1,185 @@
+[
+  {
+    "created_at": "2026-09-30T08:54:56Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:55:30Z",
+        "data": {
+          "E": 0.08680847585737164,
+          "E_over_budget": false,
+          "all_finite": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "44fc26287c46b8cb0271d8a3de9ba3e0efb66e448383c626088e3a5685992a29"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "f0e4c6c421615f5ab9e4a1ad1940d90ebda68ff49e846d29b09d141e8ecd2343"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "0a524865ff834b3092a0f8b49563b22d4f33f98973a0cb701160e01ad1eb0198"
+            }
+          ],
+          "budget": 0.12,
+          "duration_s": 4.730518,
+          "err_norm": 1.270476185634534,
+          "exit_code": 0,
+          "expected_signal": "E vs 0.12 on the fixed make_inputs workload with float64 reference",
+          "json_parse_error": null,
+          "json_result": {
+            "E": 0.08680847585737164,
+            "E_over_budget": false,
+            "all_finite": true,
+            "budget": 0.12,
+            "err_norm": 1.270476185634534,
+            "n_out": 32,
+            "ref_norm": 14.635393296409857
+          },
+          "n_out": 32,
+          "ref_norm": 14.635393296409857,
+          "stderr": "",
+          "stdout": "{\"E\": 0.08680847585737164, \"budget\": 0.12, \"all_finite\": true, \"ref_norm\": 14.635393296409857, \"err_norm\": 1.270476185634534, \"n_out\": 32, \"E_over_budget\": false}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "On the exact make_inputs() workload (seed 1224, m=32, k=256, mix=0.9, residual=0.5), the Triton kernel's output vs the float64 reference gives E = 0.0868, well under the 0.12 budget, with all 32 outputs finite. The adversarial residual/weight alignment amplifies the quantization error but not past the budget, so the claimed budget violation does not occur.",
+        "supports": "rebutted",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel quantizes each weight row (7-level symmetric, round-half-up) instead of using exact weights; the workload adversarially aligns x with the aggregate quantization residual (residual=0.5) and the weight direction (mix=0.9), which is the designed near-threshold attack. Whether E stays under 0.12 must be decided by computing the float64 reference on the exact float32 inputs.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract defines E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(n)) with reference = W@x in float64 on the same float32 inputs, compliance iff E <= 0.12 on the single make_inputs() workload."
+      }
+    ],
+    "scope_rationale": "The contract's only compliance criterion on the single specified workload is E <= 0.12 versus the float64 reference; a quantization-error-induced E > 0.12 would be a direct budget violation on the in-scope input.",
+    "statement": "The kernel's output may violate the E <= 0.12 budget on the specified workload (make_inputs with m=32, k=256, mix=0.9, residual=0.5, seed 1224) because it computes the matvec with 7-level per-row symmetric quantized weights rather than the original float32 weights, and the input x is deliberately aligned with the aggregate quantization residual direction.",
+    "status": "rebutted",
+    "updated_at": "2026-09-30T08:55:30Z"
+  },
+  {
+    "created_at": "2026-09-30T08:54:56Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:55:30Z",
+        "data": {
+          "exit_code": 1,
+          "stderr_tail": "ValueError: shapes (32,) and (256,) not aligned: 32 (dim 0) != 256 (dim 0)"
+        },
+        "id": "c2.e1",
+        "kind": "tool_error",
+        "summary": "First c2 probe failed with a shape error: the output error vector is 32-dim (one per row) while the injected residual direction is 256-dim; the decomposition must be done per row (x\u00b7residual_row), not by dotting the 32-dim output error with the 256-dim direction. Relaunching a corrected probe.",
+        "supports": "inconclusive",
+        "tool_event_id": null
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:55:55Z",
+        "data": {
+          "E_benign_random_x": 0.041467109539635706,
+          "E_kernel_actual": 0.08680847585737164,
+          "E_kernel_vs_quantmodel": 7.643763662300164e-08,
+          "E_over_budget": false,
+          "E_quantmodel_fp64": 0.08680845305775224,
+          "adversarial_to_benign_ratio": 2.0934296318482746,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "dc2dc9e1ad4a85a546973f7c2e08a2034fbc256a30da3bd262690c200e0320a5"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "c9cf1a0b5eab8ae9116a49e941eae2c2e21579b8913c19595b035e65c58fd513"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "7f727feb739f060086f2338a32b0c7155542c8ea2788b9a8c09525df0cdaf778"
+            }
+          ],
+          "budget": 0.12,
+          "duration_s": 4.021407,
+          "err_norm": 1.270475851953137,
+          "exit_code": 0,
+          "expected_signal": "Per-row error decomposition: adversarial E vs benign baseline, kernel vs fp64 quant model",
+          "json_parse_error": null,
+          "json_result": {
+            "E_benign_random_x": 0.041467109539635706,
+            "E_kernel_actual": 0.08680847585737164,
+            "E_kernel_vs_quantmodel": 7.643763662300164e-08,
+            "E_over_budget": false,
+            "E_quantmodel_fp64": 0.08680845305775224,
+            "adversarial_to_benign_ratio": 2.0934296318482746,
+            "budget": 0.12,
+            "err_norm": 1.270475851953137,
+            "ref_norm": 14.635393296409857,
+            "x_norm": 1.0204673943666138,
+            "x_res_aligned_component": 0.47220729212801316,
+            "x_weight_aligned_component": 0.8799220093867872
+          },
+          "ref_norm": 14.635393296409857,
+          "stderr": "",
+          "stdout": "{\"E_quantmodel_fp64\": 0.08680845305775224, \"E_kernel_actual\": 0.08680847585737164, \"E_kernel_vs_quantmodel\": 7.643763662300164e-08, \"E_benign_random_x\": 0.041467109539635706, \"err_norm\": 1.270475851953137, \"ref_norm\": 14.635393296409857, \"x_res_aligned_component\": 0.47220729212801316, \"x_weight_aligned_component\": 0.8799220093867872, \"x_norm\": 1.0204673943666138, \"budget\": 0.12, \"E_over_budget\": false, \"adversarial_to_benign_ratio\": 2.0934296318482746}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "x_norm": 1.0204673943666138,
+          "x_res_aligned_component": 0.47220729212801316,
+          "x_weight_aligned_component": 0.8799220093867872
+        },
+        "id": "c2.e2",
+        "kind": "runtime_probe",
+        "summary": "c2 mechanism confirmed: the kernel matches the float64 quantized-weight model to E_kernel_vs_quantmodel = 7.6e-08, so its entire error is the per-row quantization residual (per_row_res @ x). The adversarial x indeed carries 0.472 norm along the column-sum residual direction and 0.880 along the weight direction, amplifying E to 0.0868 vs 0.0415 for benign random x (ratio ~2.09), but the amplification stays below the 0.12 budget, consistent with c1's rebuttal of a budget violation.",
+        "supports": "confirmed",
+        "tool_event_id": "t12"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Both kernel and generator use floor(w/scale+0.5) clipped to [-7,7] with scale=max|w|/7, so their quantizers coincide modulo precision. This claim covers the mechanism and lets an Experimenter confirm the E question by decomposing the error into residual-aligned and orthogonal parts.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract permits reduced precision only within the 0.12 budget; the reference uses the original binary32 weights as real values, so quantizing weights is a deviation whose size matters only through E on this workload."
+      }
+    ],
+    "scope_rationale": "Reduced precision is permitted by the contract only insofar as the E budget is met on this workload, so characterizing the quantization deviation's magnitude on this exact input is the decisive in-scope question.",
+    "statement": "On the specified workload, the per-row output error is dominated by the dot product of x with the per-row quantization residual vector (w - clip(floor(w/scale+0.5),-7,7)*scale); because x was constructed to include 0.5 * the normalized column-sum residual direction plus 0.9 * the normalized column-sum weight direction, the error norm and thus E may be amplified above what benign random x would give, and needs to be measured with the exact float32 values.",
+    "status": "confirmed",
+    "updated_at": "2026-09-30T08:55:55Z"
+  }
+]

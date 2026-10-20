@@ -1,0 +1,55 @@
+Key check: exponent decomposition and mantissa handling. x = m * 2^e, m in [1,2). e = 3q + r, r in {0,1,2}. cbrt = cbrt(m) * 2^q * cbrt(2^r). scale = 2^(q+8)?? Wait: scale bits (q+127)<<23 gives 2^q. Wait q can be as low as exponent/3... exponent range for fp16 subnormals converted to fp32: subnormal fp16 = m * 2^-24 with m in [1/1024,1)... Actually fp32 conversion: subnormal fp16 values become normal fp32, exponent down to -133 (smallest fp16 subnormal ~5.96e-8 = 2^-24, fp32 exponent -24 with mantissa ~1? Actually 2^-24 exactly, exponent -24). Wait fp16 subnormals range 2^-24 to ~2^-15. FP16 normals: exponent -14..15. So exponent range fp32: -24..15 roughly, actually -24 to 15. quotient = (e+24)//3 - 8, q = floor(e/3). For e=-24: (-24+24)//3-8 = -8, but floor(-24/3)=-8 ✓. For e=-23: (1)//3-8 = -8, floor(-23/3)=-8 ✓. Negative floor division: e=-14: (10)//3-8=3-8=-5, floor(-14/3)=-5 ✓. Good since e+24 ≥ 0.
+
+remainder = e - 3q in {0,1,2}. remainder_scale = 2^(r/3) using cbrt(2), cbrt(4): 1.2599=2^(1/3), 1.5874=2^(2/3). ✓.
+
+estimate: polynomial in m: -0.06 m² + 0.439 m + 0.622 approximates cbrt(m)? At m=1: 1.001; m=2: -0.24+0.878+0.622=1.26. cbrt(2)=1.2599. Then Newton: (2y + m/y²)/3. One Newton step. Error: initial approx error: check mid m=1.5: -0.135+0.6585+0.622=1.1455, cbrt(1.5)=1.1447. Error ~1e-3 max? Newton reduces error to ~3·err² rel — err 1e-3 → ~3e-6? Hmm, relative error of Newton for cbrt: new_err ≈ err². Actually y_{n+1}-y* ≈ (y*-c) ... rel err: e_{n+1} ≈ e_n². So 1e-3 → 1e-6, borderline with 1e-6 tolerance? Need check max initial error more carefully.
+
+f(m) = -0.06m²+0.439m+0.622 vs cbrt(m):
+m=1: 1.001 vs 1 → err 1e-3.
+m=1.25: -0.09375+0.54875+0.622=1.077; cbrt(1.25)=1.0772 → err ~2e-4.
+m=1.5: 1.1455 vs 1.14471 → 7.9e-4.
+m=1.75: -0.18375+0.76825+0.622=1.2065; cbrt(1.75)=1.20507 → 1.4e-3.
+m=2: 1.26 vs 1.259921 → 6.3e-5.
+
+Max ~1.4e-3 at m~1.75. Newton: e1 ≈ e0² (for cbrt, relative error update e1 ≈ e0²·(something)). For Newton on y³=m: e1 = e0²(1+...)/... roughly e0². 1.4e-3² = 2e-6 < 1e-6? 1.96e-6 > 1e-6! Hmm. Let me be more precise.
+
+Newton: y1 = (2y0 + m/y0²)/3. With y0 = y(1+e): y1/y = (2(1+e) + (1+e)^{-2})/3 ≈ (2+2e+1-2e+3e²)/3 = 1 + e². So e1 ≈ e0². e0=1.4e-3 → e1≈1.96e-6 > 1e-6 tolerance. Hmm borderline. But rounding of polynomial in fp32 also. But wait — maybe the error estimate at m=1.75 is off. Compute cbrt(1.75): 1.20507... 1.75^(1/3): 1.2³=1.728, 1.205³=1.7497. So cbrt≈1.2051. Estimate 1.2065 → rel err (1.2065-1.2051)/1.2051 = 1.16e-3. Squared = 1.35e-6 > 1e-6. That's marginal — could fail tolerance!
+
+But wait: maybe more precise polynomial fit reduces error. Let me check more points carefully.
+
+f(m) = -0.06m² + 0.439m + 0.622.
+cbrt values:
+m=1.0: f=1.001, c=1.000000 → rel 1.0e-3
+m=1.1: f=-0.0726+0.4829+0.622=1.0323; cbrt(1.1)=1.03228 → ~2e-5. 
+m=1.2: f=-0.0864+0.5268+0.622=1.0624; cbrt(1.2)=1.06266 → -2.4e-4.
+m=1.3: f=-0.1014+0.5707+0.622=1.0913; cbrt(1.3)=1.09139 → -8e-5.
+m=1.4: f=-0.1176+0.6146+0.622=1.119; cbrt(1.4)=1.11869 → +2.8e-4.
+m=1.5: 1.1455 vs 1.14471 → +6.9e-4.
+m=1.6: -0.1536+0.7024+0.622=1.1708; cbrt(1.6)=1.16961 → +1.0e-3.
+m=1.7: -0.1734+0.7463+0.622=1.1949; cbrt(1.7)=1.19348 → +1.2e-3.
+m=1.8: -0.1944+0.7902+0.622=1.2178; cbrt(1.8)=1.21644 → +1.1e-3.
+m=1.9: -0.2166+0.8341+0.622=1.2395; cbrt(1.9)=1.23856 → +7.6e-4.
+m=2.0: 1.26 vs 1.259921 → +6.3e-5.
+
+Max err ~1.2e-3 at m=1.7. e1 ≈ e0² ≈ 1.44e-6 > 1e-6. Plus fp32 rounding errors (~1e-7 each). This could marginally violate the 1e-6 tolerance. Hmm.
+
+But wait — Newton applied to m (mantissa in [1,2)) — that's fine. Then final value computed with fp32 ops, div_rn gives correctly rounded division. Additional rounding ~ few ulps (~2-3e-7). So total ~1.7e-6 > 1e-6. This suggests rejection.
+
+But maybe Newton error formula: e1 = e0² exactly? y1/y = (2(1+e)+(1+e)^{-2})/3. Expand (1+e)^{-2} = 1 -2e +3e² -4e³. Sum: 2+2e+1-2e+3e² = 3+3e². /3 = 1+e². So e1 = e0² exactly (to second order). With e0=1.2e-3 → 1.44e-6. Relative tolerance 1e-6. Fails for m near 1.7.
+
+Hmm, but let me double check cbrt(1.7). 1.19³ = 1.685; 1.194³: 1.194²=1.4256, ×1.194=1.7022. So cbrt(1.7)≈1.19348. f(1.7)=1.1949. rel err = 0.00142/1.1935 = 1.19e-3. Squared 1.4e-6. Yes exceeds 1e-6.
+
+Also check whether the "estimate" Newton in code operates on m (not scaled m): yes, estimate * remainder_scale * scale. Since remainder_scale multiplies after Newton, error stays relative. So relative error ~ e0² ≈ 1.4e-6 > 1e-6 for m≈1.7. But is there any input hitting m near 1.7? m is the fp32 mantissa of the fp16 value; fp16 values with mantissa near 1.7 exist (e.g., 1.7 itself is representable? fp16 1.7 ≈ 1.7002). Yes, plenty of inputs.
+
+Also note first Newton uses div_rn, fine. But fp32 polynomial evaluation rounding adds error too, doesn't help.
+
+So verdict: reject — one Newton step from a seed with up to ~1.2e-3 error yields residual ~1.4e-6, exceeding 1e-6 tolerance.
+
+Wait, but does the second line count as another iteration? Code: estimate computed, then estimate = (2*estimate + m/(estimate²))/3 — that's exactly one Newton iteration after the quadratic seed. Yes one iteration.
+
+Actually, could the polynomial evaluation rounding partially cancel? No, can't rely on that.
+
+Confidence moderate. Let me sanity-check e0 max more finely between 1.65–1.75:
+m=1.65: f=-0.16335+0.72435+0.622=1.1830; cbrt(1.65): 1.1829? 1.183³=1.656... compute 1.183³: 1.183²=1.3995, ×1.183=1.6556. Slightly high; cbrt(1.65)≈1.1826. err ~4e-4? Hmm. m=1.7 gives err 1.2e-3? Recheck f(1.7): -0.06*2.89 = -0.1734; 0.439*1.7=0.7463; sum: -0.1734+0.7463=0.5729+0.622=1.1949. cbrt(1.7): 1.19348 (check 1.1935³: 1.1935²=1.42444, ×1.1935=1.70003 ✓). rel err = 1.42e-3/1.1935=1.19e-3. Yes.
+
+So reject.

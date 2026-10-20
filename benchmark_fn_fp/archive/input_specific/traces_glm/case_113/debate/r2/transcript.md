@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_o`
-- Turns: 10
-- Tool events: 17
+- Entry: `case_i`
+- Turns: 8
+- Tool events: 14
 - Claims: 2
-- Description updates: 2
-- LLM time: 84.623s across 9 calls | tokens: in=199558 out=5590 total=205148
+- Description updates: 1
+- LLM time: 65.35s across 7 calls | tokens: in=133837 out=4415 total=138252
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.92
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_o"
+    "entry": "case_i"
   }
   Output summary:
   {
-    "entry": "case_o"
+    "entry": "case_i"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_o"
+    "entry": "case_i"
   }
   Output summary:
   {
-    "entry": "case_o"
+    "entry": "case_i"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_o"
+    "entry": "case_i"
   }
   Output summary:
   {
-    "entry": "case_o"
+    "entry": "case_i"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_o",
+    "entry": "case_i",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_o"
+    "entry": "case_i"
   }
 
-### Turn 2 - `describer` (12.45438997s, in=4777 out=952)
+### Turn 2 - `describer` (11.032277871000002s, in=4509 out=922)
 
 Message:
 
 ```text
-I have full context already. The key risk: b ≈ 1.125·u + tiny noise, so residual is dominated by the 0.25·u component but computed via cancellation b − α·u in float32; α≈1.125 is not exactly representable and errors in α are amplified. I'll record the description model now.
+I have full context from the loaded artifact. I'll record the description model for this LayerNorm case, highlighting the single-pass sum-of-squares variance as the key risk surface (cancellation with mean≈64, variance≈0.0156) relative to the 2% tolerance.
 ```
 
 Tool calls:
@@ -75,347 +75,283 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b \u2212 alpha\u00b7u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-      "Acceptance: output is a finite (32,) vector with relative L2 error \u2264 0.01 against the float64 reference (denominator max(||ref||,1e-12)).",
-      "Residual is guaranteed nonzero on this workload; arbitrary alternative inputs are out of scope.",
-      "The contract explicitly notes the kernel uses float32 arithmetic, sequential accumulation, separately rounded products/sums, and disables FP fusion."
+      "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+      "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+      "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+      "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
     ],
     "kernel_model": [
-      "Triton kernel with a single program (grid (1,), num_warps=1), N=32 constexpr; ha
-  ...[truncated 2651 chars]
+      "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+      "Stat
+  ...[truncated 2625 chars]
   Output summary:
   {
     "contract_model": [
-      "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b \u2212 alpha\u00b7u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-      "Acceptance: output is a finite (32,) vector with relative L2 error \u2264 0.01 against the float64 reference (denominator max(||ref||,1e-12)).",
-      "Residual is guaranteed nonzero on this workload; arbitrary alternative inputs are out of scope.",
-      "The contract explicitly notes the kernel uses float32 arithmetic, sequential accumulation, separately rounded products/sums, and disables FP fusion."
+      "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+      "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+      "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+      "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel with a single program (grid (1,), num_warps=1), N=32 constexpr; hardcoded 32-length loops and tl.arange(0, N).",
-      "Pass 1: sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u); coefficient = div_rn(num, den).",
-      "Pass 2: sequential float32 accumulation of residual\u00b2 where residual = b \u2212 u\u00b7coefficient (separately rounded); then norm = sqrt.",
-      "Pass 3: vectorized recompute of residual 
-  ...[truncated 2375 chars]
+      "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+      "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+      "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 o
+  ...[truncated 2349 chars]
 
-### Turn 3 - `skeptic` (6.873889311999999s, in=12747 out=552)
-
-Message:
-
-```text
-The main attack surface is float32 cancellation in b − α·u with α ≈ 1.125. I'll record the two concrete, testable hypotheses tied to the fixed workload contract.
-```
-
-Tool calls:
-
-- `record_claim -> t6 error`
-  Args:
-  {
-    "rationale": "\u03b1 \u2248 1.125 is not exactly representable in float32, so float32 \u03b1 differs from the float64 reference \u03b1 by ~1e-7\u00b7|u|, which perturbs the residual b \u2212 \u03b1\u00b7u; since the residual itself is only ~0.125\u00b7|u| in scale, the relative error could be amplified toward the 0.01 bound.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Only the u, b from make_inputs() (b = 1.125\u00b7u + 1e-5 noise) are in scope; the kernel's float32 residual/norm output must satisfy relative L2 error \u2264 0.01 against a float64 reference."
-      }
-    ],
-    "statement": "On the fixed make_inputs() workload (seed 830230), the kernel's float32 computation of the coefficient \u03b1 (from sequential float32 dot product
-  ...[truncated 187 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-- `record_claim -> t7 error`
-  Args:
-  {
-    "rationale": "32 sequentially rounded float32 multiplications and additions accumulate rounding that the contract itself flags; this is the exact mechanism feeding the \u03b1 used in every residual element, so its magnitude is the decisive quantity.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The contract states the kernel uses float32 arithmetic with sequential accumulations and separately rounded products/sums, while the reference must be computed at float64 accuracy on the same stored inputs."
-      }
-    ],
-    "statement": "Sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u) over 32 terms each introduces accumulated rounding such that the computed \u03b1 differs from the float64 \u03b1 by more than 
-  ...[truncated 71 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 4 - `skeptic` (9.589375943999997s, in=14287 out=583)
+### Turn 3 - `skeptic` (8.91136169s, in=11705 out=635)
 
 Message:
 
 ```text
-The two in-scope claims failed because scope_rationale was missing. Re-sending them now with that field filled.
+I'll record the key numerical risk claims tied to the fixed-workload contract: single-pass float32 variance cancellation against the 2% tolerance, the variance clamp path, and accumulation rounding.
 ```
 
 Tool calls:
 
-- `record_claim -> t8 ok`
+- `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "\u03b1 \u2248 1.125 is not exactly representable in float32, so float32 \u03b1 differs from the float64 reference \u03b1; the perturbation to residual b \u2212 \u03b1\u00b7u is amplified relative to the residual's ~0.125\u00b7|u| scale, potentially pushing relative L2 error toward or past 0.01.",
+    "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only the u, b from make_inputs() (b = 1.125\u00b7u + 1e-5 noise) are in scope; output must satisfy relative L2 error \u2264 0.01 against a float64 reference on these stored inputs."
-      }
-    ],
-    "scope_rationale": "The contract restricts scope to the fixed make_inputs() workload (seed 830230) and requires relative L2 error \u2264 0.01 against a float64 reference; this claim tests e
-  ...[truncated 437 chars]
+        "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload
+  ...[truncated 582 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "\u03b1 \u2248 1.125 is not exactly representable in float32, so float32 \u03b1 differs from the float64 reference \u03b1; the perturbation to residual b \u2212 \u03b1\u00b7u is amplified relative to the residual's ~0.125\u00b7|u| scale, potentially pushing relative L2 error toward or past 0.01.",
+    "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Only the u, b from make_inputs() (b = 1.125\u00b7u + 1e-5 noise) are in scope; output must satisfy relative L2 error \u2264 0.01 against a float64 reference on these stored inputs."
+        "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload."
       }
     ],
-    "scope_rationale": "The contract restricts scope to the fixed make_inputs() workload (seed 830230) and requires relative L2 error \u2264 0.01 against a float64 reference; this claim tests exactly that workload's acceptance bound, so a violation would be an in-scope failure.",
-    "statement": "On the fixed make_inputs() workload (seed 830230), the kernel's float32 computation of the coefficient \u03b1 (from sequential float32 dot products) deviates enough from the float64 reference \u03b1 that the residual b \u2212 \u03b1\u00b7u is materially corrupted, giving relative L
-  ...[truncated 71 chars]
-- `record_claim -> t9 ok`
+    "scope_rationale": "The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.",
+    "statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/
+  ...[truncated 216 chars]
+- `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "32 sequentially rounded float32 multiplications and additions accumulate rounding that the contract itself flags; this feeds the \u03b1 used in every residual element, so its magnitude is the decisive quantity for whether error stays within tolerance.",
+    "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract states the kernel uses float32 arithmetic with sequential accumulations and separately rounded products/sums, while the reference must be computed at float64 accuracy on the same stored inputs, with tolerance 0.01 relative L2."
+        "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
       }
     ],
-    "scope_rationale": "The contract explicitly describes the kernel's float32 sequential accumulation as the computational regime and requires a float64 reference with \u22640.0
-  ...[truncated 409 chars]
+    "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+    "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seed
+  ...[truncated 156 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "32 sequentially rounded float32 multiplications and additions accumulate rounding that the contract itself flags; this feeds the \u03b1 used in every residual element, so its magnitude is the decisive quantity for whether error stays within tolerance.",
+    "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract states the kernel uses float32 arithmetic with sequential accumulations and separately rounded products/sums, while the reference must be computed at float64 accuracy on the same stored inputs, with tolerance 0.01 relative L2."
+        "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
       }
     ],
-    "scope_rationale": "The contract explicitly describes the kernel's float32 sequential accumulation as the computational regime and requires a float64 reference with \u22640.01 relative L2 error on the fixed workload, so quantifying the \u03b1 error on that exact workload is in-scope.",
-    "statement": "Sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u) over 32 terms each introduces accumulated rounding such that the computed \u03b1 differs from the float64 \u03b1 by more than ~1e-5 relative, which propagates through residua
-  ...[truncated 43 chars]
-
-### Turn 5 - `describer` (14.631117437999997s, in=15627 out=1130)
-
-Message:
-
-```text
-The description model is already recorded but my earlier scope_notes field was malformed (a string with embedded escaped quotes instead of a proper array). I'll re-record a clean update with corrected scope notes and refined risk pointers tied to the open claims c1/c2.
-```
-
-Tool calls:
-
-- `record_description_update -> t10 ok`
-  Args:
-  {
-    "contract_model": [
-      "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-      "Acceptance: output is a finite (32,) vector with relative L2 error <= 0.01 against the float64 reference (denominator max(||ref||,1e-12)).",
-      "Residual is guaranteed nonzero on this workload; arbitrary alternative inputs are out of scope.",
-      "The contract explicitly notes the kernel uses float32 arithmetic, sequential accumulation, separately rounded products/sums, and disables FP fusion."
-    ],
-    "kernel_model": [
-      "Triton kernel, single program (grid (1,), num_warps=1), N=32 constexpr; hardcoded 32-length lo
-  ...[truncated 3336 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-      "Acceptance: output is a finite (32,) vector with relative L2 error <= 0.01 against the float64 reference (denominator max(||ref||,1e-12)).",
-      "Residual is guaranteed nonzero on this workload; arbitrary alternative inputs are out of scope.",
-      "The contract explicitly notes the kernel uses float32 arithmetic, sequential accumulation, separately rounded products/sums, and disables FP fusion."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Triton kernel, single program (grid (1,), num_warps=1), N=32 constexpr; hardcoded 32-length loops and tl.arange(0, N).",
-      "Pass 1: sequential float32 accumulation of numerator (u*b) and denominator (u*u); coefficient = div_rn(num, den).",
-      "Pass 2: sequential float32 accumulation of residual^2 where residual = b - u*coefficient (separately rounded); norm = sqrt.",
-      "Pass 3: vectorized recompute of residual and store residual/norm as float32 to a (32,) out
-  ...[truncated 3026 chars]
-
-### Turn 6 - `skeptic` (6.492916428000001s, in=24558 out=323)
-
-Message:
-
-```text
-The two open claims (c1, c2) already cover the only in-scope attack surfaces — float32 α accuracy and its propagation through residual/normalization on the fixed workload. Other risks (hardcoded shape, other inputs) are explicitly out of scope, and masking/finiteness concerns are non-issues for this fixed input. I'll record that no additional claims are needed.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t11 ok`
-  Args:
-  {
-    "reason": "Reviewed the refined description model (du2) and the full kernel source. The only in-scope failure channels on the fixed make_inputs() workload are the float32 \u03b1-accuracy channels, already captured by open claims c1 (\u03b1 error corrupting residual past 0.01 relative L2) and c2 (sequential float32 dot-product rounding). Remaining risk-map items \u2014 other shapes/vectors, hardcoded N=32, subnormal norms \u2014 are out of scope per problem.txt, and the norm is far from subnormal on this workload. No new testable in-scope claims beyond c1/c2.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "Reviewed the refined description model (du2) and the full kernel source. The only in-scope failure channels on the fixed make_inputs() workload are the float32 \u03b1-accuracy channels, already captured by open claims c1 (\u03b1 error corrupting residual past 0.01 relative L2) and c2 (sequential float32 dot-product rounding). Remaining risk-map items \u2014 other shapes/vectors, hardcoded N=32, subnormal norms \u2014 are out of scope per problem.txt, and the norm is far from subnormal on this workload. No new testable in-scope claims beyond c1/c2.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 10,
-    "turn": 6
+    "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+    "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.",
+    "status": "open"
   }
 
-### Turn 7 - `experimenter` (9.690018576s, in=25791 out=801)
+### Turn 4 - `experimenter` (7.399202197000001s, in=14969 out=595)
 
 Message:
 
 ```text
-I'll run two independent probes on the fixed workload: one for c1 (full end-to-end relative L2 error vs float64 reference) and one for c2 (float32 sequential α vs float64 α). They don't depend on each other, so I'll launch both together.
+I'll run one probe that executes the actual kernel on the seeded input and computes the contract metric, plus the raw float32 single-pass variance to decide both c1 and c2 in a single experiment. Both claims concern the same fixed workload, so one run covers both; I'm not launching separate probes because c1 and c2 share the identical computation path.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t12 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nimport numpy as np, torch\nimport kernel as K\n\nu, b = K.make_inputs()\nout = K.run(u, b).cpu().numpy()\n\nu64 = u.cpu().numpy().astype(np.float64)\nb64 = b.cpu().numpy().astype(np.float64)\nalpha = (u64*b64).sum() / (u64*u64).sum()\nres = b64 - alpha*u64\nref = res / np.linalg.norm(res)\n\nrel = np.linalg.norm(out.astype(np.float64) - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 reference on fixed workload\",\n  \"rel_l2_error\": float(rel),\n  \"tolerance\": 0.01,\n  \"alpha_f64\": float(alpha),\n  \"residual_norm\": float(np.linalg.norm(res)),\n  \"finite_output\": bool(np.isfinite(out).all()),\n  \"shape\": list(out.shape)
-  ...[truncated 158 chars]
+    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x)\n\n# float64 reference per problem.txt\nxd = x.to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\n\nerr = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(12
+  ...[truncated 974 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "1b2bd3d9dfe7a1c3aa986aa16ef15be3c0d9bd07d768edce1739a18fb00000db"
+        "path": "probes/t8_probe.py",
+        "sha256": "0984fb6005e1b7410c2799be7ad0e9f85cd28aed5383391cf4fb5e9d9de46709"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "de18d0dd8cecebd66d5f8a70e89936c425652dd601fd6a1382c2e83d8aba10ce"
+        "path": "probes/t8_stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "5ddbc03c15729d01dceb584f9e626053daf0cf6f9f77a71270337bb3d3db8e65"
+        "path": "probes/t8_stderr.txt",
+        "sha256": "05d6fd7d8ce2b5b20b351ddb498d27e85fe802a5d2670ae9883d420df1d5c7ec"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the fixed make_inputs() workload (seed 830230), the kernel's float32 computation of the coefficient \u03b1 (from sequential float32 dot products) deviates enough from the float64 reference \u03b1 that the r
-  ...[truncated 3224 chars]
-- `run_claim_probe -> t13 ok`
+    "claim_statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+    "duration_s": 7.371655,
+    "event_id": "t8",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "P
+  ...[truncated 2314 chars]
+
+### Turn 5 - `experimenter` (16.890986856000005s, in=17498 out=1090)
+
+Message:
+
+```text
+The first probe failed on a trivial host-transfer bug (CUDA tensor → numpy without `.cpu()`), so it decides nothing. I'll re-launch fixed probes for both open claims in one batch: c1 (contract relative-L2 error on the seeded workload) and c2 (whether the float32 single-pass variance goes negative and clamps to zero). The runs are independent, so I'm launching both together.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t9 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "import sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_o\")\nimport numpy as np, torch\nimport kernel as K\n\nu, b = K.make_inputs()\nu32 = u.cpu().numpy(); b32 = b.cpu().numpy()\n\n# sequential float32 accumulation exactly as kernel does (separately rounded products/sums)\nnum = np.float32(0.0); den = np.float32(0.0)\nfor j in range(32):\n    num = np.float32(num + np.float32(u32[j]*b32[j]))\n    den = np.float32(den + np.float32(u32[j]*u32[j]))\nalpha_f32 = np.float32(num/den)\n\nu64 = u32.astype(np.float64); b64 = b32.astype(np.float64)\nalpha_f64 = (u64*b64).sum()/(u64*u64).sum()\n\nrel_err = abs(float(alpha_f32)-alpha_f64)/abs(alpha_f64)\nprint(json.dumps({\n  \"metric\": \"relative error of sequentially accumulated float32 alpha vs float64 
-  ...[truncated 419 chars]
+    "claim_id": "c1",
+    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x).cpu()\n\nxd = x.cpu().to(torch.float64).numpy()\nmean = xd.sum() / 128\nvar = ((xd - mean) ** 2).sum() / 128\nref = (xd - mean) / np.sqrt(var + 1e-5)\n\nerr = np.linalg.norm(out.numpy().astype(np.float64) - ref) / max(np.linalg.norm(ref), 0.001 * np.sqrt(128))\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.cpu().numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np
+  ...[truncated 737 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t13_probe.py",
-        "sha256": "5b0ec9aa318ee2d69e8573fc590ddd6311dec05b06cd311a54a8a3eff8629a95"
+        "path": "probes/t9_probe.py",
+        "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t13_stdout.txt",
-        "sha256": "bb2ea76ad70c46d5cfaa75a72916977b4645cbc2393bc36e8b82910960184bdb"
+        "path": "probes/t9_stdout.txt",
+        "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t13_stderr.txt",
+        "path": "probes/t9_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t13_json_result.json",
-        "sha256": "ec50b2bf8bb3c72cc3994460d48a3696c37efa0778c7caf40c6c57937013936b"
+        "path": "probes/t9_json_result.json",
+        "sha256": "35859d21dd9e364679728bfbf8047606c66eb5d1a18995b23fd3e813457567e5"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a varia
+  ...[truncated 3459 chars]
+- `run_claim_probe -> t10 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import numpy as np, torch, json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_i\")\nimport kernel as K\n\nx, = K.make_inputs()\nout = K.run(x).cpu()\n\n# emulate kernel's float32 single-pass stats (sequential accumulation)\nxf = x.cpu().numpy().astype(np.float32)\ntotal = np.float32(0.0); squares = np.float32(0.0)\nfor v in xf:\n    v = np.float32(v)\n    total = np.float32(total + v)\n    squares = np.float32(squares + np.float32(v * v))\nmean_f = np.float32(total / np.float32(128))\nsq_over_n = np.float32(squares / np.float32(128))\nmean_sq = np.float32(mean_f * mean_f)\nraw_var = np.float32(sq_over_n - mean_sq)\n\n# recover kernel's effective denominator from output: out[i]*(denom) = x[i]-mean\n# better: compare output scale against expected refe
+  ...[truncated 840 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t10_probe.py",
+        "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t10_stdout.txt",
+        "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t10_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t10_json_result.json",
+        "sha256": "1210fdd96b5ed3b24bcc942b31b01f3241b9e40e9932138e8d020e74b20626b9"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "Sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u) over 32 terms each introduces accumulated rounding such that the computed \u03b1 differs from the float64 \u03b1 by more than 
-  ...[truncated 3553 chars]
+    "claim_statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, bre
+  ...[truncated 3405 chars]
 
-### Turn 8 - `experimenter` (12.513121581999997s, in=29900 out=582)
+### Turn 6 - `experimenter` (8.91161055500001s, in=23161 out=579)
 
 Message:
 
 ```text
-Both probes returned decisive results: c1's measured relative L2 error (0.00154) is well below the 0.01 tolerance, and c2's sequential float32 α error (3.8e-9 relative) is far below the 1e-5 threshold. Finalizing both as rebutted.
+Both probes succeeded and clearly rebut both open claims: the kernel output's relative L2 error is ~2.4e-4 (well under 0.02), and the single-pass variance stays positive with no clamp triggered. I'll finalize both evidence entries now.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t14 ok`
+- `finalize_probe_evidence -> t11 ok`
   Args:
   {
     "data": {
-      "alpha_f64": 1.125000242654227,
-      "finite_output": true,
-      "max_abs_err": 0.0005855331971066635,
-      "rel_l2_error": 0.0015436494833812023,
-      "residual_norm": 6.621097760007478e-05,
-      "tolerance": 0.01
+      "float32_single_pass_variance_raw": 0.016357421875,
+      "float64_denominator": 0.12790424781228815,
+      "float64_variance": 0.016349496608427216,
+      "kernel_output_max_abs": 2.9560980796813965,
+      "out_finite": true,
+      "passes": true,
+      "rel_l2_error": 0.00024261613799325,
+      "tolerance": 0.02,
+      "variance_rel_error": 0.000484740708695494
     },
-    "event_id": "t12",
+    "event_id": "t9",
     "status": "rebutted",
-    "summary": "On the fixed make_inputs() workload, the kernel output is finite, shape (32,), with relative L2 error 0.001544 against the float64 reference \u2014 well within the 0.01 tolerance. The \u03b1-corruption channel does not breach the bound, so c1 is rebutted.",
-    "supports": "rebutted"
-  }
+    "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
+    "supports": "rebutt
+  ...[truncated 5 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "On the fixed make_inputs() workload, the kernel output is finite, shape (32,), with relative L2 error 0.001544 against the float64 reference \u2014 well within the 0.01 tolerance. The \u03b1-corruption channel does not breach the bound, so c1 is rebutted.",
+    "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
     "supports": "rebutted",
-    "tool_event_id": "t12"
+    "tool_event_id": "t9"
   }
-- `finalize_probe_evidence -> t15 ok`
+- `finalize_probe_evidence -> t12 ok`
   Args:
   {
     "data": {
-      "alpha_f32_sequential": 1.125000238418579,
-      "alpha_f64": 1.125000242654227,
-      "alpha_rel_err": 3.765019483444925e-09,
-      "c2_threshold": 1e-05,
-      "denominator_f32": 14.848281860351562,
-      "denominator_f64": 14.84828118844831,
-      "numerator_f32": 16.704320907592773,
-      "numerator_f64": 16.70431994000254
+      "clamped_to_zero_effect": false,
+      "float32_single_pass_variance_raw": 0.016357421875,
+      "float64_variance": 0.016349496608427216,
+      "kernel_output_max_abs": 2.9560980796813965,
+      "out_finite": true,
+      "output_to_reference_max_ratio": 0.9997628734413094,
+      "raw_negative": false,
+      "reference_output_max_abs": 2.9567992153040605
     },
-    "event_id": "t13",
+    "event_id": "t10",
     "status": "rebutted",
-    "summary": "Sequential float32 accumulation reproducing the kernel's arithmetic yields \u03b1 = 1.125000238418579 vs float64 \u03b1 = 1.125000242654227, a relative error of 3.77e-9 \u2014 far below the ~1e-5 threshold claimed. Accumulated dot-product rounding largely cancels in the ratio, so c2 is rebutted.",
+    "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
     "supports": "rebutted"
   }
   Output summary:
@@ -423,25 +359,25 @@ Tool calls:
     "claim_id": "c2",
     "claim_status": "rebutted",
     "evidence_id": "c2.e1",
-    "summary": "Sequential float32 accumulation reproducing the kernel's arithmetic yields \u03b1 = 1.125000238418579 vs float64 \u03b1 = 1.125000242654227, a relative error of 3.77e-9 \u2014 far below the ~1e-5 threshold claimed. Accumulated dot-product rounding largely cancels in the ratio, so c2 is rebutted.",
+    "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
     "supports": "rebutted",
-    "tool_event_id": "t13"
+    "tool_event_id": "t10"
   }
 
-### Turn 9 - `skeptic` (5.547831872000003s, in=35774 out=297)
+### Turn 7 - `skeptic` (5.667416270000004s, in=30888 out=231)
 
 Message:
 
 ```text
-Both in-scope claims are decisively rebutted: measured relative L2 error is 0.00154 vs the 0.01 bound, output is finite, and the float32 α error is only 3.8e-9 relative. No new evidence exposes a material in-scope problem.
+Both in-scope claims were directly tested on the actual seeded workload and rebutted: relative L2 error is 2.4e-4 (tolerance 0.02), the single-pass variance stays positive, output is finite and matches reference scale. No new material in-scope issues remain.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_no_new_claims -> t13 ok`
   Args:
   {
-    "reason": "Final review: probes t12/t13 decisively tested the only in-scope failure channels (float32 \u03b1 accuracy and end-to-end relative L2 error on the fixed make_inputs() workload). Measured rel_l2_error 0.001544 is well below the 0.01 tolerance, output is finite and shape (32,), and \u03b1 relative error is 3.77e-9. The measured residual norm (6.6e-5) is small but the relative-error metric already accounts for it and still passes with ~6.5x margin. Other risk items (other shapes/vectors, hardcoded N=32, subnormals) are out of scope per problem.txt. No material, testable, in-scope problem beyond the rebutted c1/c2.",
+    "reason": "Final review: the only in-scope workload (seeded (128,) vector) was executed directly. Both recorded claims (c1 cancellation exceeding 0.02 tolerance; c2 negative-variance clamp explosion) are rebutted by runtime evidence: rel L2 error 2.43e-4 << 0.02, single-pass variance +0.016357 vs float64 0.016349 (0.05% error), no clamp triggered, output finite with max ratio 0.9998 vs reference. No other attack surfaces exist within the fixed-workload contract.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -450,43 +386,43 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: probes t12/t13 decisively tested the only in-scope failure channels (float32 \u03b1 accuracy and end-to-end relative L2 error on the fixed make_inputs() workload). Measured rel_l2_error 0.001544 is well below the 0.01 tolerance, output is finite and shape (32,), and \u03b1 relative error is 3.77e-9. The measured residual norm (6.6e-5) is small but the relative-error metric already accounts for it and still passes with ~6.5x margin. Other risk items (other shapes/vectors, hardcoded N=32, subnormals) are out of scope per problem.txt. No material, testable, in-scope problem beyond the rebutted c1/c2.",
+    "reason": "Final review: the only in-scope workload (seeded (128,) vector) was executed directly. Both recorded claims (c1 cancellation exceeding 0.02 tolerance; c2 negative-variance clamp explosion) are rebutted by runtime evidence: rel L2 error 2.43e-4 << 0.02, single-pass variance +0.016357 vs float64 0.016349 (0.05% error), no clamp triggered, output finite with max ratio 0.9998 vs reference. No other attack surfaces exist within the fixed-workload contract.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 15,
-    "turn": 9
+    "reviewed_tool_event_count": 12,
+    "turn": 7
   }
 
-### Turn 10 - `judge` (6.830319821000003s, in=36097 out=370)
+### Turn 8 - `judge` (6.536819761000004s, in=31107 out=363)
 
 Message:
 
 ```text
-Both in-scope claims were decisively rebutted by probes on the exact fixed workload: relative L2 error 0.00154 (vs 0.01 bound), finite output, and float32 α error 3.8e-9 relative. Skeptic signed off with no new claims. Recording the trust verdict.
+All in-scope claims (c1 cancellation error, c2 negative-variance clamp) were rebutted by direct runtime execution on the seeded workload: relative L2 error 2.4e-4 vs 0.02 tolerance, variance positive and accurate, output finite. Skeptic signed off with no new claims. I'll record a trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `record_verdict -> t14 ok`
   Args:
   {
-    "confidence": 0.92,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt) restricts scope to the fixed make_inputs() workload (seed 830230, shape (32,)) and requires a finite (32,) output with relative L2 error <= 0.01 against a float64 reference. Probe t12 ran the kernel on that exact workload and measured rel_l2_error = 0.001544 (6.5x margin below tolerance), finite output, correct shape, max abs err 5.9e-4. Probe t13 isolated the float32 sequential-accumulation alpha channel and found alpha relative error 3.77e-9 vs float64, far below any level that could breach the bound \u2014 confirming the residual-norm scale (6.6e-5) is already accounted for by the contract's relative-L2 metric, which passes. The contract explicitly declares the kernel's float32
-  ...[truncated 398 chars]
+    "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the
+  ...[truncated 291 chars]
   Output summary:
   {
-    "confidence": 0.92,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt) restricts scope to the fixed make_inputs() workload (seed 830230, shape (32,)) and requires a finite (32,) output with relative L2 error <= 0.01 against a float64 reference. Probe t12 ran the kernel on that exact workload and measured rel_l2_error = 0.001544 (6.5x margin below tolerance), finite output, correct shape, max abs err 5.9e-4. Probe t13 isolated the float32 sequential-accumulation alpha channel and found alpha relative error 3.77e-9 vs float64, far below any level that could breach the bound \u2014 confirming the residual-norm scale (6.6e-5) is already accounted for by the contract's relative-L2 metric, which passes. The contract explicitly declares the kernel's float32/sequential/no-fusion arithmetic, so the small observed deviations are the declared computational regime, not a defect. Claims c1 and c2 (the only in-scope failure channels) are rebutted; the Skeptic reviewed the final evidence and recorded no new claims. Out-of-scope items (other shapes/vectors, hardcoded N=32) are generalization notes only. No unresolved claims remain.",
+    "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the kernel satisfies; the float32 single-pass accumulation differences are within the declared tolerance and thus acceptable per the contract's numeric tolerance clause. Skeptic reviewed the latest evidence and found no new claims; no unresolved material claims remain.",
     "verdict": "trust"
   }
 
@@ -494,232 +430,171 @@ Tool calls:
 
 {
   "contract_model": [
-    "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b \u2212 alpha\u00b7u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-    "Acceptance: output is a finite (32,) vector with relative L2 error \u2264 0.01 against the float64 reference (denominator max(||ref||,1e-12)).",
-    "Residual is guaranteed nonzero on this workload; arbitrary alternative inputs are out of scope.",
-    "The contract explicitly notes the kernel uses float32 arithmetic, sequential accumulation, separately rounded products/sums, and disables FP fusion.",
-    "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-    "Acceptance: output is a finite (32,) vector with relative L2 error <= 0.01 against the float64 reference (denominator max(||ref||,1e-12))."
+    "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+    "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+    "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+    "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
   ],
   "kernel_model": [
-    "Triton kernel with a single program (grid (1,), num_warps=1), N=32 constexpr; hardcoded 32-length loops and tl.arange(0, N).",
-    "Pass 1: sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u); coefficient = div_rn(num, den).",
-    "Pass 2: sequential float32 accumulation of residual\u00b2 where residual = b \u2212 u\u00b7coefficient (separately rounded); then norm = sqrt.",
-    "Pass 3: vectorized recompute of residual and store residual/norm as float32 to a (32,) output tensor allocated in run().",
-    "Inputs are loaded as scalars/vectors with .to(tl.float32) from the stored float32 u, b; output dtype float32.",
-    "make_inputs: u ~ N(0,1) float32; b = (1.125\u00b7u_f64 + 1e-5\u00b7noise) cast to float32, so b \u2248 1.125\u00b7u + small perturbation.",
-    "Triton kernel, single program (grid (1,), num_warps=1), N=32 constexpr; hardcoded 3
-...[truncated 4413 chars]
+    "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+    "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+    "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+    "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+    "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
+  ],
+  "open_questions": [],
+  "risk_map": [
+    "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is damped). Needs numeric evidence.",
+    "Sequential s
+...[truncated 1110 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_o: fixed-workload float32 Triton kernel computing a normalized orthogonal projection residual of b against u (N=32), with contract requiring ≤1% relative L2 error versus a float64 reference. Key risk is float32 cancellation in b − α·u where α≈1.125.
-- `du2` tasks=`initial`: Corrected du1's malformed scope_notes and refined the risk map: the decisive quantity for open claims c1/c2 is the measured float32 alpha error on the stored inputs; heuristic analysis suggests errors ~1e-6 relative (alpha-error channel) and ratio-cancellation of dot-product rounding, likely well under the 0.01 bound, but a numeric probe on the fixed workload is required.
+- `du1` tasks=`initial`: Initial description of case_i: float32 Triton LayerNorm (no affine) over a fixed (128,) seeded vector; contract is relative L2 error <= 0.02 against a float64 two-pass population-variance reference, while the kernel uses a float32 single-pass (sum, sum-of-squares) variance — the key numerical risk given x ~ 64.0 ± 0.125.
 
 ## Claims
 
 ### c1 - `rebutted`
 
-Statement: On the fixed make_inputs() workload (seed 830230), the kernel's float32 computation of the coefficient α (from sequential float32 dot products) deviates enough from the float64 reference α that the residual b − α·u is materially corrupted, giving relative L2 error of the normalized output exceeding 0.01.
+Statement: On the seeded workload (128 floats ~64.0±0.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]≈4096 vs variance≈0.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.
 
 Scope: `in_scope`
 
-Scope rationale: The contract restricts scope to the fixed make_inputs() workload (seed 830230) and requires relative L2 error ≤ 0.01 against a float64 reference; this claim tests exactly that workload's acceptance bound, so a violation would be an in-scope failure.
+Scope rationale: The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.
 
 Scope evidence:
-- `problem.txt`: Only the u, b from make_inputs() (b = 1.125·u + 1e-5 noise) are in scope; output must satisfy relative L2 error ≤ 0.01 against a float64 reference on these stored inputs.
+- `problem.txt`: Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 ± 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload.
 
-Rationale: α ≈ 1.125 is not exactly representable in float32, so float32 α differs from the float64 reference α; the perturbation to residual b − α·u is amplified relative to the residual's ~0.125·|u| scale, potentially pushing relative L2 error toward or past 0.01.
+Rationale: With x≈64±0.125, squares/N≈4096 while variance≈0.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)≈0.125, so a 10% variance error gives ~5% denominator error — possibly over tolerance; needs numeric evidence.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: On the fixed make_inputs() workload, the kernel output is finite, shape (32,), with relative L2 error 0.001544 against the float64 reference — well within the 0.01 tolerance. The α-corruption channel does not breach the bound, so c1 is rebutted.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t9: Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.
 
 ### c2 - `rebutted`
 
-Statement: Sequential float32 accumulation of numerator (u·b) and denominator (u·u) over 32 terms each introduces accumulated rounding such that the computed α differs from the float64 α by more than ~1e-5 relative, which propagates through residual and normalization.
+Statement: If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)≈0.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.
 
 Scope: `in_scope`
 
-Scope rationale: The contract explicitly describes the kernel's float32 sequential accumulation as the computational regime and requires a float64 reference with ≤0.01 relative L2 error on the fixed workload, so quantifying the α error on that exact workload is in-scope.
+Scope rationale: Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.
 
 Scope evidence:
-- `problem.txt`: The contract states the kernel uses float32 arithmetic with sequential accumulations and separately rounded products/sums, while the reference must be computed at float64 accuracy on the same stored inputs, with tolerance 0.01 relative L2.
+- `problem.txt`: Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~±40, massively violating it.
 
-Rationale: 32 sequentially rounded float32 multiplications and additions accumulate rounding that the contract itself flags; this feeds the α used in every residual element, so its magnitude is the decisive quantity for whether error stays within tolerance.
+Rationale: The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: Sequential float32 accumulation reproducing the kernel's arithmetic yields α = 1.125000238418579 vs float64 α = 1.125000242654227, a relative error of 3.77e-9 — far below the ~1e-5 threshold claimed. Accumulated dot-product rounding largely cancels in the ratio, so c2 is rebutted.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t10: The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite — no explosion, contract satisfied. Claim c2 is contradicted on this workload.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_o"
+  "entry": "case_i"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_o"
+  "entry": "case_i"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_o"
+  "entry": "case_i"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_o"
+  "entry": "case_i"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b \u2212 alpha\u00b7u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-    "Acceptance: output is a finite (32,) vector with relative L2 error \u2264 0.01 against the float64 reference (denominator max(||ref||,1e-12)).",
-    "Residual is guaranteed nonzero on this workload; arbitrary alternative inputs are out of scope.",
-    "The contract explicitly notes the kernel uses float32 arithmetic, sequential accumulation, separately rounded products/sums, and disables FP fusion."
+    "Fixed workload: single float32 vector x of shape (128,) from deterministic make_inputs (PCG64 seed 782515, 64.0 + N(0,0.125)), contents and order fully specified.",
+    "Reference computed in float64 on the original float32 values: mean = sum/128, population variance = sum((x-mean)^2)/128 (no ddof correction), reference[i] = (x[i]-mean)/sqrt(variance + 1e-5).",
+    "Output must be one finite float32 vector of shape (128,); relative L2 error metric ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(128)) must be <= 0.02.",
+    "Only this fixed workload is in scope; arbitrary alternative tensors are out of scope."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel with a single program (grid (1,), num_warps=1), N=32 constexpr; hardcoded 32-length loops and tl.arange(0, N).",
-    "Pass 1: sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u); coefficient = div_rn(num, den).",
-    "Pass 2: sequential float32 accumulation of residual\u00b2 where residual = b \u2212 u\u00b7coefficient (separately rounded); then norm = sqrt.",
-    "Pass 3: vectorized recompute of residual and store residual/norm as float32 to a (32,) output tensor allocated in run().",
-    "Inputs are loaded as scalars/vectors with .to(tl.float32) from the stored float32 u, b; output dtype float32.",
-    "make_inputs: u ~ N(0,1) float32; b = (1.125\u00b7u_f64 + 1e-5\u00b7noise) cast to float32, so b \u2248 1.125\u00b7u + small perturbation."
+    "Triton kernel with one program (grid (1,)) processes all 128 elements; N=128 is constexpr and matches the fixed shape.",
+    "Stats computed in float32 via a scalar loop: sequential accumulation of total and squares (sum of x and x^2), then mean = total/N and variance = max(squares/N - mean*mean, 0) \u2014 the single-pass E[x^2]-mean^2 form, not the reference's two-pass centered form.",
+    "Second pass reloads the vector via tl.arange(0,N) and stores (values-mean)/sqrt(variance+1e-5) to a float32 output; eps 1e-5 matches the contract.",
+    "run(x) allocates a fresh (128,) float32 output each call and returns it; enable_fp_fusion=False and num_warps=4.",
+    "Input x is assumed contiguous with dtype loadable via tl.load(X+i); a 0-dishonest variant risk is nil since N is fixed to the workload size."
   ],
   "open_questions": [],
   "resolved_tasks": [],
   "risk_map": [
-    "Cancellation: residual = b \u2212 \u03b1\u00b7u with \u03b1 \u2248 1.125 (not exactly representable in float32); an O(1e-7) relative error in \u03b1 perturbs residual by ~1e-7\u00b7|u|, comparable to the 1e-5 noise component, so relative error of the normalized output could approach or exceed 1e-2? Likely orders below (1e-7 vs 2.5e-1 u-component) but worth numeric check.",
-    "Se
-...[truncated 1575 chars]
+    "Catastrophic-cancellation risk in the single-pass variance: values are ~64 with std ~0.125, so E[x^2] (~4096) minus mean^2 leaves variance ~0.0156 \u2014 a ~5-decimal cancellation in float32; relative error in variance can be large, but whether it breaches the 2% relative L2 threshold depends on how the error propagates through the denominator (denominator is dominated by sqrt(variance+1e-5), so variance error is da
+...[truncated 1549 chars]
 
-### t6 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t7 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t8 - record_claim - ok
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "\u03b1 \u2248 1.125 is not exactly representable in float32, so float32 \u03b1 differs from the float64 reference \u03b1; the perturbation to residual b \u2212 \u03b1\u00b7u is amplified relative to the residual's ~0.125\u00b7|u| scale, potentially pushing relative L2 error toward or past 0.01.",
+  "rationale": "With x\u224864\u00b10.125, squares/N\u22484096 while variance\u22480.0156, so ~5 digits of the float32 result cancel; the absolute rounding error in squares/N (~4096*2^-24*N-sum drift, order 1e-2 to 1e-1 relative to variance) can shift the denominator enough to exceed the 0.02 relative L2 bound. Note denominator = sqrt(variance+1e-5)\u22480.125, so a 10% variance error gives ~5% denominator error \u2014 possibly over tolerance; needs numeric evidence.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Only the u, b from make_inputs() (b = 1.125\u00b7u + 1e-5 noise) are in scope; output must satisfy relative L2 error \u2264 0.01 against a float64 reference on these stored inputs."
+      "summary": "Reference uses float64 two-pass centered population variance; kernel's float32 single-pass E[x^2]-mean^2 form on the seeded x ~ 64.0 \u00b1 0.125 vector may violate the <= 0.02 relative L2 requirement for this fixed workload."
     }
   ],
-  "scope_rationale": "The contract restricts scope to the fixed make_inputs() workload (seed 830230) and requires relative L2 error \u2264 0.01 against a float64 reference; this claim tests exactly that workload's acceptance bound, so a violation would be an in-scope failure.",
-  "statement": "On the fixed make_inputs() workload (seed 830230), the kernel's float32 computation of the coefficient \u03b1 (from sequential float32 dot products) deviates enough from the float64 reference \u03b1 that the residual b \u2212 \u03b1\u00b7u is materially corrupted, giving relative L2 error of the normalized output exceeding 0.01.",
+  "scope_rationale": "The contract fixes the input to make_inputs' seeded vector and requires relative L2 error <= 0.02 against a float64 two-pass reference; the kernel's float32 single-pass variance on this exact vector is the in-scope computation.",
+  "statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
   "status": "open"
 }
 
-### t9 - record_claim - ok
+### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "32 sequentially rounded float32 multiplications and additions accumulate rounding that the contract itself flags; this feeds the \u03b1 used in every residual element, so its magnitude is the decisive quantity for whether error stays within tolerance.",
+  "rationale": "The clamp exists in the code precisely because cancellation can go negative; if triggered on this fixed input the output magnitudes grow ~40x, far beyond tolerance.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The contract states the kernel uses float32 arithmetic with sequential accumulations and separately rounded products/sums, while the reference must be computed at float64 accuracy on the same stored inputs, with tolerance 0.01 relative L2."
+      "summary": "Output must be one finite (128,) vector with relative L2 error <= 0.02 for the seeded workload; a clamped-to-zero variance yields denominator 0.00316 and outputs ~\u00b140, massively violating it."
     }
   ],
-  "scope_rationale": "The contract explicitly describes the kernel's float32 sequential accumulation as the computational regime and requires a float64 reference with \u22640.01 relative L2 error on the fixed workload, so quantifying the \u03b1 error on that exact workload is in-scope.",
-  "statement": "Sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u) over 32 terms each introduces accumulated rounding such that the computed \u03b1 differs from the float64 \u03b1 by more than ~1e-5 relative, which propagates through residual and normalization.",
+  "scope_rationale": "Same fixed workload; the contract's tolerance would be grossly violated if cancellation drives the single-pass variance negative on this input and tl.maximum clamps it to 0.",
+  "statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.",
   "status": "open"
 }
 
-### t10 - record_description_update - ok
-
-{
-  "contract_model": [
-    "Compute normalized orthogonal projection on the fixed (32,) float32 vectors u, b from make_inputs(): alpha = <u,b>/<u,u>, residual = b - alpha*u, reference = residual/||residual||_2 in float64 (algebraically equivalent recentering allowed).",
-    "Acceptance: output is a finite (32,) vector with relative L2 error <= 0.01 against the float64 reference (denominator max(||ref||,1e-12)).",
-    "Residual is guaranteed nonzero on this workload; arbitrary alternative inputs are out of scope.",
-    "The contract explicitly notes the kernel uses float32 arithmetic, sequential accumulation, separately rounded products/sums, and disables FP fusion."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Triton kernel, single program (grid (1,), num_warps=1), N=32 constexpr; hardcoded 32-length loops and tl.arange(0, N).",
-    "Pass 1: sequential float32 accumulation of numerator (u*b) and denominator (u*u); coefficient = div_rn(num, den).",
-    "Pass 2: sequential float32 accumulation of residual^2 where residual = b - u*coefficient (separately rounded); norm = sqrt.",
-    "Pass 3: vectorized recompute of residual and store residual/norm as float32 to a (32,) output tensor allocated in run().",
-    "make_inputs: u ~ N(0,1) float32 (PCG64 seed 830230); b = (1.125*u_f64 + 1e-5*noise) cast to float32, so b ~ 1.125*u + tiny perturbation."
-  ],
-  "open_questions": [
-    "What is the measured float64 alpha and ||residual|| on the fixed stored inputs, and hence the sensitivity factor of alpha error to output error (needed to bound c1/c2)?",
-    "Does Triton's tl.static_range scalar-loop version compile identically to the arithmetic described (e.g., any unexpected fusion despite enable_fp_fusion=False)?"
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Cancellation channel for c1/c2: residual = b - alpha*u with alpha ~= 1.125 (not exactly representable in float32); an O(1e-7) relative error in alpha perturbs residual by ~1e-7*|u| per element while the tr
-...[truncated 2226 chars]
-
-### t11 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "Reviewed the refined description model (du2) and the full kernel source. The only in-scope failure channels on the fixed make_inputs() workload are the float32 \u03b1-accuracy channels, already captured by open claims c1 (\u03b1 error corrupting residual past 0.01 relative L2) and c2 (sequential float32 dot-product rounding). Remaining risk-map items \u2014 other shapes/vectors, hardcoded N=32, subnormal norms \u2014 are out of scope per problem.txt, and the norm is far from subnormal on this workload. No new testable in-scope claims beyond c1/c2.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 10,
-  "turn": 6
-}
-
-### t12 - run_claim_probe - ok
+### t8 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "1b2bd3d9dfe7a1c3aa986aa16ef15be3c0d9bd07d768edce1739a18fb00000db"
+      "path": "probes/t8_probe.py",
+      "sha256": "0984fb6005e1b7410c2799be7ad0e9f85cd28aed5383391cf4fb5e9d9de46709"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "de18d0dd8cecebd66d5f8a70e89936c425652dd601fd6a1382c2e83d8aba10ce"
+      "path": "probes/t8_stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "5ddbc03c15729d01dceb584f9e626053daf0cf6f9f77a71270337bb3d3db8e65"
+      "path": "probes/t8_stderr.txt",
+      "sha256": "05d6fd7d8ce2b5b20b351ddb498d27e85fe802a5d2670ae9883d420df1d5c7ec"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the fixed make_inputs() workload (seed 830230), the kernel's float32 computation of the coefficient \u03b1 (from sequential float32 dot products) deviates enough from the float64 reference \u03b1 that the residual b \u2212 \u03b1\u00b7u is materially corrupted, giving relative L2 error of the normalized output exceeding 0.01.",
-  "duration_s": 8.540344,
-  "event_id": "t12",
+  "claim_statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+  "duration_s": 7.371655,
+  "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -727,52 +602,114 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "1b2bd3d9dfe7a1c3aa986aa16ef15be3c0d9bd07d768edce1739a18fb00000db"
+          "path": "probes/t8_probe.py",
+          "sha256": "0984fb6005e1b7410c2799be7ad0e9f85cd28aed5383391cf4fb5e9d9de46709"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "de18d0dd8cecebd66d5f8a70e89936c425652dd601fd6a1382c2e83d8aba10ce"
+          "path": "probes/t8_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
-          "description": "Captured stde
-...[truncated 2424 chars]
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t8_stderr.txt",
+          "sha256": "05d6fd7d8ce2b5b20b351ddb498d27e85fe802a5d2670ae9883d420df1d5c7ec"
+        }
+      ],
+      "duration_s": 7.371655,
+      "exit_code": 1,
+      "expected_signal": "relati
+...[truncated 1514 chars]
 
-### t13 - run_claim_probe - ok
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t13_probe.py",
-      "sha256": "5b0ec9aa318ee2d69e8573fc590ddd6311dec05b06cd311a54a8a3eff8629a95"
+      "path": "probes/t9_probe.py",
+      "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t13_stdout.txt",
-      "sha256": "bb2ea76ad70c46d5cfaa75a72916977b4645cbc2393bc36e8b82910960184bdb"
+      "path": "probes/t9_stdout.txt",
+      "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t13_stderr.txt",
+      "path": "probes/t9_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t13_json_result.json",
-      "sha256": "ec50b2bf8bb3c72cc3994460d48a3696c37efa0778c7caf40c6c57937013936b"
+      "path": "probes/t9_json_result.json",
+      "sha256": "35859d21dd9e364679728bfbf8047606c66eb5d1a18995b23fd3e813457567e5"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "On the seeded workload (128 floats ~64.0\u00b10.125), the kernel's float32 single-pass variance squares/N - mean*mean suffers catastrophic cancellation (E[x^2]\u22484096 vs variance\u22480.0156), producing a variance/denominator error large enough that the output's relative L2 error exceeds 0.02.",
+  "duration_s": 4.924843,
+  "event_id": "t9",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t9_probe.py",
+          "sha256": "ae7d035cf744d10f03a9294e6cfdff781963e0e5c04b8f5321afa3eec85d7293"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t9_stdout.txt",
+          "sha256": "4fa15388f09bbf84a435cb30a209c945df856427b3352a29ce2d1d733a9b340e"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "
+...[truncated 2659 chars]
+
+### t10 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t10_probe.py",
+      "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t10_stdout.txt",
+      "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t10_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t10_json_result.json",
+      "sha256": "1210fdd96b5ed3b24bcc942b31b01f3241b9e40e9932138e8d020e74b20626b9"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "Sequential float32 accumulation of numerator (u\u00b7b) and denominator (u\u00b7u) over 32 terms each introduces accumulated rounding such that the computed \u03b1 differs from the float64 \u03b1 by more than ~1e-5 relative, which propagates through residual and normalization.",
-  "duration_s": 3.433973,
-  "event_id": "t13",
+  "claim_statement": "If the single-pass variance squares/N - mean*mean evaluates negative in float32 for the seeded vector, tl.maximum clamps it to 0, giving denominator sqrt(1e-5)\u22480.00316 and outputs of magnitude ~20000, breaking finiteness-scale/2% tolerance.",
+  "duration_s": 4.923401,
+  "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -780,76 +717,77 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t13_probe.py",
-          "sha256": "5b0ec9aa318ee2d69e8573fc590ddd6311dec05b06cd311a54a8a3eff8629a95"
+          "path": "probes/t10_probe.py",
+          "sha256": "f25f0196de5be6bb8f0502d0445b67c695c8debe56982bea6a5d1acf3f0eca00"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t13_stdout.txt",
-          "sha256": "bb2ea76ad70c46d5cfaa75a72916977b4645cbc2393bc36e8b82910960184bdb"
+          "path": "probes/t10_stdout.txt",
+          "sha256": "ae6a8174f772156bc19df58846d7061f15994734c44b8cc989cfba421e0156d6"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stder
-...[truncated 2753 chars]
+          "kind": "stderr",
+          "path": "probes/t1
+...[truncated 2605 chars]
 
-### t14 - finalize_probe_evidence - ok
+### t11 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "On the fixed make_inputs() workload, the kernel output is finite, shape (32,), with relative L2 error 0.001544 against the float64 reference \u2014 well within the 0.01 tolerance. The \u03b1-corruption channel does not breach the bound, so c1 is rebutted.",
+  "summary": "Actual kernel run on the seeded (128,) input gives relative L2 error 2.43e-4 against the float64 two-pass reference, far below the 0.02 tolerance. The float32 single-pass variance is 0.016357 vs float64 0.016349 (0.05% relative error), so cancellation does not breach the contract on this workload. Claim c1 (error exceeds 0.02) is contradicted.",
   "supports": "rebutted",
-  "tool_event_id": "t12"
+  "tool_event_id": "t9"
 }
 
-### t15 - finalize_probe_evidence - ok
+### t12 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "rebutted",
   "evidence_id": "c2.e1",
-  "summary": "Sequential float32 accumulation reproducing the kernel's arithmetic yields \u03b1 = 1.125000238418579 vs float64 \u03b1 = 1.125000242654227, a relative error of 3.77e-9 \u2014 far below the ~1e-5 threshold claimed. Accumulated dot-product rounding largely cancels in the ratio, so c2 is rebutted.",
+  "summary": "The float32 single-pass variance on the seeded vector is +0.016357 (not negative), so tl.maximum does not clamp it to zero. Output max magnitude is 2.956, matching the reference max 2.957 (ratio 0.9998) and output is finite \u2014 no explosion, contract satisfied. Claim c2 is contradicted on this workload.",
   "supports": "rebutted",
-  "tool_event_id": "t13"
+  "tool_event_id": "t10"
 }
 
-### t16 - record_no_new_claims - ok
+### t13 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: probes t12/t13 decisively tested the only in-scope failure channels (float32 \u03b1 accuracy and end-to-end relative L2 error on the fixed make_inputs() workload). Measured rel_l2_error 0.001544 is well below the 0.01 tolerance, output is finite and shape (32,), and \u03b1 relative error is 3.77e-9. The measured residual norm (6.6e-5) is small but the relative-error metric already accounts for it and still passes with ~6.5x margin. Other risk items (other shapes/vectors, hardcoded N=32, subnormals) are out of scope per problem.txt. No material, testable, in-scope problem beyond the rebutted c1/c2.",
+  "reason": "Final review: the only in-scope workload (seeded (128,) vector) was executed directly. Both recorded claims (c1 cancellation exceeding 0.02 tolerance; c2 negative-variance clamp explosion) are rebutted by runtime evidence: rel L2 error 2.43e-4 << 0.02, single-pass variance +0.016357 vs float64 0.016349 (0.05% error), no clamp triggered, output finite with max ratio 0.9998 vs reference. No other attack surfaces exist within the fixed-workload contract.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 15,
-  "turn": 9
+  "reviewed_tool_event_count": 12,
+  "turn": 7
 }
 
-### t17 - record_verdict - ok
+### t14 - record_verdict - ok
 
 {
-  "confidence": 0.92,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt) restricts scope to the fixed make_inputs() workload (seed 830230, shape (32,)) and requires a finite (32,) output with relative L2 error <= 0.01 against a float64 reference. Probe t12 ran the kernel on that exact workload and measured rel_l2_error = 0.001544 (6.5x margin below tolerance), finite output, correct shape, max abs err 5.9e-4. Probe t13 isolated the float32 sequential-accumulation alpha channel and found alpha relative error 3.77e-9 vs float64, far below any level that could breach the bound \u2014 confirming the residual-norm scale (6.6e-5) is already accounted for by the contract's relative-L2 metric, which passes. The contract explicitly declares the kernel's float32/sequential/no-fusion arithmetic, so the small observed deviations are the declared computational regime, not a defect. Claims c1 and c2 (the only in-scope failure channels) are rebutted; the Skeptic reviewed the final evidence and recorded no new claims. Out-of-scope items (other shapes/vectors, hardcoded N=32) are generalization notes only. No unresolved claims remain.",
+  "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the kernel satisfies; the float32 single-pass accumulation differences are within the declared tolerance and thus acceptable per the contract's numeric tolerance clause. Skeptic reviewed the latest evidence and found no new claims; no unresolved material claims remain.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.92,
-  "created_at": "2026-09-24T01:07:04Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T00:16:21Z",
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract (problem.txt) restricts scope to the fixed make_inputs() workload (seed 830230, shape (32,)) and requires a finite (32,) output with relative L2 error <= 0.01 against a float64 reference. Probe t12 ran the kernel on that exact workload and measured rel_l2_error = 0.001544 (6.5x margin below tolerance), finite output, correct shape, max abs err 5.9e-4. Probe t13 isolated the float32 sequential-accumulation alpha channel and found alpha relative error 3.77e-9 vs float64, far below any level that could breach the bound \u2014 confirming the residual-norm scale (6.6e-5) is already accounted for by the contract's relative-L2 metric, which passes. The contract explicitly declares the kernel's float32/sequential/no-fusion arithmetic, so the small observed deviations are the declared computational regime, not a defect. Claims c1 and c2 (the only in-scope failure channels) are rebutted; the Skeptic reviewed the final evidence and recorded no new claims. Out-of-scope items (other shapes/vectors, hardcoded N=32) are generalization notes only. No unresolved claims remain.",
+  "reason": "The only in-scope input is the fixed seeded (128,) vector from make_inputs, and probes executed the actual kernel on that exact input. Claim c1 (float32 single-pass variance cancellation pushing relative L2 error above 0.02) is rebutted: measured relative L2 error is 2.43e-4 against the float64 two-pass reference, far under the 0.02 tolerance, and the single-pass variance error is only 0.05%. Claim c2 (negative variance clamped to zero causing huge outputs) is rebutted: the raw variance is +0.016357 (positive), no clamp is triggered, output is finite with max magnitude 2.956 vs reference 2.957. The contract requires only a finite (128,) vector with relative L2 error <= 0.02 on this fixed workload, which the kernel satisfies; the float32 single-pass accumulation differences are within the declared tolerance and thus acceptable per the contract's numeric tolerance clause. Skeptic reviewed the latest evidence and found no new claims; no unresolved material claims remain.",
   "verdict": "trust"
 }

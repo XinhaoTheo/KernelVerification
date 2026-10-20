@@ -1,13 +1,13 @@
 # Agentic Verification Transcript
 
-- Entry: `case_n`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_h`
+- Turns: 5
+- Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 28.555s across 5 calls | tokens: in=55263 out=1391 total=56654
+- LLM time: 27.777s across 4 calls | tokens: in=43020 out=1560 total=44580
 - Stop reason: `verdict_recorded`
-- Verdict: `reject`
+- Verdict: `trust`
 - Confidence: 0.95
 
 ## Timeline
@@ -25,214 +25,184 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_n",
+    "entry": "case_h",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_n"
+    "entry": "case_h"
   }
 
-### Turn 2 - `solo` (4.416327287999991s, in=7569 out=331)
+### Turn 2 - `solo` (8.005921230000013s, in=7797 out=496)
 
 Message:
 
 ```text
-I'll test whether the float32 Horner kernel meets the ≤2e-4 relative L2 error contract on the fixed workload.
+The kernel does a naive sequential float32 row sum over data where large ±values cancel and small 0.25–0.75 values ride along; catastrophic cancellation is the risk. I'll record a claim and run it on the real workload.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 error`
+- `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The coefficients are constructed to cancel at the anchor point, so reference values are tiny (~0.003 scale) and fp32 Horner rounding error relative to the fp64 reference may exceed 2e-4 despite the denominator floor.",
+    "rationale": "w entries are up to ~3.36e7 and small entries are 0.25-0.75; with ulp ~2 at 3e7 magnitude, accumulating sequentially in float32 can absorb the small terms entirely, while the true row sums are just the small-term sums, so relative error may exceed the 0.1 threshold.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Relative L2 error must be <= 0.0002 for the fixed make_inputs() workload, with reference computed in float64 from the stored float32 inputs."
+        "summary": "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008). Contract: every output must be finite and E <= 0.1."
       }
     ],
-    "statement": "The kernel's float32 Horner evaluation on the fixed make_inputs() workload produces a relative L2 error against the float64 reference exceeding 0.0002."
-  }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 3 - `solo` (3.225144383000014s, in=8173 out=232)
-
-Message:
-
-```text
-I'll re-record the claim with the required scope_rationale, then run the probe.
-```
-
-Tool calls:
-
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "The coefficients are constructed so the polynomial nearly cancels at the anchor point (reference values ~0.003 scale); fp32 Horner rounding error amplified over 48 steps may exceed the 2e-4 relative L2 tolerance despite the denominator floor.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The numerical contract requires relative L2 error <= 0.0002 on the fixed make_inputs() workload, with reference computed in float64 from the stored float32 inputs."
-      }
-    ],
-    "scope_rationale": "problem.txt fixes the only in-scope inputs as make_inputs() and requires relative L2 error <= 0.0002; if fp32 Horner error exceeds that on this workload, the contract is violated.",
-    "statement": "The kernel's float32 Horner evaluation on
-  ...[truncated 113 chars]
+    "scope_rationale": "Contract requires E <= 0.1 and finite outputs on the fully specified workload; a sequential float32 sum that loses the small terms violates this.",
+    "statement": "The kernel's sequential float32 row-sum produces error E > 0.1 (or non-finite output) on the spec
+  ...[truncated 93 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The coefficients are constructed so the polynomial nearly cancels at the anchor point (reference values ~0.003 scale); fp32 Horner rounding error amplified over 48 steps may exceed the 2e-4 relative L2 tolerance despite the denominator floor.",
+    "rationale": "w entries are up to ~3.36e7 and small entries are 0.25-0.75; with ulp ~2 at 3e7 magnitude, accumulating sequentially in float32 can absorb the small terms entirely, while the true row sums are just the small-term sums, so relative error may exceed the 0.1 threshold.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The numerical contract requires relative L2 error <= 0.0002 on the fixed make_inputs() workload, with reference computed in float64 from the stored float32 inputs."
+        "summary": "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008). Contract: every output must be finite and E <= 0.1."
       }
     ],
-    "scope_rationale": "problem.txt fixes the only in-scope inputs as make_inputs() and requires relative L2 error <= 0.0002; if fp32 Horner error exceeds that on this workload, the contract is violated.",
-    "statement": "The kernel's float32 Horner evaluation on the fixed make_inputs() workload produces a relative L2 error against the float64 reference exceeding 0.0002.",
+    "scope_rationale": "Contract requires E <= 0.1 and finite outputs on the fully specified workload; a sequential float32 sum that loses the small terms violates this.",
+    "statement": "The kernel's sequential float32 row-sum produces error E > 0.1 (or non-finite output) on the specified (64,128) workload because large cancelling terms absorb the small 0.25-0.75 entries.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (5.610486640000005s, in=9316 out=327)
+### Turn 3 - `solo` (5.366582633000007s, in=9085 out=254)
 
 Message:
 
 ```text
-I'll run the fixed workload through the kernel and compare against a float64 reference.
+I'll run the kernel on the exact specified workload and compare against a float64 reference.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t7 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, torch, numpy as np, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/numerical_cases/case_n/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ncoeffs, pts = k.make_inputs()\nout = k.run(coeffs, pts)\n\n# float64 reference from stored float32 inputs\nc64 = coeffs.cpu().numpy().astype(np.float64)\np64 = pts.cpu().numpy().astype(np.float64)\nref = np.array([sum(c64[i,j] * p64[i]**j for j in range(49)) for i in range(8)])\n\no = out.cpu().numpy().astype(np.float64)\nerr = np.linalg.norm(o - ref)\nden = max(np.linalg.norm(ref), 0.001*np.sqrt(8))\nrel = err / den\nfinite = bool(np.all(np.isfinite(o)))\n\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 reference on fixe
-  ...[truncated 270 chars]
+    "code": "\nimport json, numpy as np, torch, sys\nsys.path.insert(0, \"/root/numerical_cases/case_h\")\nimport kernel as k\n\nvalues, = k.make_inputs()\nout = k.run(values)\nref = values.double().sum(dim=1)\nE = torch.norm((out.double() - ref)) / max(torch.norm(ref).item(), 0.008)\nfinite = bool(torch.isfinite(out).all())\nprint(json.dumps({\n  \"metric\": \"E = ||output-ref||_2 / max(||ref||_2, 0.008), per contract\",\n  \"E\": float(E),\n  \"finite\": finite,\n  \"max_abs_err\": float((out.double()-ref).abs().max()),\n  \"ref_norm\": float(torch.norm(ref)),\n  \"out_norm\": float(torch.norm(out.double())),\n  \"sample_out\": out[:4].tolist(),\n  \"sample_ref\": ref[:4].tolist(),\n}))\n",
+    "expected_signal": "E > 0.1 or non-finite output"
+  }
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "7770123fc14142c6a3cb8821b9f580997d914112ba73a0d459ddde40efe81b31"
+        "path": "probes/t6_probe.py",
+        "sha256": "26e49b73b0e0d40ad81d3ab1acaf4fb2d74a8d62f1dc8d0e31db81668becaab1"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "65e6d630ff6494b2ecbe9b7de633102b21fcb7866e9b38fccdf1ee40a05c2ba9"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "c8f10c29dd646769eedc65e8a874f0e10175447a44c3a86170800043fcccdb80"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "07a799c843a66eedd238f6766cec1faeda59f9cdaefa3e95d0865f9a26ca46fc"
+        "path": "probes/t6_json_result.json",
+        "sha256": "7c638881ac0fcdc3a079c7689c377240a2c646b571a8341986316a7e758d606d"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's float32 Horner evaluation on the fixed make_inputs() workload produces a relative L2 error against the float64 reference exceeding 0.0002.",
-    "duration_s": 5.145328,
-    "event_id": "t7",
-    "evidence_d
-  ...[truncated 4570 chars]
+    "claim_statement": "The kernel's sequential float32 row-sum produces error E > 0.1 (or non-finite output) on the specified (64,128) workload because large cancelling terms absorb the small 0.25-0.75 entries.",
+    "duration_s": 5.73419
+  ...[truncated 3117 chars]
 
-### Turn 5 - `solo` (10.159714210000004s, in=12640 out=276)
+### Turn 4 - `solo` (9.275666078s, in=11404 out=463)
 
 Message:
 
 ```text
-The probe on the fixed workload produced a relative L2 error of 4.73e-4, exceeding the 2e-4 threshold, so the claim is confirmed and the contract is violated.
+The probe on the exact specified workload returned E = 0.0, finite outputs, and max absolute error 0.0 — the kernel's sequential float32 sum exactly reproduced the float64 reference. That rebuts claim c1, so I'll record the evidence and issue the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "err_norm": 7.48e-06,
+      "E": 0.0,
       "finite": true,
-      "ref_norm": 0.015817037568798598,
-      "rel_l2": 0.0004729252164019362,
-      "threshold": 0.0002
+      "max_abs_err": 0.0,
+      "ref_norm": 257.13274781715376
     },
-    "event_id": "t7",
-    "summary": "Kernel output vs float64 reference on the fixed make_inputs() workload: relative L2 error = 4.729e-4, exceeding the contract threshold 2e-4 (err_norm 7.48e-6 vs ref_norm 1.582e-2; denominator floor not active). Output is finite, shape (8,), float32.",
-    "supports": "confirmed"
+    "event_id": "t6",
+    "status": "rebutted",
+    "summary": "Kernel run on the exact specified (64,128) workload (seed 730119, given permutations) produced finite outputs with E = 0.0 and max abs error 0.0 versus the float64 reference \u2014 well within the E <= 0.1 contract.",
+    "supports": "rebutted"
   }
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Kernel output vs float64 reference on the fixed make_inputs() workload: relative L2 error = 4.729e-4, exceeding the contract threshold 2e-4 (err_norm 7.48e-6 vs ref_norm 1.582e-2; denominator floor not active). Output is finite, shape (8,), float32.",
-    "supports": "confirmed",
-    "tool_event_id": "t7"
+    "summary": "Kernel run on the exact specified (64,128) workload (seed 730119, given permutations) produced finite outputs with E = 0.0 and max abs error 0.0 versus the float64 reference \u2014 well within the E <= 0.1 contract.",
+    "supports": "rebutted",
+    "tool_event_id": "t6"
   }
 
-### Turn 6 - `solo` (5.142836425000013s, in=17565 out=225)
+### Turn 5 - `solo` (5.129190937000004s, in=14734 out=347)
 
 Message:
 
 ```text
-The claim is resolved: the kernel exceeds the contract's 2e-4 error tolerance by more than 2× on the fixed workload. I'll record the verdict.
+The single in-scope claim was tested on the exact specified workload and rebutted: the kernel's sequential float32 sum gave E = 0.0 with finite outputs (tool event t6). No open claims remain; the contract's E ≤ 0.1 and finiteness requirements are satisfied. I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
     "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the fixed make_inputs() workload through the kernel (probe t7) and computed the contract's float64 reference from the stored float32 inputs. The kernel's float32 Horner evaluation (with fp fusion disabled) yields a relative L2 error of 4.729e-4 (err_norm 7.48e-6, ref_norm 1.582e-2, denominator floor not active), which exceeds the contract's required threshold of 2e-4. Output is finite, shape (8,), float32, so only the numerical accuracy requirement fails. This is an in-scope contract violation on the only inputs the contract admits.",
-    "verdict": "reject"
+    "reason": "Ran the kernel on the exact fully specified workload (kernel.py make_inputs, seed 730119, (64,128) float32 matrix) and compared against a float64 reference (tool event t6). Output was finite for all 64 rows, max absolute error 0.0, E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.0, far below the contract's E <= 0.1 threshold. The large +w/-w terms cancel exactly (they are exact float32 opposites), so the sequential float32 sum is exact on this data. The hypothesis that catastrophic cancellation would lose the small terms was rebutted. Contract satisfied on the specified input, which is the entire scope.",
+    "verdict": "trust"
   }
   Output summary:
   {
@@ -240,8 +210,8 @@ Tool calls:
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the fixed make_inputs() workload through the kernel (probe t7) and computed the contract's float64 reference from the stored float32 inputs. The kernel's float32 Horner evaluation (with fp fusion disabled) yields a relative L2 error of 4.729e-4 (err_norm 7.48e-6, ref_norm 1.582e-2, denominator floor not active), which exceeds the contract's required threshold of 2e-4. Output is finite, shape (8,), float32, so only the numerical accuracy requirement fails. This is an in-scope contract violation on the only inputs the contract admits.",
-    "verdict": "reject"
+    "reason": "Ran the kernel on the exact fully specified workload (kernel.py make_inputs, seed 730119, (64,128) float32 matrix) and compared against a float64 reference (tool event t6). Output was finite for all 64 rows, max absolute error 0.0, E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.0, far below the contract's E <= 0.1 threshold. The large +w/-w terms cancel exactly (they are exact float32 opposites), so the sequential float32 sum is exact on this data. The hypothesis that catastrophic cancellation would lose the small terms was rebutted. Contract satisfied on the specified input, which is the entire scope.",
+    "verdict": "trust"
   }
 
 ## Description Model
@@ -250,105 +220,98 @@ No description model recorded.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `rebutted`
 
-Statement: The kernel's float32 Horner evaluation on the fixed make_inputs() workload produces a relative L2 error against the float64 reference exceeding 0.0002.
+Statement: The kernel's sequential float32 row-sum produces error E > 0.1 (or non-finite output) on the specified (64,128) workload because large cancelling terms absorb the small 0.25-0.75 entries.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt fixes the only in-scope inputs as make_inputs() and requires relative L2 error <= 0.0002; if fp32 Horner error exceeds that on this workload, the contract is violated.
+Scope rationale: Contract requires E <= 0.1 and finite outputs on the fully specified workload; a sequential float32 sum that loses the small terms violates this.
 
 Scope evidence:
-- `problem.txt`: The numerical contract requires relative L2 error <= 0.0002 on the fixed make_inputs() workload, with reference computed in float64 from the stored float32 inputs.
+- `problem.txt`: Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008). Contract: every output must be finite and E <= 0.1.
 
-Rationale: The coefficients are constructed so the polynomial nearly cancels at the anchor point (reference values ~0.003 scale); fp32 Horner rounding error amplified over 48 steps may exceed the 2e-4 relative L2 tolerance despite the denominator floor.
+Rationale: w entries are up to ~3.36e7 and small entries are 0.25-0.75; with ulp ~2 at 3e7 magnitude, accumulating sequentially in float32 can absorb the small terms entirely, while the true row sums are just the small-term sums, so relative error may exceed the 0.1 threshold.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Kernel output vs float64 reference on the fixed make_inputs() workload: relative L2 error = 4.729e-4, exceeding the contract threshold 2e-4 (err_norm 7.48e-6 vs ref_norm 1.582e-2; denominator floor not active). Output is finite, shape (8,), float32.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: Kernel run on the exact specified (64,128) workload (seed 730119, given permutations) produced finite outputs with E = 0.0 and max abs error 0.0 versus the float64 reference — well within the E <= 0.1 contract.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_n"
+  "entry": "case_h"
 }
 
-### t5 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t6 - record_claim - ok
+### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The coefficients are constructed so the polynomial nearly cancels at the anchor point (reference values ~0.003 scale); fp32 Horner rounding error amplified over 48 steps may exceed the 2e-4 relative L2 tolerance despite the denominator floor.",
+  "rationale": "w entries are up to ~3.36e7 and small entries are 0.25-0.75; with ulp ~2 at 3e7 magnitude, accumulating sequentially in float32 can absorb the small terms entirely, while the true row sums are just the small-term sums, so relative error may exceed the 0.1 threshold.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The numerical contract requires relative L2 error <= 0.0002 on the fixed make_inputs() workload, with reference computed in float64 from the stored float32 inputs."
+      "summary": "Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008). Contract: every output must be finite and E <= 0.1."
     }
   ],
-  "scope_rationale": "problem.txt fixes the only in-scope inputs as make_inputs() and requires relative L2 error <= 0.0002; if fp32 Horner error exceeds that on this workload, the contract is violated.",
-  "statement": "The kernel's float32 Horner evaluation on the fixed make_inputs() workload produces a relative L2 error against the float64 reference exceeding 0.0002.",
+  "scope_rationale": "Contract requires E <= 0.1 and finite outputs on the fully specified workload; a sequential float32 sum that loses the small terms violates this.",
+  "statement": "The kernel's sequential float32 row-sum produces error E > 0.1 (or non-finite output) on the specified (64,128) workload because large cancelling terms absorb the small 0.25-0.75 entries.",
   "status": "open"
 }
 
-### t7 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "7770123fc14142c6a3cb8821b9f580997d914112ba73a0d459ddde40efe81b31"
+      "path": "probes/t6_probe.py",
+      "sha256": "26e49b73b0e0d40ad81d3ab1acaf4fb2d74a8d62f1dc8d0e31db81668becaab1"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "65e6d630ff6494b2ecbe9b7de633102b21fcb7866e9b38fccdf1ee40a05c2ba9"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "c8f10c29dd646769eedc65e8a874f0e10175447a44c3a86170800043fcccdb80"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "07a799c843a66eedd238f6766cec1faeda59f9cdaefa3e95d0865f9a26ca46fc"
+      "path": "probes/t6_json_result.json",
+      "sha256": "7c638881ac0fcdc3a079c7689c377240a2c646b571a8341986316a7e758d606d"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's float32 Horner evaluation on the fixed make_inputs() workload produces a relative L2 error against the float64 reference exceeding 0.0002.",
-  "duration_s": 5.145328,
-  "event_id": "t7",
+  "claim_statement": "The kernel's sequential float32 row-sum produces error E > 0.1 (or non-finite output) on the specified (64,128) workload because large cancelling terms absorb the small 0.25-0.75 entries.",
+  "duration_s": 5.734192,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -356,53 +319,52 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "7770123fc14142c6a3cb8821b9f580997d914112ba73a0d459ddde40efe81b31"
+          "path": "probes/t6_probe.py",
+          "sha256": "26e49b73b0e0d40ad81d3ab1acaf4fb2d74a8d62f1dc8d0e31db81668becaab1"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "65e6d630ff6494b2ecbe9b7de633102b21fcb7866e9b38fccdf1ee40a05c2ba9"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "c8f10c29dd646769eedc65e8a874f0e10175447a44c3a86170800043fcccdb80"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "path": "probes/t6_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb9
+...[truncated 2317 chars]
 
-...[truncated 3770 chars]
-
-### t8 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Kernel output vs float64 reference on the fixed make_inputs() workload: relative L2 error = 4.729e-4, exceeding the contract threshold 2e-4 (err_norm 7.48e-6 vs ref_norm 1.582e-2; denominator floor not active). Output is finite, shape (8,), float32.",
-  "supports": "confirmed",
-  "tool_event_id": "t7"
+  "summary": "Kernel run on the exact specified (64,128) workload (seed 730119, given permutations) produced finite outputs with E = 0.0 and max abs error 0.0 versus the float64 reference \u2014 well within the E <= 0.1 contract.",
+  "supports": "rebutted",
+  "tool_event_id": "t6"
 }
 
-### t9 - record_verdict - ok
+### t8 - record_verdict - ok
 
 {
   "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the fixed make_inputs() workload through the kernel (probe t7) and computed the contract's float64 reference from the stored float32 inputs. The kernel's float32 Horner evaluation (with fp fusion disabled) yields a relative L2 error of 4.729e-4 (err_norm 7.48e-6, ref_norm 1.582e-2, denominator floor not active), which exceeds the contract's required threshold of 2e-4. Output is finite, shape (8,), float32, so only the numerical accuracy requirement fails. This is an in-scope contract violation on the only inputs the contract admits.",
-  "verdict": "reject"
+  "reason": "Ran the kernel on the exact fully specified workload (kernel.py make_inputs, seed 730119, (64,128) float32 matrix) and compared against a float64 reference (tool event t6). Output was finite for all 64 rows, max absolute error 0.0, E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.0, far below the contract's E <= 0.1 threshold. The large +w/-w terms cancel exactly (they are exact float32 opposites), so the sequential float32 sum is exact on this data. The hypothesis that catastrophic cancellation would lose the small terms was rebutted. Contract satisfied on the specified input, which is the entire scope.",
+  "verdict": "trust"
 }
 
 ## Verdict
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-24T00:17:41Z",
+  "created_at": "2026-09-23T21:36:36Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the fixed make_inputs() workload through the kernel (probe t7) and computed the contract's float64 reference from the stored float32 inputs. The kernel's float32 Horner evaluation (with fp fusion disabled) yields a relative L2 error of 4.729e-4 (err_norm 7.48e-6, ref_norm 1.582e-2, denominator floor not active), which exceeds the contract's required threshold of 2e-4. Output is finite, shape (8,), float32, so only the numerical accuracy requirement fails. This is an in-scope contract violation on the only inputs the contract admits.",
-  "verdict": "reject"
+  "reason": "Ran the kernel on the exact fully specified workload (kernel.py make_inputs, seed 730119, (64,128) float32 matrix) and compared against a float64 reference (tool event t6). Output was finite for all 64 rows, max absolute error 0.0, E = ||out-ref||_2 / max(||ref||_2, 0.008) = 0.0, far below the contract's E <= 0.1 threshold. The large +w/-w terms cancel exactly (they are exact float32 opposites), so the sequential float32 sum is exact on this data. The hypothesis that catastrophic cancellation would lose the small terms was rebutted. Contract satisfied on the specified input, which is the entire scope.",
+  "verdict": "trust"
 }

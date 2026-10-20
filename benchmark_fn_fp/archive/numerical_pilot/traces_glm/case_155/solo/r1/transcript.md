@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_92`
+- Entry: `case_86`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 34.504s across 5 calls | tokens: in=53416 out=1260 total=54676
+- LLM time: 24.088s across 5 calls | tokens: in=52674 out=1000 total=53674
 - Stop reason: `verdict_recorded`
-- Verdict: `reject`
-- Confidence: 0.97
+- Verdict: `trust`
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_92"
+    "entry": "case_86"
   }
   Output summary:
   {
-    "entry": "case_92"
+    "entry": "case_86"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_92"
+    "entry": "case_86"
   }
   Output summary:
   {
-    "entry": "case_92"
+    "entry": "case_86"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_92"
+    "entry": "case_86"
   }
   Output summary:
   {
-    "entry": "case_92"
+    "entry": "case_86"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_92",
+    "entry": "case_86",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_92"
+    "entry": "case_86"
   }
 
-### Turn 2 - `solo` (4.85940752700003s, in=8223 out=231)
+### Turn 2 - `solo` (4.319745646000001s, in=8168 out=202)
 
 Message:
 
 ```text
-I'll record a claim about whether the fp16 rounding of the recurrent state violates the error budget E ≤ 0.003, then run the exact workload.
+The kernel does a per-row 7-level quantized matvec; I'll run the exact workload and compute the contract's E metric.
 ```
 
 Tool calls:
@@ -73,15 +73,15 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel rounds h to float16 every step; over t=512 steps with bias 0.01 the states approach ~10, and repeated fp16 quantization of h could accumulate error exceeding E<=0.003, or fp16 range is fine but rounding error grows.",
+    "rationale": "The kernel quantizes each row of W to 7 levels with per-row max scaling, which introduces error that may or may not stay within the E <= 0.12 budget defined in the contract.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003 for the exact make_inputs workload, with float64 reference on the same float32 inputs."
+        "summary": "Contract: reference is float64 W@x on the exact make_inputs workload; implementation satisfies iff outputs finite and E <= 0.12."
       }
     ],
-    "statement": "The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload."
+    "statement": "The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs."
   }
   Output summary:
   {
@@ -89,46 +89,46 @@ Tool calls:
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (3.2349092750000636s, in=8854 out=191)
+### Turn 3 - `solo` (3.3119346660000133s, in=8734 out=173)
 
 Tool calls:
 
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The kernel rounds h to float16 every step; over t=512 steps with bias 0.01 states approach ~10, and repeated fp16 quantization may accumulate error exceeding the budget.",
+    "rationale": "The kernel quantizes each row of W to 7 levels with per-row max scaling, which introduces error that may or may not stay within the E <= 0.12 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003 on the exact make_inputs workload, with float64 reference on the same float32 inputs."
+        "summary": "Implementation satisfies the contract iff all outputs finite and E <= 0.12, with reference float64 W@x on the exact make_inputs workload."
       }
     ],
-    "scope_rationale": "The contract requires all outputs finite and E <= 0.003 on exactly this workload; a per-step fp16 rounding of the recurrent state could violate that budget.",
-    "statement": "The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload."
+    "scope_rationale": "The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; exceeding that budget is the only defined violation.",
+    "statement": "The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs."
   }
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel rounds h to float16 every step; over t=512 steps with bias 0.01 states approach ~10, and repeated fp16 quantization may accumulate error exceeding the budget.",
+    "rationale": "The kernel quantizes each row of W to 7 levels with per-row max scaling, which introduces error that may or may not stay within the E <= 0.12 budget.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003 on the exact make_inputs workload, with float64 reference on the same float32 inputs."
+        "summary": "Implementation satisfies the contract iff all outputs finite and E <= 0.12, with reference float64 W@x on the exact make_inputs workload."
       }
     ],
-    "scope_rationale": "The contract requires all outputs finite and E <= 0.003 on exactly this workload; a per-step fp16 rounding of the recurrent state could violate that budget.",
-    "statement": "The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload.",
+    "scope_rationale": "The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; exceeding that budget is the only defined violation.",
+    "statement": "The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (14.786088583000037s, in=9887 out=310)
+### Turn 4 - `solo` (7.322576480999999s, in=9695 out=206)
 
 Message:
 
 ```text
-I'll run the exact workload and compute the contract's error metric E against the float64 reference.
+Running the exact workload against the kernel and computing the contract's E metric.
 ```
 
 Tool calls:
@@ -137,8 +137,9 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport importlib.util, torch, numpy as np\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/pilot_cases/case_92/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\na, b = k.make_inputs(\"cuda\")\nout = k.run(a, b)\naf = a.double().cpu().numpy(); bf = b.double().cpu().numpy()\nref = np.empty_like(af)\nh = np.zeros(af.shape[1])\nfor t in range(af.shape[0]):\n    h = af[t]*h + bf[t]; ref[t] = h\no = out.double().cpu().numpy()\nfinite = bool(np.isfinite(o).all())\ndiff = o - ref\nE = np.linalg.norm(diff.ravel()) / max(np.linalg.norm(ref.ravel()), 0.001*np.sqrt(ref.size))\nprint({\"finite\": finite, \"E\": float(E), \"ref_norm\": float(np.linalg.norm(ref)), \"max_abs_err\": float(np.abs(diff).max()), \"shape\":
-  ...[truncated 177 chars]
+    "code": "import torch, numpy as np, json, sys\nsys.path.insert(0, '/root/pilot_cases/case_86')\nimport kernel as km\n\nx, w = km.make_inputs(\"cuda\")\nout = km.run(x, w)\nref = w.to(torch.float64) @ x.to(torch.float64)\nnum = torch.norm(out.to(torch.float64).flatten() - ref.flatten()).item()\nden = max(torch.norm(ref.flatten()).item(), 0.001*np.sqrt(ref.numel()))\nprint(json.dumps({\"E\": num/den, \"finite\": bool(torch.isfinite(out).all().item()), \"num\": num, \"den\": den, \"shape\": list(out.shape)}))",
+    "expected_signal": "E <= 0.12 and finite outputs means the claim is rebutted"
+  }
   Output summary:
   {
     "artifacts": [
@@ -146,42 +147,41 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "f22f84419c7535b649f773de3e992e34799bba34a193a157b902d1d85a0b9850"
+        "sha256": "75186eb0e51725b2606bd2d5a3d92fa7f4a2b45262e67388f97792c6b20c1478"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "00d67ceabc8d1a0aab55919e605e0a5a145b84d85a62c06cd40e47070066feba"
+        "sha256": "b715f538a12b85f5289382af4f3de862c0cd9a3de0d7b577b8f247f1f41f085a"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t7_json_result.json",
+        "sha256": "7691f99c765408f4da899df7e738bf7ce1f03541563a4d9a00a4d97a5a3faa77"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload.",
-    "duration_s": 4.369495,
+    "claim_statement": "The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs.",
+    "duration_s": 5.094511,
     "event_id": "t7",
     "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t7_probe.py",
-            "sha256": "f22f84419c7535b649f773de3e992e34
-  ...[truncated 1798 chars]
+      "claim_id": "c1"
+  ...[truncated 2296 chars]
 
-### Turn 5 - `solo` (6.243817980000017s, in=11745 out=282)
+### Turn 5 - `solo` (4.206509417999996s, in=11578 out=209)
 
 Message:
 
 ```text
-The probe ran the exact workload: E ≈ 0.00683, above the 0.003 budget, though outputs are finite. This confirms the claim — I'll finalize the evidence and record the verdict.
+The probe ran the exact workload: E = 0.0793 ≤ 0.12 with finite outputs, so the budget violation claim is rebutted.
 ```
 
 Tool calls:
@@ -190,37 +190,32 @@ Tool calls:
   Args:
   {
     "data": {
-      "E": 0.006828079903557325,
-      "all_finite": true,
-      "dtype": "torch.float32",
-      "max_abs_err": 0.0532769692090187,
-      "ref_norm": 315.5689434750021,
-      "shape": [
-        512,
-        32
-      ]
+      "E": 0.07925391550951344,
+      "den": 7.034748157604961,
+      "finite": true,
+      "num": 0.5575313361135289
     },
     "event_id": "t7",
-    "status": "confirmed",
-    "summary": "Running the exact make_inputs() workload and kernel on the real GPU, comparing against the float64 reference on the same float32 inputs: outputs are finite but the contract metric E = 0.00683 exceeds the 0.003 budget (max absolute error 0.0533 on states whose norm is 315.6). The per-step fp16 rounding of the recurrent state accumulates past the allowed relative error.",
-    "supports": "confirmed"
+    "status": "rebutted",
+    "summary": "On the exact make_inputs() workload (m=32, k=128), the kernel output vs the float64 reference gave E = 0.0793 <= 0.12 with all outputs finite, so the budget-violation hypothesis is rebutted.",
+    "supports": "rebutted"
   }
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Running the exact make_inputs() workload and kernel on the real GPU, comparing against the float64 reference on the same float32 inputs: outputs are finite but the contract metric E = 0.00683 exceeds the 0.003 budget (max absolute error 0.0533 on states whose norm is 315.6). The per-step fp16 rounding of the recurrent state accumulates past the allowed relative error.",
-    "supports": "confirmed",
+    "summary": "On the exact make_inputs() workload (m=32, k=128), the kernel output vs the float64 reference gave E = 0.0793 <= 0.12 with all outputs finite, so the budget-violation hypothesis is rebutted.",
+    "supports": "rebutted",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (5.379729724000072s, in=14707 out=246)
+### Turn 6 - `solo` (4.927336025999978s, in=14499 out=210)
 
 Message:
 
 ```text
-The decisive probe already ran: on the exact contract workload, outputs are finite but E = 0.00683, more than double the 0.003 budget. The in-scope claim is confirmed. I'll record the reject verdict.
+The single in-scope claim is resolved: the exact contract workload gives E = 0.0793 ≤ 0.12 with all outputs finite, so the reduced-precision quantization kernel complies. Recording the verdict.
 ```
 
 Tool calls:
@@ -228,21 +223,21 @@ Tool calls:
 - `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 executed the exact make_inputs() workload on the real GPU (seed 451, t=512, d=32) and compared the kernel output to the contract's float64 reference on the same float32 inputs: all outputs finite, but E = 0.006828 > 0.003 budget (max abs error 0.0533, ref norm 315.57). The kernel rounds the recurrent state h to fp16 each step (kernel.py line 13), and this accumulated quantization error violates the contract's error budget on the single in-scope workload. Claim c1 confirmed.",
-    "verdict": "reject"
+    "reason": "Probe t7 ran the exact make_inputs() workload (m=32, k=128, seed 1223) on GPU through kernel.run and compared to the float64 reference: ||out - ref||_2 = 0.5575, denominator 7.0347, giving E = 0.0793 <= 0.12 with all outputs finite. The contract permits reduced-precision arithmetic within this budget, so the kernel complies on the single specified workload.",
+    "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 executed the exact make_inputs() workload on the real GPU (seed 451, t=512, d=32) and compared the kernel output to the contract's float64 reference on the same float32 inputs: all outputs finite, but E = 0.006828 > 0.003 budget (max abs error 0.0533, ref norm 315.57). The kernel rounds the recurrent state h to fp16 each step (kernel.py line 13), and this accumulated quantization error violates the contract's error budget on the single in-scope workload. Claim c1 confirmed.",
-    "verdict": "reject"
+    "reason": "Probe t7 ran the exact make_inputs() workload (m=32, k=128, seed 1223) on GPU through kernel.run and compared to the float64 reference: ||out - ref||_2 = 0.5575, denominator 7.0347, giving E = 0.0793 <= 0.12 with all outputs finite. The contract permits reduced-precision arithmetic within this budget, so the kernel complies on the single specified workload.",
+    "verdict": "trust"
   }
 
 ## Description Model
@@ -251,46 +246,46 @@ No description model recorded.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `rebutted`
 
-Statement: The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload.
+Statement: The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires all outputs finite and E <= 0.003 on exactly this workload; a per-step fp16 rounding of the recurrent state could violate that budget.
+Scope rationale: The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; exceeding that budget is the only defined violation.
 
 Scope evidence:
-- `problem.txt`: Implementation satisfies the contract iff all outputs are finite and E <= 0.003 on the exact make_inputs workload, with float64 reference on the same float32 inputs.
+- `problem.txt`: Implementation satisfies the contract iff all outputs finite and E <= 0.12, with reference float64 W@x on the exact make_inputs workload.
 
-Rationale: The kernel rounds h to float16 every step; over t=512 steps with bias 0.01 states approach ~10, and repeated fp16 quantization may accumulate error exceeding the budget.
+Rationale: The kernel quantizes each row of W to 7 levels with per-row max scaling, which introduces error that may or may not stay within the E <= 0.12 budget.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Running the exact make_inputs() workload and kernel on the real GPU, comparing against the float64 reference on the same float32 inputs: outputs are finite but the contract metric E = 0.00683 exceeds the 0.003 budget (max absolute error 0.0533 on states whose norm is 315.6). The per-step fp16 rounding of the recurrent state accumulates past the allowed relative error.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: On the exact make_inputs() workload (m=32, k=128), the kernel output vs the float64 reference gave E = 0.0793 <= 0.12 with all outputs finite, so the budget-violation hypothesis is rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_92"
+  "entry": "case_86"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_92"
+  "entry": "case_86"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_92"
+  "entry": "case_86"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_92"
+  "entry": "case_86"
 }
 
 ### t5 - record_claim - error
@@ -304,16 +299,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "The kernel rounds h to float16 every step; over t=512 steps with bias 0.01 states approach ~10, and repeated fp16 quantization may accumulate error exceeding the budget.",
+  "rationale": "The kernel quantizes each row of W to 7 levels with per-row max scaling, which introduces error that may or may not stay within the E <= 0.12 budget.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Implementation satisfies the contract iff all outputs are finite and E <= 0.003 on the exact make_inputs workload, with float64 reference on the same float32 inputs."
+      "summary": "Implementation satisfies the contract iff all outputs finite and E <= 0.12, with reference float64 W@x on the exact make_inputs workload."
     }
   ],
-  "scope_rationale": "The contract requires all outputs finite and E <= 0.003 on exactly this workload; a per-step fp16 rounding of the recurrent state could violate that budget.",
-  "statement": "The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload.",
+  "scope_rationale": "The contract requires E <= 0.12 and finite outputs on the exact make_inputs() workload; exceeding that budget is the only defined violation.",
+  "statement": "The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs.",
   "status": "open"
 }
 
@@ -325,24 +320,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "f22f84419c7535b649f773de3e992e34799bba34a193a157b902d1d85a0b9850"
+      "sha256": "75186eb0e51725b2606bd2d5a3d92fa7f4a2b45262e67388f97792c6b20c1478"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "00d67ceabc8d1a0aab55919e605e0a5a145b84d85a62c06cd40e47070066feba"
+      "sha256": "b715f538a12b85f5289382af4f3de862c0cd9a3de0d7b577b8f247f1f41f085a"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t7_json_result.json",
+      "sha256": "7691f99c765408f4da899df7e738bf7ce1f03541563a4d9a00a4d97a5a3faa77"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's per-step fp16 rounding of the recurrent state causes E > 0.003 (or non-finite outputs) on the specified workload.",
-  "duration_s": 4.369495,
+  "claim_statement": "The kernel output on the make_inputs workload violates the contract error budget E <= 0.12 or produces non-finite outputs.",
+  "duration_s": 5.094511,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -352,57 +353,54 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "f22f84419c7535b649f773de3e992e34799bba34a193a157b902d1d85a0b9850"
+          "sha256": "75186eb0e51725b2606bd2d5a3d92fa7f4a2b45262e67388f97792c6b20c1478"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "00d67ceabc8d1a0aab55919e605e0a5a145b84d85a62c06cd40e47070066feba"
+          "sha256": "b715f538a12b85f5289382af4f3de862c0cd9a3de0d7b577b8f247f1f41f085a"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        }
-      ],
-      "duration_s": 4.369495,
-      "exit_code": 0,
-      "expected_signal": "E <= 0.003 and all finite means the claim is rebutted (kernel compliant); E > 0.003 or non-finite confirms it.",
-      "json_parse_error": "last stdout line is not JSON: Expecti
-...[truncated 998 chars]
+        },
+        {
+        
+...[truncated 1496 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Running the exact make_inputs() workload and kernel on the real GPU, comparing against the float64 reference on the same float32 inputs: outputs are finite but the contract metric E = 0.00683 exceeds the 0.003 budget (max absolute error 0.0533 on states whose norm is 315.6). The per-step fp16 rounding of the recurrent state accumulates past the allowed relative error.",
-  "supports": "confirmed",
+  "summary": "On the exact make_inputs() workload (m=32, k=128), the kernel output vs the float64 reference gave E = 0.0793 <= 0.12 with all outputs finite, so the budget-violation hypothesis is rebutted.",
+  "supports": "rebutted",
   "tool_event_id": "t7"
 }
 
 ### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 executed the exact make_inputs() workload on the real GPU (seed 451, t=512, d=32) and compared the kernel output to the contract's float64 reference on the same float32 inputs: all outputs finite, but E = 0.006828 > 0.003 budget (max abs error 0.0533, ref norm 315.57). The kernel rounds the recurrent state h to fp16 each step (kernel.py line 13), and this accumulated quantization error violates the contract's error budget on the single in-scope workload. Claim c1 confirmed.",
-  "verdict": "reject"
+  "reason": "Probe t7 ran the exact make_inputs() workload (m=32, k=128, seed 1223) on GPU through kernel.run and compared to the float64 reference: ||out - ref||_2 = 0.5575, denominator 7.0347, giving E = 0.0793 <= 0.12 with all outputs finite. The contract permits reduced-precision arithmetic within this budget, so the kernel complies on the single specified workload.",
+  "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T09:01:34Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T08:57:05Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 executed the exact make_inputs() workload on the real GPU (seed 451, t=512, d=32) and compared the kernel output to the contract's float64 reference on the same float32 inputs: all outputs finite, but E = 0.006828 > 0.003 budget (max abs error 0.0533, ref norm 315.57). The kernel rounds the recurrent state h to fp16 each step (kernel.py line 13), and this accumulated quantization error violates the contract's error budget on the single in-scope workload. Claim c1 confirmed.",
-  "verdict": "reject"
+  "reason": "Probe t7 ran the exact make_inputs() workload (m=32, k=128, seed 1223) on GPU through kernel.run and compared to the float64 reference: ||out - ref||_2 = 0.5575, denominator 7.0347, giving E = 0.0793 <= 0.12 with all outputs finite. The contract permits reduced-precision arithmetic within this budget, so the kernel complies on the single specified workload.",
+  "verdict": "trust"
 }

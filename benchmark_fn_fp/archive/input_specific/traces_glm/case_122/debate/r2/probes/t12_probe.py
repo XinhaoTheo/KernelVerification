@@ -1,45 +1,37 @@
-
-import sys, json, numpy as np
-sys.path.insert(0, "/root/numerical_cases/case_x")
+import numpy as np, torch, json, sys
+sys.path.insert(0, "/root/numerical_cases/case_r")
 import kernel
 
-matrix_np = kernel.make_inputs_numpy()[0]
-A64 = matrix_np.astype(np.float64)
+query, candidates, embeddings = kernel.make_inputs()
+out = kernel.run(query, candidates, embeddings).cpu().numpy()
 
-# Reference: log(det) in float64 on stored float32 entries
-sign, logdet_ref = np.linalg.slogdet(A64)
+q64 = query.cpu().numpy().astype(np.float64)
+c64 = candidates.cpu().numpy().astype(np.float64)
+e64 = embeddings.cpu().numpy().astype(np.float64)
+d = ((c64 - q64[None, :]) ** 2).sum(axis=1)
+ref_idx = int(np.argmin(d))
+ref = e64[ref_idx]
 
-# Float32 replay of the kernel's exact no-pivot elimination (deterministic arithmetic, no fusion assumed: a-b*c with numpy is not fused)
-M = matrix_np.astype(np.float32).copy()
-pivots = []
-for k in range(8):
-    p = np.float32(M[k, k]); pivots.append(float(p))
-    col = M[:, k].copy(); row = M[k, :].copy()
-    mult = (col / p).astype(np.float32)
-    updated = (M - np.outer(mult, row)).astype(np.float32)
-    mask = np.zeros((8, 8), dtype=bool)
-    mask[k+1:, k+1:] = True
-    M = np.where(mask, updated, M).astype(np.float32)
+def q(x): return np.floor(x.astype(np.float64) * 8.0 + 0.5) * 0.125
+dq = ((q(c64) - q(q64)[None, :]) ** 2).sum(axis=1)
+emu_idx = int(np.argmin(dq))
 
-# Actual kernel output
-import torch
-mat = torch.from_numpy(matrix_np).to("cuda")
-out = kernel.run(mat)
-kernel_out = float(out.cpu().numpy()[0])
-finite = np.isfinite(kernel_out)
+diffs = np.abs(e64 - out[None, :]).sum(axis=1)
+kernel_idx = int(np.argmin(diffs))
 
-rel_err = abs(kernel_out - logdet_ref) / max(abs(logdet_ref), 1.0)
-min_pivot = min(pivots)
-neg_pivots = [i for i, p in enumerate(pivots) if p <= 0]
-
+rel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)
+d_sorted = np.sort(d)
 print(json.dumps({
-    "pivots_float32": pivots,
-    "min_pivot": min_pivot,
-    "negative_pivots": neg_pivots,
-    "kernel_output": kernel_out,
-    "kernel_output_finite": bool(finite),
-    "reference_logdet_float64": float(logdet_ref),
-    "relative_error": float(rel_err),
-    "tolerance": 1e-4,
-    "claim_c1_confirmed": bool(min_pivot <= 1e-6 or (not finite) or rel_err > 1e-4)
+    "reference_winner": ref_idx,
+    "kernel_winner_inferred": kernel_idx,
+    "emulated_winner": emu_idx,
+    "winner_mismatch": bool(kernel_idx != ref_idx),
+    "relative_l2_error": float(rel),
+    "tolerance": 0.1,
+    "contract_pass": bool(rel <= 0.1),
+    "true_dist_min": float(d_sorted[0]),
+    "true_dist_second": float(d_sorted[1]),
+    "true_dist_gap": float(d_sorted[1] - d_sorted[0]),
+    "true_dist_max": float(d_sorted[-1]),
+    "output_finite": bool(np.isfinite(out).all()),
 }))

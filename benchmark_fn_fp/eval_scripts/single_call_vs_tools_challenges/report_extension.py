@@ -1,4 +1,4 @@
-"""Derive the case_107–case_112 extension report from canonical traces, without API calls.
+"""Derive the case_113–case_118 extension report from canonical traces, without API calls.
 
 Updates only README.md's EXTENSION RESULTS block; --json also exports a scoreboard under private_data/reports/. Existing cases,
 traces, protocols and the earlier results block are read-only.
@@ -20,7 +20,7 @@ from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trial_sort_key
 
-CASES = tuple(f"case_{i:02d}" for i in range(107, 113))
+CASES = tuple(f"case_{i:02d}" for i in range(113, 119))
 ARMS = ("single_call", "solo", "debate")
 MODEL = "accounts/fireworks/models/glm-5p3"
 DATASET = "numerical_challenges"
@@ -203,7 +203,7 @@ def replication_gate(rows, labels, *, cases=CASES, low_trials=LOW_TRIALS, requir
 
 
 def derive(root=ROOT, *, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
-           required_families=2, case_range="case_107–case_112"):
+           required_families=2, case_range="case_113–case_118"):
     root = Path(root)
     labels = _labels(root, cases)
     benchmark = benchmark_root(root)

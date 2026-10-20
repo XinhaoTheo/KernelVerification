@@ -1,23 +1,17 @@
 
-import sys, json
-sys.path.insert(0, "/root/numerical_cases/case_m")
-import numpy as np, torch
-from kernel import make_inputs, run
+import json, sys, torch
+sys.path.insert(0, "/root/numerical_cases/case_g")
+import kernel
 
-coeffs, points = make_inputs()
-out = run(coeffs, points)
+values, = kernel.make_inputs("cuda")
+out = kernel.run(values)
 torch.cuda.synchronize()
-out = out.detach().cpu().numpy().astype(np.float64)
-c = coeffs.cpu().numpy().astype(np.float64)
-p = points.cpu().numpy().astype(np.float64)
-ref = np.array([np.sum(c[i] * p[i]**np.arange(49)) for i in range(8)])
-denom = max(np.linalg.norm(ref), 0.001*np.sqrt(8))
-rel = np.linalg.norm(out - ref) / denom
-print(json.dumps({
-  "metric": "relative L2 error vs float64 reference, contract denominator",
-  "output": out.tolist(), "reference": ref.tolist(),
-  "ref_norm": float(np.linalg.norm(ref)), "denominator": float(denom),
-  "abs_err": float(np.linalg.norm(out-ref)), "relative_error": float(rel),
-  "tolerance": 0.0002, "passes": bool(rel <= 0.0002),
-  "finite": bool(np.all(np.isfinite(out))), "shape": list(out.shape)
-}))
+ref = values.to(torch.float64).sum(dim=1)
+den = max(float(ref.norm()), 0.008)
+E = float((out.to(torch.float64) - ref).norm()) / den
+finite = bool(torch.isfinite(out).all())
+print(json.dumps({"metric": "relative L2 error E vs float64 reference", "E": E, "contract_max": 0.1,
+                  "finite": finite, "ref_norm": float(ref.norm()),
+                  "out_norm": float(out.to(torch.float64).norm()),
+                  "max_abs_err": float((out.to(torch.float64)-ref).abs().max()),
+                  "ref_min": float(ref.min()), "ref_max": float(ref.max())}))

@@ -1,9 +1,9 @@
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-24T06:41:13Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-24T06:12:10Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "step() returns weights.view(N), a view aliasing the in-place-mutated weights storage. Runtime probe t8 (GPU) ran run_sequence on fresh make_inputs() state, retained all six returned tensors, and stacked them after all six updates: all six rows share the weights tensor's storage pointer, H equals the final w[6] in every row, and the relative Frobenius error vs a float64 per-step w[t+1] reference is 0.8990 \u2014 ~36x above the contract's 0.025 tolerance for ||H-H_target||_F/max(||H_target||_F,0.1). Final weights/velocity match targets (~5e-08 relative) and gradients are byte-unchanged, so the sole violation is the contract-required retained-history values (problem.txt: \"The caller retains those returned tensors and observes ALL of them only AFTER the full sequence has completed... H_target[t] = mathematical w[t+1]\"). This is an in-scope, confirmed defect.",
+  "reason": "Exhaustive runtime probe (tool event t6) evaluated all 121 contract-allowed operation words (length 0-4 over {0,1,2}, fresh state each) against a float64 logical reference. 12 words fail, including the default run() word (0,1,2) with max absolute error 3.8125 and (0,1,2,2)/(1,0,2,2) with error 7.625 \u2014 far above the contract's 1e-5 tolerance. All failures involve Delta applied after a non-identity reorder composition (e.g., 0,1,2 or 0,2,1,2), consistent with the _append kernel addressing Delta rows via the physical order map rather than current logical rows, violating the contract clause \"Delta always addresses CURRENT LOGICAL rows, regardless of previous reorders.\" The supplied smoke test passed only because its words use a single permutation or an involutive pair before appending. The kernel violates the stated finite contract, so it is rejected.",
   "verdict": "reject"
 }

@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_137", "case_138")
+CASES = ("case_143", "case_144")
 ROWS, COLS = 4, 12
 TOLERANCE = 1e-5
 SEARCH_SEEDS = range(193600, 193856)

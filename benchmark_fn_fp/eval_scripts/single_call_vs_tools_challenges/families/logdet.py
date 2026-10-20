@@ -13,7 +13,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_121", "case_122")
+CASES = ("case_127", "case_128")
 TOLERANCE = 0.0001
 N = 8
 EPSILON = 1.0 / 1024.0
@@ -173,10 +173,10 @@ def build(output_root: Path):
     root = archived_collection(output_root)
     calibration = [_candidate(seed) for seed in CALIBRATION_SEEDS]
     search = [_candidate(seed) for seed in SEARCH_SEEDS]
-    selected = {"case_121": min(search, key=lambda row: row["error"]),
-                "case_122": max(search, key=lambda row: row["error"])}
-    assert selected["case_121"]["error"] <= 0.75 * TOLERANCE
-    assert selected["case_122"]["error"] >= 1.25 * TOLERANCE
+    selected = {"case_127": min(search, key=lambda row: row["error"]),
+                "case_128": max(search, key=lambda row: row["error"])}
+    assert selected["case_127"]["error"] <= 0.75 * TOLERANCE
+    assert selected["case_128"]["error"] >= 1.25 * TOLERANCE
     answer_key = {"family": "logdet", "budget": TOLERANCE, "cases": {}}
     for case, selection in selected.items():
         inputs = _inputs(selection["seed"])

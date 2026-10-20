@@ -1,41 +1,40 @@
-import sys, json, numpy as np, torch
-sys.path.insert(0, "/root/pilot_cases/case_93")
-import kernel as K
+import sys, json, importlib.util
+sys.path.insert(0, "/root/pilot_cases/case_87")
+import triton
+spec = importlib.util.spec_from_file_location("kmod", "/root/pilot_cases/case_87/kernel.py")
+kmod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kmod)
 
-x, w = K.make_inputs("cuda")
-out = K.run(x, w)
-torch.cuda.synchronize()
-triton = out.double().cpu().numpy()
-wf = w.double().cpu().numpy()
-xf = x.double().cpu().numpy()
-ref = wf @ xf
+result = {"triton_version": triton.__version__}
+a, b = kmod.make_inputs("cuda")
+try:
+    out_default = kmod.run(a, b)  # uses enable_fp_fusion=False
+    result["launch_with_kwarg"] = "ok"
+except Exception as e:
+    result["launch_with_kwarg"] = "error: " + repr(e)
+    print(json.dumps(result)); sys.exit(0)
 
-# float64 emulation of the kernel's quantization
-scale64 = np.abs(wf).max(axis=1, keepdims=True) / 7.0
-qi64 = np.clip(np.floor(wf / scale64 + 0.5), -7, 7)
-q64 = qi64 * scale64
-emul64 = q64 @ xf
+# A/B: same kernel body launched with enable_fp_fusion=True
+out2 = torch.empty_like(b)
+try:
+    kmod._kernel[(1,)](a, b, out2, a.shape[0], a.shape[1], enable_fp_fusion=True)
+    result["launch_fusion_true"] = "ok"
+    torch.cuda.synchronize()
+    result["bitwise_equal_fusion_on_off"] = bool(torch.equal(out_default, out2))
+    result["max_abs_diff_fusion_on_off"] = float((out_default.double() - out2.double()).abs().max().item())
+except Exception as e:
+    result["launch_fusion_true"] = "error: " + repr(e)
 
-# float32 emulation (same ops in float32, as Triton does)
-w32 = w.cpu().numpy().astype(np.float32)
-x32 = x.cpu().numpy().astype(np.float32)
-scale32 = (np.abs(w32).max(axis=1, keepdims=True) / np.float32(7.0)).astype(np.float32)
-qi32 = np.clip(np.floor(w32 / scale32 + np.float32(0.5)), -7, 7)
-q32 = (qi32 * scale32).astype(np.float32)
-emul32 = q32.astype(np.float64) @ xf
-
-code_diff = int((qi32 != qi64).sum())
-den = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))
-E_triton = np.linalg.norm(triton - ref) / den
-E_emul64 = np.linalg.norm(emul64 - ref) / den
-E_emul32 = np.linalg.norm(emul32 - ref) / den
-print(json.dumps({
-    "metric": "quantization_code_comparison_and_E_shift",
-    "qi_code_differences_float32_vs_float64": code_diff,
-    "total_codes": int(qi64.size),
-    "E_triton_actual": float(E_triton),
-    "E_emulated_float64": float(E_emul64),
-    "E_emulated_float32": float(E_emul32),
-    "max_abs_out_diff_triton_vs_emul64": float(np.abs(triton - emul64).max()),
-    "budget": 0.12
-}))
+# float64 reference for context
+af, bf = a.double(), b.double()
+ref = torch.empty_like(bf)
+h = torch.zeros(bf.shape[1], dtype=torch.float64, device=bf.device)
+for t in range(bf.shape[0]):
+    h = af[t] * h + bf[t]
+    ref[t] = h
+diff = out_default.double() - ref
+N = out_default.numel()
+E = diff.norm() / max(ref.norm(), 0.001 * N ** 0.5)
+result["E_with_kwarg_false"] = float(E)
+result["all_finite"] = bool(torch.isfinite(out_default).all().item())
+print(json.dumps(result))

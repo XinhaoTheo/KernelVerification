@@ -1,0 +1,101 @@
+## Problem statement (contract + reference behavior)
+
+Compute expm1 elementwise on stored FP16 values, returning FP32 output.
+The mathematical target is target[i] = exp(x[i]) - 1, where exp is the natural exponential.
+
+Inputs and complete public domain:
+- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.
+- Every finite FP16 value in [-10,10] is legal, including both signed zeros, positive and negative subnormals, and both endpoints. NaN, infinity and values outside this interval are outside this domain.
+- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.
+
+Return a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:
+
+  abs(actual[i] - target[i]) <= 1e-7 + 1e-6 * abs(target[i]).
+
+Signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference() uses the FP64 library expm1 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Elementwise expm1 with exponent reduction and polynomial reconstruction.
+
+Original synthetic Triton implementation, not an upstream bug reproduction.
+"""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _expm1_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    active = index < N
+    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)
+    exponent = tl.floor(x * 1.4426950408889634 + 0.5).to(tl.int32)
+    reduced = x - exponent.to(tl.float32) * 0.69313812256
+    reduced = reduced - exponent.to(tl.float32) * 0.0000090580006145
+    polynomial = 0.001388888888888889
+    polynomial = polynomial * reduced + 0.008333333333333333
+    polynomial = polynomial * reduced + 0.041666666666666664
+    polynomial = polynomial * reduced + 0.16666
+    polynomial = polynomial * reduced + 0.5
+    local_value = reduced + (reduced * reduced) * polynomial
+    scale = ((exponent + 127).to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+    value = (scale - 1.0) + scale * local_value
+    tl.store(OUT + index, value, mask=active)
+
+
+def validate_inputs(x, require_cuda=True):
+    """Validate the complete public domain; also usable on CPU."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    require(type(x) is torch.Tensor, "ordinary torch.Tensor required")
+    require(x.layout == torch.strided and x.is_contiguous(),
+            "contiguous strided input required")
+    require(not x.requires_grad and not x.is_inference(),
+            "ordinary non-gradient input required")
+    require(not x.is_neg() and not x.is_conj(),
+            "logical view flags are outside this domain")
+    require(not require_cuda or x.is_cuda, "CUDA input required by run")
+    require(x.ndim == 1 and 1 <= x.numel() <= 131072,
+            "x must have shape [N] with N in [1,131072]")
+    require(x.dtype == torch.float16, "FP16 input required")
+    require(bool((torch.isfinite(x) & (x.abs() <= 10.0)).all().item()),
+            "all input values must be finite and in [-10,10]")
+    return {"valid": True, "size": x.numel()}
+
+
+def run(x):
+    """Return a fresh FP32 tensor approximating exp(x)-1."""
+    validate_inputs(x)
+    n = x.numel()
+    with torch.cuda.device(x.device):
+        output = torch.empty((n,), dtype=torch.float32, device=x.device)
+        _expm1_kernel[(triton.cdiv(n, 256),)](
+            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)
+    return output
+
+
+def reference(x):
+    """Evaluate the mathematical target with the FP64 library expm1."""
+    validate_inputs(x, require_cuda=False)
+    return torch.expm1(x.to(torch.float64))
+
+
+def make_inputs(device="cuda", size=4093, seed=0):
+    """Convenience examples only; all finite FP16 values in [-10,10] are legal."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x = (20.0 * torch.rand((size,), generator=generator) - 10.0).to(torch.float16)
+    return (x.to(device),)
+
+```
+
+Is this implementation correct?

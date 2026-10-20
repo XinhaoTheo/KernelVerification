@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_96`
+- Entry: `case_90`
 - Turns: 5
 - Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 21.649s across 4 calls | tokens: in=43365 out=1034 total=44399
+- LLM time: 22.277s across 4 calls | tokens: in=43089 out=1183 total=44272
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.98
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_96"
+    "entry": "case_90"
   }
   Output summary:
   {
-    "entry": "case_96"
+    "entry": "case_90"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_96"
+    "entry": "case_90"
   }
   Output summary:
   {
-    "entry": "case_96"
+    "entry": "case_90"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_96"
+    "entry": "case_90"
   }
   Output summary:
   {
-    "entry": "case_96"
+    "entry": "case_90"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_96",
+    "entry": "case_90",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_96"
+    "entry": "case_90"
   }
 
-### Turn 2 - `solo` (5.027836841000067s, in=8313 out=283)
+### Turn 2 - `solo` (6.524665100999982s, in=8225 out=361)
 
 Message:
 
 ```text
-I'll record the compliance claim and run the exact workload against a float64 reference.
+The kernel computes the recurrence with an fp16 round at every step — the key question is whether that rounding stays within the E ≤ 0.003 budget on the specified workload. I'll record that claim and run the exact workload.
 ```
 
 Tool calls:
@@ -73,39 +73,39 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The kernel rounds softmax weights to fp16 before the weighted sum, and the workload's v is constructed with a structured offset that shrinks the expected output, so E may exceed the 0.001 budget.",
+    "rationale": "The kernel rounds h to fp16 each step (line 13); h approaches steady state ~ b/(1-a) = 1, and fp16 relative error ~5e-4 per step could accumulate beyond the E<=0.003 budget over 896 steps.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(numel)) <= 0.001 on the exact make_inputs() workload."
+        "summary": "Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on exactly make_inputs() (t=896, d=32, decay=0.99, bias=0.01); reduced precision permitted only if budget met."
       }
     ],
-    "scope_rationale": "The contract requires E <= 0.001 with finite outputs on the exact make_inputs() workload.",
-    "statement": "On the exact make_inputs() workload, the kernel output violates the contract by exceeding E <= 0.001 or producing non-finite outputs."
-  }
+    "scope_rationale": "Contract requires E <= 0.003 with finiteness on the single specified workload; a budget violation would be a direct contract failure.",
+    "statement": "The kernel's per-step fp16 rounding of h causes the output to violate the contr
+  ...[truncated 68 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel rounds softmax weights to fp16 before the weighted sum, and the workload's v is constructed with a structured offset that shrinks the expected output, so E may exceed the 0.001 budget.",
+    "rationale": "The kernel rounds h to fp16 each step (line 13); h approaches steady state ~ b/(1-a) = 1, and fp16 relative error ~5e-4 per step could accumulate beyond the E<=0.003 budget over 896 steps.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(numel)) <= 0.001 on the exact make_inputs() workload."
+        "summary": "Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on exactly make_inputs() (t=896, d=32, decay=0.99, bias=0.01); reduced precision permitted only if budget met."
       }
     ],
-    "scope_rationale": "The contract requires E <= 0.001 with finite outputs on the exact make_inputs() workload.",
-    "statement": "On the exact make_inputs() workload, the kernel output violates the contract by exceeding E <= 0.001 or producing non-finite outputs.",
+    "scope_rationale": "Contract requires E <= 0.003 with finiteness on the single specified workload; a budget violation would be a direct contract failure.",
+    "statement": "The kernel's per-step fp16 rounding of h causes the output to violate the contract's E <= 0.003 relative-error budget on the specified workload.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (4.422662105000086s, in=9343 out=272)
+### Turn 3 - `solo` (5.401971013000036s, in=9513 out=274)
 
 Message:
 
 ```text
-I'll run the exact workload against a float64 reference and compute E.
+I'll run the exact specified workload against a float64 reference to compute E.
 ```
 
 Tool calls:
@@ -114,8 +114,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import json, torch, numpy as np, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/pilot_cases/case_96/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nq, k, v = m.make_inputs()\nout = m.run(q, k, v).cpu().numpy().astype(np.float64)\nq64, k64, v64 = q.cpu().numpy().astype(np.float64), k.cpu().numpy().astype(np.float64), v.cpu().numpy().astype(np.float64)\nz = k64 @ q64 / np.sqrt(k64.shape[1])\np = np.exp(z - z.max()); p /= p.sum()\nref = p @ v64\nE = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))\nprint(json.dumps({\"E\": float(E), \"finite\": bool(np.all(np.isfinite(out))), \"ref_norm\": float(np.linalg.norm(ref)), \"out_norm\": float(np.linalg.norm(out)), \"max_a
-  ...[truncated 46 chars]
+    "code": "import torch, numpy as np\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/pilot_cases/case_90/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\na, b = k.make_inputs(\"cuda\")\nout = k.run(a, b)\n# reference: float64 recurrence on same float32 inputs\naf = a.double().cpu().numpy(); bf = b.double().cpu().numpy()\nref = np.empty_like(bf)\nh = np.zeros(bf.shape[1])\nfor t in range(af.shape[0]):\n    h = af[t]*h + bf[t]; ref[t] = h\no = out.double().cpu().numpy()\ndiff = o - ref\nE = np.linalg.norm(diff.ravel()) / max(np.linalg.norm(ref.ravel()), 0.001*np.sqrt(ref.size))\nprint({\"E\": float(E), \"finite\": bool(np.isfinite(o).all()),\n       \"max_abs_err\": float(np.abs(diff).max()),\
+  ...[truncated 97 chars]
   Output summary:
   {
     "artifacts": [
@@ -123,41 +123,42 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "8c3ffee1c49b528d1869512f542bca5dcb2288f96403ad7b96949c74058f29e2"
+        "sha256": "c5c7c29760df46884570e6033f8fd43907217c5504b31ba9d79587cb34b905ca"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "bd2e7d32ad86c77047aa35a892c1fbade6c0b00227a53254913ff67c69640e50"
+        "sha256": "adb9a1de10fabb1c0b58ea00ab3b8f522fd5ae19a48a9ad804dda4610e69086d"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "00cf2549b3b3e5065b60caacc6bedcae5baec6ca8995ee85db7acf2333efa524"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On the exact make_inputs() workload, the kernel output violates the contract by exceeding E <= 0.001 or producing non-finite outputs.",
-    "duration_s": 4.4978,
+    "claim_statement": "The kernel's per-step fp16 rounding of h causes the output to violate the contract's E <= 0.003 relative-error budget on the specified workload.",
+    "duration_s": 3.966652,
     "event_id": "t6",
     "evidence_draft": {
-      "claim_
-  ...[truncated 2288 chars]
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "c5c7c29760df46
+  ...[truncated 1555 chars]
 
-### Turn 4 - `solo` (7.751099955999962s, in=11339 out=262)
+### Turn 4 - `solo` (5.1993764580000175s, in=11236 out=288)
 
 Message:
 
 ```text
-The probe (t6) shows E = 0.001455 > 0.001 on the exact workload with finite outputs — a budget violation. I'll finalize this evidence and record the verdict.
+The probe ran the exact specified workload: E = 0.00375 > 0.003 budget (outputs finite), so the fp16 rounding violates the contract. I'll finalize this evidence and record the verdict.
 ```
 
 Tool calls:
@@ -166,15 +167,15 @@ Tool calls:
   Args:
   {
     "data": {
-      "E": 0.0014552023050406883,
+      "E": 0.0037531111103975296,
+      "diff_norm": 0.5804270896666144,
       "finite": true,
-      "max_abs_err": 0.00011818513149391974,
-      "out_norm": 0.2455841407753109,
-      "ref_norm": 0.24557663440944544
+      "max_abs_err": 0.007861854365318721,
+      "ref_norm": 154.65225318232999
     },
     "event_id": "t6",
     "status": "confirmed",
-    "summary": "On the exact make_inputs() workload, the kernel output is finite but E = 0.001455, exceeding the contract budget of 0.001. The float64 reference was computed from the same float32 input values.",
+    "summary": "On the exact specified workload (t=896, d=32, decay=0.99, bias=0.01, seed 454), the kernel output is finite but E = 0.003753 > 0.003 budget (diff_norm 0.5804, ref_norm 154.65, max abs err 0.00786). The per-step fp16 rounding of h causes a budget violation.",
     "supports": "confirmed"
   }
   Output summary:
@@ -182,17 +183,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "On the exact make_inputs() workload, the kernel output is finite but E = 0.001455, exceeding the contract budget of 0.001. The float64 reference was computed from the same float32 input values.",
+    "summary": "On the exact specified workload (t=896, d=32, decay=0.99, bias=0.01, seed 454), the kernel output is finite but E = 0.003753 > 0.003 budget (diff_norm 0.5804, ref_norm 154.65, max abs err 0.00786). The per-step fp16 rounding of h causes a budget violation.",
     "supports": "confirmed",
     "tool_event_id": "t6"
   }
 
-### Turn 5 - `solo` (4.447729676999984s, in=14370 out=217)
+### Turn 5 - `solo` (5.151169695000021s, in=14115 out=260)
 
 Message:
 
 ```text
-The claim is confirmed with decisive runtime evidence: on the exact workload, E = 0.001455 > 0.001 while outputs are finite — a clear budget violation. Recording the verdict.
+The claim is resolved: the exact workload gives E = 0.003753 > 0.003 with finite outputs, a clear budget violation. I'll record the verdict.
 ```
 
 Tool calls:
@@ -200,20 +201,20 @@ Tool calls:
 - `record_verdict -> t8 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the exact make_inputs() workload through the kernel and compared against a float64 reference computed from the same float32 inputs (probe t6). Outputs were finite but E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.001455 > 0.001, exceeding the contract's error budget. The dominant cause is the kernel rounding softmax weights to fp16 before the weighted sum (kernel.py line 15), an avoidable precision loss the contract's budget does not cover. Claim c1 is in_scope and confirmed; this is a budget violation, so the kernel is rejected.",
+    "reason": "Probe t6 ran the exact specified workload (make_inputs: t=896, d=32, decay=0.99, bias=0.01, noise=0.0001, seed 454) and compared the kernel's output against the contract's float64 reference recurrence. All outputs were finite, but E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.5804 / 154.652 = 0.003753 > 0.003 budget (max abs err 0.00786). The kernel's per-step round of h to fp16 (kernel.py line 13) is the cause, and the contract explicitly requires E <= 0.003 even with reduced precision permitted. This is an in-scope budget violation, so reject.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.98,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Ran the exact make_inputs() workload through the kernel and compared against a float64 reference computed from the same float32 inputs (probe t6). Outputs were finite but E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.001455 > 0.001, exceeding the contract's error budget. The dominant cause is the kernel rounding softmax weights to fp16 before the weighted sum (kernel.py line 15), an avoidable precision loss the contract's budget does not cover. Claim c1 is in_scope and confirmed; this is a budget violation, so the kernel is rejected.",
+    "reason": "Probe t6 ran the exact specified workload (make_inputs: t=896, d=32, decay=0.99, bias=0.01, noise=0.0001, seed 454) and compared the kernel's output against the contract's float64 reference recurrence. All outputs were finite, but E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.5804 / 154.652 = 0.003753 > 0.003 budget (max abs err 0.00786). The kernel's per-step round of h to fp16 (kernel.py line 13) is the cause, and the contract explicitly requires E <= 0.003 even with reduced precision permitted. This is an in-scope budget violation, so reject.",
     "verdict": "reject"
   }
 
@@ -225,60 +226,60 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: On the exact make_inputs() workload, the kernel output violates the contract by exceeding E <= 0.001 or producing non-finite outputs.
+Statement: The kernel's per-step fp16 rounding of h causes the output to violate the contract's E <= 0.003 relative-error budget on the specified workload.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires E <= 0.001 with finite outputs on the exact make_inputs() workload.
+Scope rationale: Contract requires E <= 0.003 with finiteness on the single specified workload; a budget violation would be a direct contract failure.
 
 Scope evidence:
-- `problem.txt`: Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(numel)) <= 0.001 on the exact make_inputs() workload.
+- `problem.txt`: Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on exactly make_inputs() (t=896, d=32, decay=0.99, bias=0.01); reduced precision permitted only if budget met.
 
-Rationale: The kernel rounds softmax weights to fp16 before the weighted sum, and the workload's v is constructed with a structured offset that shrinks the expected output, so E may exceed the 0.001 budget.
+Rationale: The kernel rounds h to fp16 each step (line 13); h approaches steady state ~ b/(1-a) = 1, and fp16 relative error ~5e-4 per step could accumulate beyond the E<=0.003 budget over 896 steps.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: On the exact make_inputs() workload, the kernel output is finite but E = 0.001455, exceeding the contract budget of 0.001. The float64 reference was computed from the same float32 input values.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: On the exact specified workload (t=896, d=32, decay=0.99, bias=0.01, seed 454), the kernel output is finite but E = 0.003753 > 0.003 budget (diff_norm 0.5804, ref_norm 154.65, max abs err 0.00786). The per-step fp16 rounding of h causes a budget violation.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_96"
+  "entry": "case_90"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_96"
+  "entry": "case_90"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_96"
+  "entry": "case_90"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_96"
+  "entry": "case_90"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel rounds softmax weights to fp16 before the weighted sum, and the workload's v is constructed with a structured offset that shrinks the expected output, so E may exceed the 0.001 budget.",
+  "rationale": "The kernel rounds h to fp16 each step (line 13); h approaches steady state ~ b/(1-a) = 1, and fp16 relative error ~5e-4 per step could accumulate beyond the E<=0.003 budget over 896 steps.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(numel)) <= 0.001 on the exact make_inputs() workload."
+      "summary": "Contract requires all outputs finite and E = ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(N)) <= 0.003 on exactly make_inputs() (t=896, d=32, decay=0.99, bias=0.01); reduced precision permitted only if budget met."
     }
   ],
-  "scope_rationale": "The contract requires E <= 0.001 with finite outputs on the exact make_inputs() workload.",
-  "statement": "On the exact make_inputs() workload, the kernel output violates the contract by exceeding E <= 0.001 or producing non-finite outputs.",
+  "scope_rationale": "Contract requires E <= 0.003 with finiteness on the single specified workload; a budget violation would be a direct contract failure.",
+  "statement": "The kernel's per-step fp16 rounding of h causes the output to violate the contract's E <= 0.003 relative-error budget on the specified workload.",
   "status": "open"
 }
 
@@ -290,30 +291,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "8c3ffee1c49b528d1869512f542bca5dcb2288f96403ad7b96949c74058f29e2"
+      "sha256": "c5c7c29760df46884570e6033f8fd43907217c5504b31ba9d79587cb34b905ca"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "bd2e7d32ad86c77047aa35a892c1fbade6c0b00227a53254913ff67c69640e50"
+      "sha256": "adb9a1de10fabb1c0b58ea00ab3b8f522fd5ae19a48a9ad804dda4610e69086d"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "00cf2549b3b3e5065b60caacc6bedcae5baec6ca8995ee85db7acf2333efa524"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On the exact make_inputs() workload, the kernel output violates the contract by exceeding E <= 0.001 or producing non-finite outputs.",
-  "duration_s": 4.4978,
+  "claim_statement": "The kernel's per-step fp16 rounding of h causes the output to violate the contract's E <= 0.003 relative-error budget on the specified workload.",
+  "duration_s": 3.966652,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -323,22 +318,28 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "8c3ffee1c49b528d1869512f542bca5dcb2288f96403ad7b96949c74058f29e2"
+          "sha256": "c5c7c29760df46884570e6033f8fd43907217c5504b31ba9d79587cb34b905ca"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "bd2e7d32ad86c77047aa35a892c1fbade6c0b00227a53254913ff67c69640e50"
+          "sha256": "adb9a1de10fabb1c0b58ea00ab3b8f522fd5ae19a48a9ad804dda4610e69086d"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t6_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-...[truncated 1488 chars]
+        }
+      ],
+      "duration_s": 3.966652,
+      "exit_code": 0,
+      "expected_signal": null,
+      "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+      "json_result": null,
+      "stderr": ""
+...[truncated 755 chars]
 
 ### t7 - finalize_probe_evidence - ok
 
@@ -346,7 +347,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "On the exact make_inputs() workload, the kernel output is finite but E = 0.001455, exceeding the contract budget of 0.001. The float64 reference was computed from the same float32 input values.",
+  "summary": "On the exact specified workload (t=896, d=32, decay=0.99, bias=0.01, seed 454), the kernel output is finite but E = 0.003753 > 0.003 budget (diff_norm 0.5804, ref_norm 154.65, max abs err 0.00786). The per-step fp16 rounding of h causes a budget violation.",
   "supports": "confirmed",
   "tool_event_id": "t6"
 }
@@ -354,22 +355,22 @@ Evidence:
 ### t8 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.98,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the exact make_inputs() workload through the kernel and compared against a float64 reference computed from the same float32 inputs (probe t6). Outputs were finite but E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.001455 > 0.001, exceeding the contract's error budget. The dominant cause is the kernel rounding softmax weights to fp16 before the weighted sum (kernel.py line 15), an avoidable precision loss the contract's budget does not cover. Claim c1 is in_scope and confirmed; this is a budget violation, so the kernel is rejected.",
+  "reason": "Probe t6 ran the exact specified workload (make_inputs: t=896, d=32, decay=0.99, bias=0.01, noise=0.0001, seed 454) and compared the kernel's output against the contract's float64 reference recurrence. All outputs were finite, but E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.5804 / 154.652 = 0.003753 > 0.003 budget (max abs err 0.00786). The kernel's per-step round of h to fp16 (kernel.py line 13) is the cause, and the contract explicitly requires E <= 0.003 even with reduced precision permitted. This is an in-scope budget violation, so reject.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T09:03:28Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-30T08:59:09Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Ran the exact make_inputs() workload through the kernel and compared against a float64 reference computed from the same float32 inputs (probe t6). Outputs were finite but E = ||out-ref||_2 / max(||ref||_2, 0.001*sqrt(32)) = 0.001455 > 0.001, exceeding the contract's error budget. The dominant cause is the kernel rounding softmax weights to fp16 before the weighted sum (kernel.py line 15), an avoidable precision loss the contract's budget does not cover. Claim c1 is in_scope and confirmed; this is a budget violation, so the kernel is rejected.",
+  "reason": "Probe t6 ran the exact specified workload (make_inputs: t=896, d=32, decay=0.99, bias=0.01, noise=0.0001, seed 454) and compared the kernel's output against the contract's float64 reference recurrence. All outputs were finite, but E = ||out - ref||_2 / max(||ref||_2, 0.001*sqrt(N)) = 0.5804 / 154.652 = 0.003753 > 0.003 budget (max abs err 0.00786). The kernel's per-step round of h to fp16 (kernel.py line 13) is the cause, and the contract explicitly requires E <= 0.003 even with reduced precision permitted. This is an in-scope budget violation, so reject.",
   "verdict": "reject"
 }

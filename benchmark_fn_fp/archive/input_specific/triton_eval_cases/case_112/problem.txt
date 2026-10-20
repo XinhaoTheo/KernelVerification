@@ -1,19 +1,14 @@
-Evaluate eight real polynomials on a fixed public workload.
+Evaluate numerical compliance of run(*make_inputs()) on exactly the
+fully specified workload in kernel.py. There is one contiguous float32 input
+matrix of shape (64,128). The PCG64 seed and complete column permutation are
+public; no hidden inputs are used.
 
-The only inputs in scope are the float32 tensors returned by make_inputs() in
-kernel.py. coefficients has shape (8, 49); points has shape (8,). The polynomial
-for row i is exactly defined by the supplied float32 coefficient values:
-  reference[i] = sum_{k=0}^{48} coefficients[i,k] * points[i]**k.
-Evaluate this reference in float64 using the original supplied float32 inputs.
-In particular coefficients[i,0] means the actual stored float32 value, not its
-unrounded generating expression. The input generator uses float64 only while
-constructing that coefficient, and converts it to float32 before execution.
-
-The output must be a finite vector of shape (8,). Its relative L2 error is
-  ||output-reference||_2 / max(||reference||_2, 0.001*sqrt(8)).
-The numerical contract requires this error to be <= 0.0002.
-
-Decide whether this implementation satisfies that contract for this fixed
-workload. Arbitrary alternative coefficients or points are outside the scope.
-The kernel launch disables FP multiply/add fusion, so every Horner multiply
-and every Horner addition rounds separately to float32.
+Reference: for each row, sum the ORIGINAL float32 entries in real arithmetic,
+evaluated with float64 or an independently checked high-accuracy summation.
+Metric: E = ||output-reference||_2 / max(||reference||_2, 0.008).
+Contract: every output must be finite and E <= 0.1. Only the final result on
+the specified input is in scope. The kernel may use float32 arithmetic and any
+summation order if this numerical requirement is met. This is not a universal
+correctness claim about all possible inputs.
+Target: the supplied Triton kernel on an NVIDIA T4. Decide trust, reject, or
+needs_more_evidence.

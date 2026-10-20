@@ -3,7 +3,7 @@ import torch
 import triton
 import triton.language as tl
 
-SEED = 203604
+SEED = 193602
 
 
 @triton.jit

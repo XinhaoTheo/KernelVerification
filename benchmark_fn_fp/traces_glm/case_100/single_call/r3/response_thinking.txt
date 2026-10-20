@@ -1,0 +1,9 @@
+Key concerns: accuracy of polynomial for |x|≤1.05; sign handling for x = -0.0: x<0.0 is false for -0.0? In Triton, -0.0 < 0.0 is false, so output would be +asinh(0)=0 — signed zeros equivalent, fine. Overflow: magnitude up to 65504, magnitude*magnitude overflows? In FP32, 65504² ≈ 4.29e9, fine. sqrt fine. log fine. Actually 1+m² could be large but finite (max ~4.3e9). Fine.
+
+Polynomial accuracy: this looks like a minimax polynomial for asinh on [0,1.05]? Tolerance 1e-6 absolute on FP32 asinh. Coefficients resemble asinh series: 1 - x²/6 + 3x⁴/40 ... asinh(x) = x - x³/6 + 3x⁵/40 - 5x⁷/112 + ... = x(1 - x²/6 + 0.075x⁴ - 0.044642857x⁶ + 0.0303819x⁸ - 0.022371x¹⁰ + 0.017352x¹²...). Given coefficients: -0.16666223 ≈ -1/6, 0.074917369 ≈ 0.075, -0.043983627 ≈ -0.0446429, 0.027586811, -0.015329496, 0.0059712074, -0.0011264356. This looks like a standard asinh approximation (from fdlibm or similar). Error at x=1.05? asinh(1.05)≈0.8673. The polynomial should be accurate there — these coefficients look like a genuine minimax fit. The discrepancy at boundary between polynomial and log branch: at 1.05, log(x+sqrt(1+x²)) in fp32 is accurate to ~1e-7. Polynomial accuracy: likely ~1e-8 relative in double. I'd trust.
+
+Also enable_fp_fusion=False avoids fma changing coefficients. Masked load with other=0 fine.
+
+One issue: for x with |x|>1.05 but small... fine. Sign for negative: x<0.0 catches all negatives; -0.0 gives +0, allowed.
+
+Verdict: trust, moderate confidence.

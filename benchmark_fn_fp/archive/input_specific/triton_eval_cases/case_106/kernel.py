@@ -3,31 +3,40 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(X, Y, K: tl.constexpr, R: tl.constexpr):
-    rows = tl.arange(0, R)
-    acc = tl.full((R,), 0, tl.float32)
-    for j in range(K):
-        value = tl.load(X + rows * K + j)
-        acc = acc + value
-    tl.store(Y + rows, acc)
+def _kernel(X, A, B, Y, K: tl.constexpr):
+    row = tl.program_id(0)
+    j = tl.arange(0, K)
+    x = tl.load(X + j)
+    a = tl.load(A + row * K + j)
+    b = tl.load(B + row * K + j)
+    sa = tl.max(tl.abs(a), 0) / 7.0
+    sb = tl.max(tl.abs(b), 0) / 7.0
+    qa = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(a / sa + 0.5)))
+    qb = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(b / sb + 0.5)))
+    ya = tl.sum((qa * sa) * x, 0)
+    yb = tl.sum((qb * sb) * x, 0)
+    tl.store(Y + row, ya + yb)
 
-def run(values):
-    out = torch.empty((values.shape[0],), dtype=torch.float32, device=values.device)
-    _kernel[(1,)](values, out, values.shape[1], values.shape[0], enable_fp_fusion=False)
+def run(x, a, b):
+    out = torch.empty(a.shape[0], device=x.device, dtype=torch.float32)
+    _kernel[(a.shape[0],)](x, a, b, out, a.shape[1], enable_fp_fusion=False)
     return out
 
-SEED = 730119
-PERMUTATION = [40, 110, 94, 84, 77, 58, 57, 120, 82, 13, 85, 86, 113, 106, 39, 102, 19, 18, 112, 26, 71, 122, 61, 103, 46, 91, 79, 125, 44, 38, 47, 28, 50, 30, 97, 52, 53, 109, 119, 35, 1, 107, 43, 114, 117, 60, 74, 33, 25, 88, 78, 59, 81, 93, 27, 36, 108, 90, 23, 126, 95, 76, 31, 124, 98, 73, 37, 29, 32, 10, 48, 51, 17, 121, 100, 6, 22, 49, 11, 20, 34, 69, 115, 4, 68, 56, 5, 21, 66, 65, 92, 3, 15, 0, 118, 67, 55, 83, 105, 116, 99, 101, 42, 16, 123, 64, 104, 41, 87, 9, 62, 8, 12, 127, 14, 24, 75, 70, 80, 7, 54, 45, 96, 2, 63, 89, 111, 72]
-
-def make_inputs_numpy():
-    import numpy as np
-    rng = np.random.Generator(np.random.PCG64(SEED))
-    w = rng.integers(1, 33, size=(64, 32)).astype(np.float32) * np.float32(1048576)
-    small = rng.integers(1, 4, size=(64, 64)).astype(np.float32) * np.float32(0.25)
-    values = np.concatenate([w, -w, small], axis=1)
-    order = rng.permutation(128)
-    values = values[:, order][:, PERMUTATION].copy()
-    return (values,)
+SEED = 921000
+PERMUTATION = [5, 20, 47, 51, 15, 57, 30, 41, 55, 13, 18, 49, 52, 24, 45, 1, 12, 37, 53, 25, 38, 31, 28, 6, 9, 29, 40, 34, 60, 17, 56, 35, 63, 39, 11, 50, 58, 10, 43, 23, 36, 62, 21, 2, 27, 0, 26, 16, 48, 42, 33, 59, 7, 54, 32, 44, 3, 4, 61, 46, 8, 14, 22, 19]
 
 def make_inputs(device="cuda"):
-    return tuple(torch.from_numpy(a.copy()).to(device) for a in make_inputs_numpy())
+    import numpy as np
+    rng = np.random.Generator(np.random.PCG64(SEED))
+    x = rng.standard_normal(128)
+    x /= np.linalg.norm(x)
+    # Construct two dense projections with similar signal magnitudes.
+    matrices = []
+    for _ in range(2):
+        w = rng.standard_normal((64, 128))
+        target = 0.5 + 0.02 * rng.standard_normal(64)
+        projection = np.sum(w * x[None, :], axis=1, dtype=np.float64)
+        w += ((target - projection) / np.sum(x * x))[:, None] * x[None, :]
+        matrices.append(w.astype(np.float32))
+    arrays = [x.astype(np.float32), matrices[0], matrices[1][PERMUTATION].copy()]
+    return tuple(torch.from_numpy(a.copy()).to(device) for a in arrays)

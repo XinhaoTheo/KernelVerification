@@ -18,7 +18,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_111", "case_112")
+CASES = ("case_117", "case_118")
 TOLERANCE = 0.0002
 N, DEGREE = 8, 48
 SEARCH_SEEDS = tuple(range(501900, 502028))
@@ -184,10 +184,10 @@ def build(output_root: Path):
     root = archived_collection(output_root)
     calibration = [_candidate(seed) for seed in CALIBRATION_SEEDS]
     search = [_candidate(seed) for seed in SEARCH_SEEDS]
-    selected = {"case_111": min(search, key=lambda row: row["error"]),
-                "case_112": max(search, key=lambda row: row["error"])}
-    assert selected["case_111"]["error"] <= 0.75 * TOLERANCE
-    assert selected["case_112"]["error"] >= 1.25 * TOLERANCE
+    selected = {"case_117": min(search, key=lambda row: row["error"]),
+                "case_118": max(search, key=lambda row: row["error"])}
+    assert selected["case_117"]["error"] <= 0.75 * TOLERANCE
+    assert selected["case_118"]["error"] >= 1.25 * TOLERANCE
     answer_key = {"family": "polynomial", "budget": TOLERANCE, "cases": {}}
     for case, selection in selected.items():
         inputs = _inputs(selection["seed"])

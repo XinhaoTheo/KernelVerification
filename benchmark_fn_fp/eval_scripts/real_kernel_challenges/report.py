@@ -47,7 +47,11 @@ COHORTS = {"pilot": tuple(f"case_{i:02d}" for i in range(33, 39)),
            "exp2": ("case_91", "case_92"),
            "log1p": ("case_93", "case_94"),
            "aes": ("case_95", "case_96"),
-           "oct20": tuple(f"case_{i}" for i in range(91, 97))}
+           "oct20": tuple(f"case_{i}" for i in range(91, 97)),
+           "expm1": ("case_97", "case_98"),
+           "asinh": ("case_99", "case_100"),
+           "cbrt": ("case_101", "case_102"),
+           "oct20_followup": tuple(f"case_{i}" for i in range(97, 103))}
 SCOPED_TOOL_CASES = frozenset(case for cohort, cases in COHORTS.items()
                              if cohort != "pilot" for case in cases)
 CASES = COHORTS["pilot"]
@@ -67,7 +71,8 @@ def _markers(cohort):
               "crc": " CRC", "complex": " COMPLEX", "requant_compose": " REQUANT COMPOSE",
               "affine_scan": " AFFINE SCAN", "winograd": " WINOGRAD", "realfft": " REALFFT",
               "exp2": " EXP2", "log1p": " LOG1P", "aes": " AES",
-              "oct20": " OCTOBER20"}[cohort]
+              "oct20": " OCTOBER20", "expm1": " EXPM1", "asinh": " ASINH",
+              "cbrt": " CBRT", "oct20_followup": " OCTOBER20 FOLLOWUP"}[cohort]
     return (f"<!-- BEGIN REAL KERNEL{suffix} RESULTS -->",
             f"<!-- END REAL KERNEL{suffix} RESULTS -->")
 

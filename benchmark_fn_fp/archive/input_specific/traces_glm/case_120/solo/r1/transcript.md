@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_v`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_p`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 15.963s across 4 calls | tokens: in=40417 out=1023 total=41440
+- LLM time: 20.809s across 5 calls | tokens: in=48664 out=1163 total=49827
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.99
+- Confidence: 0.97
 
 ## Timeline
 
@@ -25,163 +25,183 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_v"
+    "entry": "case_p"
   }
   Output summary:
   {
-    "entry": "case_v"
+    "entry": "case_p"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_v"
+    "entry": "case_p"
   }
   Output summary:
   {
-    "entry": "case_v"
+    "entry": "case_p"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_v"
+    "entry": "case_p"
   }
   Output summary:
   {
-    "entry": "case_v"
+    "entry": "case_p"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_v",
+    "entry": "case_p",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_v"
+    "entry": "case_p"
   }
 
-### Turn 2 - `solo` (3.4517431170000066s, in=7337 out=252)
+### Turn 2 - `solo` (3.489145085s, in=7383 out=228)
 
 Message:
 
 ```text
-The kernel truncates at 6 modes; the contract permits approximation if the L2 relative error ≤ 0.15. I'll record that claim and run the actual workload.
+I'll record the core correctness claim and test it directly against the fixed workload.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel sums only RETAINED=6 of 16 modes; the dropped modes 7-16 (std 0.04) contribute energy that may exceed the 0.15 relative-L2 tolerance.",
+    "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise, the residual is tiny and float32 cancellation could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs workload."
+        "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
       }
     ],
-    "scope_rationale": "The numerical contract requires relative L2 error <= 0.15 against a 16-mode reference on the fixed make_inputs workload.",
-    "statement": "The kernel's 6-mode cutoff produces relative L2 error above 0.15 on the fixed public workload."
+    "statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.
+  ...[truncated 3 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
+
+### Turn 3 - `solo` (4.519424767s, in=8049 out=261)
+
+Message:
+
+```text
+I need to re-record the claim with scope_rationale, then run the probe.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
+      }
+    ],
+    "scope_rationale": "The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.",
+    "stat
+  ...[truncated 200 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel sums only RETAINED=6 of 16 modes; the dropped modes 7-16 (std 0.04) contribute energy that may exceed the 0.15 relative-L2 tolerance.",
+    "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs workload."
+        "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
       }
     ],
-    "scope_rationale": "The numerical contract requires relative L2 error <= 0.15 against a 16-mode reference on the fixed make_inputs workload.",
-    "statement": "The kernel's 6-mode cutoff produces relative L2 error above 0.15 on the fixed public workload.",
+    "scope_rationale": "The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.",
+    "statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (5.158597859999986s, in=8370 out=348)
+### Turn 4 - `solo` (4.883966625999999s, in=9323 out=250)
 
 Message:
 
 ```text
-Running the actual workload to measure the relative L2 error against the 16-mode float64 reference.
+I'll run the probe on the fixed workload, comparing the kernel's float32 output to a float64 reference.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport sys, json, numpy as np, torch\nsys.path.insert(0, \"/root/numerical_cases/case_v\")\nimport kernel\n\ncoeff_np, off_np = kernel.make_inputs_numpy()\ncoeff, off = kernel.make_inputs(\"cuda\")\nout = kernel.run(coeff, off)\ntorch.cuda.synchronize()\nout_np = out.detach().cpu().numpy().astype(np.float64)\n\nn = np.arange(64, dtype=np.float64)\nref = np.float64(off_np[0]) + np.zeros(64)\nfor k in range(1, 17):\n    a = np.float64(coeff_np[0, k-1]); b = np.float64(coeff_np[1, k-1])\n    ref += a*np.cos(2*np.pi*k*n/64) + b*np.sin(2*np.pi*k*n/64)\n\nnum = np.linalg.norm(out_np - ref)\nden = max(np.linalg.norm(ref), 1e-12)\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 16-mode reference\",\n  \"rel_l2\": num/den,\n  \"norm_diff\": float(
-  ...[truncated 208 chars]
+    "code": "import numpy as np, torch, sys, os\nsys.path.insert(0, \"/root/numerical_cases/case_p\")\nfrom kernel import run, make_inputs_numpy\n\nu_np, b_np = make_inputs_numpy()\nu = torch.from_numpy(u_np).to(\"cuda\")\nb = torch.from_numpy(b_np).to(\"cuda\")\nout = run(u, b).cpu().numpy().astype(np.float64)\n\n# float64 reference on actual stored inputs, with recentring (b stored = round(1.125u + eps))\nu64 = u_np.astype(np.float64); b64 = b_np.astype(np.float64)\nalpha = (u64*b64).sum() / (u64*u64).sum()\nres = b64 - alpha*u64\nref = res / np.linalg.norm(res)\nrel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)\nprint(np.round(float(rel), 6), bool(np.isfinite(out).all()))\n"
+  }
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "e1477ec27ed2e3427f7606e5326407c9bfb9f56ed47b9560eba523b693545cd0"
+        "path": "probes/t7_probe.py",
+        "sha256": "2b0a36d548f4ea2afb024ccf732cc2e9a80ef68eabdcda997128c6e97c07e918"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "f14f7924ff411da0d0a9b2ca4371aabcd99cd41dab5b839d4d18f06f16c95234"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "a32c9305ddc7aa6779f006fbe477aacd899475ec5a7f84c9daa0b9f78c87de75"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
+        "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "12077c7f49057d6b094d6c5a2cf4a295eb72ad84174ab79939133f0684e42c60"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's 6-mode cutoff produces relative L2 error above 0.15 on the fixed public workload.",
-    "duration_s": 5.155543,
-    "event_id": "t6",
+    "claim_statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
+    "duration_s": 7.231288,
+    "event_id": "t7",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
-        "artif
-  ...[truncated 2745 chars]
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_pr
+  ...[truncated 1255 chars]
 
-### Turn 4 - `solo` (4.10120944800002s, in=10677 out=237)
+### Turn 5 - `solo` (3.194758402999998s, in=10845 out=190)
 
 Message:
 
 ```text
-The probe measured relative L2 error 0.2305, exceeding the 0.15 tolerance — the claim is confirmed. I'll finalize the evidence and verdict.
+The probe shows relative L2 error ≈ 0.0605 against the float64 reference, far above the 0.01 tolerance — the claim is confirmed.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "dtype": "torch.float32",
-      "finite": true,
-      "norm_diff": 1.289021004151053,
-      "norm_ref": 5.593149107153358,
-      "pass": false,
-      "rel_l2": 0.23046426609697562,
-      "shape": [
-        64
-      ],
-      "tolerance": 0.15
+      "finite_output": true,
+      "relative_l2_error": 0.060455,
+      "tolerance": 0.01
     },
-    "event_id": "t6",
+    "event_id": "t7",
     "status": "confirmed",
-    "summary": "Kernel output on the fixed make_inputs workload has relative L2 error 0.2305 vs the float64 16-mode reference, exceeding the 0.15 tolerance; output is finite float32 of shape (64), so the only failure is the numerical contract.",
+    "summary": "On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).",
     "supports": "confirmed"
   }
   Output summary:
@@ -189,38 +209,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Kernel output on the fixed make_inputs workload has relative L2 error 0.2305 vs the float64 16-mode reference, exceeding the 0.15 tolerance; output is finite float32 of shape (64), so the only failure is the numerical contract.",
+    "summary": "On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).",
     "supports": "confirmed",
-    "tool_event_id": "t6"
+    "tool_event_id": "t7"
   }
 
-### Turn 5 - `solo` (3.251256049999995s, in=14033 out=186)
+### Turn 6 - `solo` (4.7215708549999995s, in=13064 out=234)
 
 Message:
 
 ```text
-The decisive claim is confirmed: the 6-mode cutoff yields relative L2 error 0.2305 > 0.15 on the fixed in-scope workload. Recording the verdict.
+The single in-scope claim is confirmed by runtime probe: relative L2 error 0.0605 vs the 0.01 tolerance on the exact fixed workload. I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.99,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 ran kernel.run on the exact make_inputs() workload and compared against the contract-mandated float64 16-mode reference: output was finite float32 shape (64,), but relative L2 error was 0.2305 (norm_diff 1.289, norm_ref 5.593) vs the contract's <= 0.15 tolerance. The kernel computes only 6 of 16 modes, violating the explicit numerical contract in problem.txt.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.99,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 ran kernel.run on the exact make_inputs() workload and compared against the contract-mandated float64 16-mode reference: output was finite float32 shape (64,), but relative L2 error was 0.2305 (norm_diff 1.289, norm_ref 5.593) vs the contract's <= 0.15 tolerance. The kernel computes only 6 of 16 modes, violating the explicit numerical contract in problem.txt.",
+    "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
     "verdict": "reject"
   }
 
@@ -232,96 +252,97 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel's 6-mode cutoff produces relative L2 error above 0.15 on the fixed public workload.
+Statement: The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.
 
 Scope: `in_scope`
 
-Scope rationale: The numerical contract requires relative L2 error <= 0.15 against a 16-mode reference on the fixed make_inputs workload.
+Scope rationale: The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.
 
 Scope evidence:
-- `problem.txt`: reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs workload.
+- `problem.txt`: Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01.
 
-Rationale: The kernel sums only RETAINED=6 of 16 modes; the dropped modes 7-16 (std 0.04) contribute energy that may exceed the 0.15 relative-L2 tolerance.
+Rationale: The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b ≈ 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Kernel output on the fixed make_inputs workload has relative L2 error 0.2305 vs the float64 16-mode reference, exceeding the 0.15 tolerance; output is finite float32 of shape (64), so the only failure is the numerical contract.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_v"
+  "entry": "case_p"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_v"
+  "entry": "case_p"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_v"
+  "entry": "case_p"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_v"
+  "entry": "case_p"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel sums only RETAINED=6 of 16 modes; the dropped modes 7-16 (std 0.04) contribute energy that may exceed the 0.15 relative-L2 tolerance.",
+  "rationale": "The kernel computes alpha, residual, and normalization in float32 with sequential accumulation; on this workload b \u2248 1.125u with tiny noise (1e-5 scale), the residual is tiny relative to b, so float32 cancellation in b - alpha*u could make relative error large. Contract requires relative L2 error <= 0.01 vs a float64 reference on the make_inputs() workload.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "reference uses ALL sixteen modes; contract is ||output-reference||_2 / max(||reference||_2,1e-12) <= 0.15 for the fixed make_inputs workload."
+      "summary": "Only the two float32 vectors u and b returned by make_inputs() are in scope... ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.01."
     }
   ],
-  "scope_rationale": "The numerical contract requires relative L2 error <= 0.15 against a 16-mode reference on the fixed make_inputs workload.",
-  "statement": "The kernel's 6-mode cutoff produces relative L2 error above 0.15 on the fixed public workload.",
+  "scope_rationale": "The contract requires the output to be within relative L2 error 0.01 of a float64 reference on exactly the make_inputs() workload.",
+  "statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "e1477ec27ed2e3427f7606e5326407c9bfb9f56ed47b9560eba523b693545cd0"
+      "path": "probes/t7_probe.py",
+      "sha256": "2b0a36d548f4ea2afb024ccf732cc2e9a80ef68eabdcda997128c6e97c07e918"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "f14f7924ff411da0d0a9b2ca4371aabcd99cd41dab5b839d4d18f06f16c95234"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "a32c9305ddc7aa6779f006fbe477aacd899475ec5a7f84c9daa0b9f78c87de75"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
+      "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "12077c7f49057d6b094d6c5a2cf4a295eb72ad84174ab79939133f0684e42c60"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's 6-mode cutoff produces relative L2 error above 0.15 on the fixed public workload.",
-  "duration_s": 5.155543,
-  "event_id": "t6",
+  "claim_statement": "The kernel's float32 computation of the normalized projection output fails the contract's relative error tolerance (<=0.01) against a float64 reference on the fixed make_inputs() workload.",
+  "duration_s": 7.231288,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -329,55 +350,60 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "e1477ec27ed2e3427f7606e5326407c9bfb9f56ed47b9560eba523b693545cd0"
+          "path": "probes/t7_probe.py",
+          "sha256": "2b0a36d548f4ea2afb024ccf732cc2e9a80ef68eabdcda997128c6e97c07e918"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "f14f7924ff411da0d0a9b2ca4371aabcd99cd41dab5b839d4d18f06f16c95234"
+          "path": "probes/t7_stdout.txt",
+          "sha256": "a32c9305ddc7aa6779f006fbe477aacd899475ec5a7f84c9daa0b9f78c87de75"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
+          "path": "probes/t7_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Parsed JSO
-...[truncated 1945 chars]
+        }
+      ],
+      "duration_s": 7.231288,
+      "exit_code": 0,
+      "expected_signal": null,
+      "json_parse_error": "last stdout line is not JSON: Extra data",
+      "json_result": null,
+      "stderr
+...[truncated 455 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Kernel output on the fixed make_inputs workload has relative L2 error 0.2305 vs the float64 16-mode reference, exceeding the 0.15 tolerance; output is finite float32 of shape (64), so the only failure is the numerical contract.",
+  "summary": "On the fixed make_inputs() workload, kernel output vs float64 reference gives relative L2 error 0.060455 (> 0.01 tolerance), output finite. Metric matches contract: ||output-reference||_2 / max(||reference||_2,1e-12).",
   "supports": "confirmed",
-  "tool_event_id": "t6"
+  "tool_event_id": "t7"
 }
 
-### t8 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.99,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 ran kernel.run on the exact make_inputs() workload and compared against the contract-mandated float64 16-mode reference: output was finite float32 shape (64,), but relative L2 error was 0.2305 (norm_diff 1.289, norm_ref 5.593) vs the contract's <= 0.15 tolerance. The kernel computes only 6 of 16 modes, violating the explicit numerical contract in problem.txt.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.99,
-  "created_at": "2026-09-24T01:01:03Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-24T00:58:13Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 ran kernel.run on the exact make_inputs() workload and compared against the contract-mandated float64 16-mode reference: output was finite float32 shape (64,), but relative L2 error was 0.2305 (norm_diff 1.289, norm_ref 5.593) vs the contract's <= 0.15 tolerance. The kernel computes only 6 of 16 modes, violating the explicit numerical contract in problem.txt.",
+  "reason": "Ran the kernel on the exact fixed make_inputs() workload (probe t7) and compared to a float64 reference using the contract's metric ||output-reference||_2 / max(||reference||_2, 1e-12). Result: relative L2 error 0.060455, far above the required <= 0.01 (output is finite, shape (32,)). The float32 kernel's cancellation in b - alpha*u dominates because the residual (~1e-5 scale noise) is tiny relative to b (~1.125u). The contract admits only this workload, so the failure is in-scope and decisive: the kernel violates the required accuracy tolerance.",
   "verdict": "reject"
 }

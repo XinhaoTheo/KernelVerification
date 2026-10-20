@@ -273,7 +273,7 @@ def render(report):
     fixes = sum(row["debate_corrects_solo_wrong_verdict"] for row in comparisons)
     reverse = sum(row["solo_corrects_debate_wrong_verdict"] for row in comparisons)
     lines = [f"生成时间：{report['generated_at']}", "",
-        "初始组 case_101–case_106；后续两组采用各自约定的实验协议。"
+        "初始组 case_107–case_112；后续两组采用各自约定的实验协议。"
         "协议与固定复验窗口见本页说明。", "",
         compact_results(report["rows"]),
         f"固定窗口复验门槛： **{'通过' if gate['passed'] else '未达到'}**; "
@@ -285,7 +285,7 @@ def render(report):
 
 
 def main(*, export_json=False):
-    report = derive(cases=tuple(f"case_{i:02d}" for i in range(95, 101)))
+    report = derive(cases=tuple(f"case_{i:02d}" for i in range(107, 113)))
     replace_results(ROOT, "MAIN RESULTS", render(report))
     if export_json:
         output = ROOT / "private_data" / "reports" / "scoreboard.json"

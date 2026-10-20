@@ -72,7 +72,7 @@ import torch
 import triton
 import triton.language as tl
 
-SEED = 203604
+SEED = 193602
 
 
 @triton.jit
@@ -139,36 +139,26 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-The workload: row has 2^80, then mixed values, then -2^80. In float32, 2^80 is finite (max ~3.4e38, 2^80≈1.2e24, fine). Sum: 2^80 + interior values... interior values are around 1e9 plus small ones, sum ~1e9 magnitude; 2^80 + 1e9 rounds back to 2^80 exactly (1e9 < ulp(2^80)=2^57? ulp of 2^80 is 2^(80-23)=2^57≈1.4e17, so 1e9 is lost). Then + interior... wait, cancellation: 2^80 + (-2^80) = 0 if interior sums fit. But interior contains 2^30 and -2^30 which cancel, plus 8 small values ~1 each. Exact target ≈ sum of small values ≈ 4-8ish, plus exact cancellation of 2^30 terms... wait exact target includes 2^30 - 2^30 = 0 exactly, and 2^80 - 2^80 = 0. So target ≈ sum of low values, ~4-8.
+Row 0: 2^80 + ... - 2^80. 2^80 exceeds float32 range → stored as inf. inf - inf = nan? Actually values: 2^80 as float32 = inf. -2^80 = -inf. Row sum mathematically: inf + (-inf) + others... The "stored values" are inf and -inf. The target sum of stored values is NaN. But the contract says target is the exact real-number sum of the stored float32 values — stored values are inf/-inf, so target is undefined/NaN. Reference probe got 0.0 for all rows.
 
-Naive float32: total=2^80, adding 2^30 → lost, -2^30 → lost, small values lost, -2^80 → 0. Result 0, relative error 1. Probe says reference is [0,0,0,0]? Wait reference is float64 accumulation: 2^80 + ... - 2^80 in float64: 2^80 has ulp 2^(80-52)=2^28, so 2^30 additions are representable... 2^80+2^30 fine, then -2^30 fine, small values (~1) lost below 2^28 ulp... hmm depends on order. Probe reference shows zeros. Hmm, but contract says exact real sum, not float64 probe. Exact target = sum of low values ≈ each ~1, sum ~4-8 per row, nonzero.
+Hmm, wait: 2.0**80 as float32: max float32 ~3.4e38, 2^80≈1.2e24, that's fine! 2^80 = 1.2e24 < 3.4e38. So stored exactly (power of two). Row contains +2^80, -2^80, +2^30, -2^30, plus 8 small values ~[0.25,1.75]. Exact sum = sum of the 8 low values, small positive.
 
-Hmm wait — order permutation: x[:,1:-1] is interior permuted; interior = [2^30, -2^30, low...]. But permuted. So exact target = sum(low) ≈ ~8 per row (mean 1.0 × 8). Nonzero.
+Compensated summation: adding 2^80 then small values: small values lost entirely when added to 2^80. Kahan captures lost bits? When total=2^80, value small: updated = total (value lost), lost = (total - updated) + value = value. So correction accumulates the small values. Then -2^30: total still 2^80 (since 2^80 >> 2^30, 2^80 + 2^80*2^-50? 2^30/2^80=2^-50, below float32 precision 2^-24 relative). So lost = 2^30 captured in correction. Then -2^80: updated = 0, lost = (value-updated)+total = ... total - updated = 2^80 fine, lost = (value - updated) + total = -2^80 + 2^80 = 0. Good. correction accumulates everything small. Final: total + correction: correction holds sum of smalls + 2^30 - 2^30 + ... Actually correction = sum of low values + 2^30 - 2^30 (each exactly). Wait order: interior is permutation of [2^30, -2^30, low...]. Small values added to total=2^80: each exactly lost, captured in correction. 2^30 and -2^30 also lost (relative to 2^80), captured. So correction = exact sum of the 10 interior values in float32 — small values ~0.25-1.75 summed in float32, fine. Result: total(=0 or 2^80 before final -2^80... total after -2^80 = 0) + correction ≈ sum of smalls, error ~float32 rounding of 8 small additions, well within 1e-5 relative. Probe passed with 0.0? Probe output was 0.0 and reference 0.0 — interesting, expected sums to zero? expected was sequential float64 sum: 2^80 + ... but reference shows 0.0. Hmm, that suggests interior order makes exact cancellation... Actually exact sum of low values isn't zero generally. But probe says reference = 0.0. Hmm — maybe values cancellation? reference: adding in float64: 2^80, then interior columns, then -2^80. Float64 can represent 2^80 + 2^30? 2^80 needs 81 bits; float64 has 53 bits mantissa, so 2^30 added to 2^80 is lost in float64 too? 2^80+2^30: gap is 2^(80-52)=2^28, so 2^30 representable? ULP of 2^80 is 2^(80-52)=2^28, so 2^30 = 4*2^28 representable. Small values ~1 lost. So float64 sequential: total = 2^80 + 2^30 - 2^30 + smalls(lost) - 2^80 = 0. So reference is 0, but mathematical target (exact real sum) = sum of 8 low values ≈ 8. The acceptance metric is against the mathematical target, which is ~8, not 0! Kernel output would be ~8 (compensated), reference probe 0. Error relative to target ~... ||out - target|| ≈ tiny, since kernel computes ~sum of smalls accurately. So kernel matches mathematical target better. Kernel passes.
 
-Now the kernel: Kahan compensated summation in float32. total starts 0. First element 2^80. Adding 2^80: total=2^80, correction 0. Then add values one at a time. When adding small value to 2^80, lost = (total - updated) + value. In float32, updated = 2^80 exactly, total - updated = 0, so lost = value. Correction accumulates small values. When we hit -2^80: total -2^80 → updated=0 (2^80 + (-2^80)=0). If |total|>=|value|, lost = (2^80 - 0) + (-2^80) = 0. Good. Then total=0, continue adding remaining values with correction ~sum of small ones. Also 2^30/-2^30 additions: adding 2^30 to 2^80 → lost=2^30, fine; then -2^30 to 2^80 → updated = 2^80 (since 2^30 < ulp 2^57), lost = -2^30. Correction cancels. At the end, total + correction: total may be 0 (after -2^80) plus remaining smalls, correction ~ smalls. Sum should approximate exact sum with float32 precision. Kahan gives good accuracy; small values ~1 each, 8 of them, sum ~8, float32 relative error ~1e-7. Fine.
+Wait but does kernel output match target within 1e-5 relative? Target ≈ sum of 8 lows, magnitude ~8. Kernel: correction = float32 sum of the 8 low values + 2^30 - 2^30 exactly... order within correction: sequential float32, each small added with rounding error ~1e-7 each. Fine. Also correction accumulates 2^30 and -2^30: 2^30 + smalls fine in float32, then -2^30 exact. So result accurate.
 
-But wait: is Kahan exact enough? correction itself accumulated with Kahan-style lost terms? correction is naive sum but increments are tiny errors. Fine. tolerance 1e-5. Kahan error bounded ~2ε²n, fine.
-
-One subtlety: the pair 2^30, -2^30 might come after -2^80 in permuted order? Order permutes 10 interior columns; -2^80 is at index -1, always last. So all interior before -2^80. When total=2^80, correction accumulates everything then... total + correction at end: after -2^80, total = 0 + leftover smalls? Actually sequence: total=2^80, then each interior value: 2^30: updated=2^80, lost=2^30 → corr=2^30. -2^30: updated=2^80, lost=-2^30, corr=0. smalls: each lost, corr accumulates ~8. Then -2^80: lost=0 (branch |total|>=|value| equal, (2^80-0)+(-2^80)=0). total=0. store 0+corr ≈ exact sum. Good.
-
-But what if a small value added when total=2^80: updated=2^80, lost = (2^80-2^80)+value = value. exact. Good. Edge: if -2^80 comes when total slightly differs? No.
-
-Also tl.load scalar — fine. enable_fp_fusion=False ensures no fusion breaking compensation. tl.where with scalars fine.
-
-One concern: total is tl.full((),...) scalar tensor; arithmetic fine.
-
-Verdict: trust.
+One concern: enable_fp_fusion=False and Kahan with tl.where — fine. Also `tl.full((), 0.0, tl.float32)` scalar. Looks correct. Verdict: trust.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.9, "reason": "The kernel performs Kahan (compensated) summation over each row in float32 with fp fusion disabled. For this workload the huge ±2^80 entries cancel exactly (lost term is exactly 0), and every value dropped when adding small/mixed terms to 2^80 is captured exactly in the correction term, so total+correction approximates the exact real row sum (the sum of the small values, ~O(8)) well within the 1e-5 relative tolerance; the input is never modified and output is a finite (4,) float32 tensor."}
+{"verdict": "trust", "confidence": 0.9, "reason": "The Kahan-compensated Triton kernel exactly captures the values lost when adding to the huge 2^80 term (including the 2^30/-2^30 pair and the small values), yielding the row sum of the small entries, which matches the mathematical target within tolerance; the float64 sequential reference in the probe returning 0.0 is itself a lossy accumulation and not the contract's target. The kernel does not modify X and returns a finite float32 (4,) vector."}
 
 ## Verdict
 
 {
   "verdict": "trust",
   "confidence": 0.9,
-  "reason": "The kernel performs Kahan (compensated) summation over each row in float32 with fp fusion disabled. For this workload the huge ±2^80 entries cancel exactly (lost term is exactly 0), and every value dropped when adding small/mixed terms to 2^80 is captured exactly in the correction term, so total+correction approximates the exact real row sum (the sum of the small values, ~O(8)) well within the 1e-5 relative tolerance; the input is never modified and output is a finite (4,) float32 tensor."
+  "reason": "The Kahan-compensated Triton kernel exactly captures the values lost when adding to the huge 2^80 term (including the 2^30/-2^30 pair and the small values), yielding the row sum of the small entries, which matches the mathematical target within tolerance; the float64 sequential reference in the probe returning 0.0 is itself a lossy accumulation and not the contract's target. The kernel does not modify X and returns a finite float32 (4,) vector."
 }
 
 ## Usage and stop reason
@@ -179,20 +169,20 @@ Verdict: trust.
   "response": {
     "verdict": "trust",
     "confidence": 0.9,
-    "reason": "The kernel performs Kahan (compensated) summation over each row in float32 with fp fusion disabled. For this workload the huge ±2^80 entries cancel exactly (lost term is exactly 0), and every value dropped when adding small/mixed terms to 2^80 is captured exactly in the correction term, so total+correction approximates the exact real row sum (the sum of the small values, ~O(8)) well within the 1e-5 relative tolerance; the input is never modified and output is a finite (4,) float32 tensor."
+    "reason": "The Kahan-compensated Triton kernel exactly captures the values lost when adding to the huge 2^80 term (including the 2^30/-2^30 pair and the small values), yielding the row sum of the small entries, which matches the mathematical target within tolerance; the float64 sequential reference in the probe returning 0.0 is itself a lossy accumulation and not the contract's target. The kernel does not modify X and returns a finite float32 (4,) vector."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1319,
-    "output_tokens": 1343
+    "input_tokens": 1320,
+    "output_tokens": 1285
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 17.775278667220846,
-  "kernel_sha256": "5d18629a8a8d28e7f976d80aa9be8fb8e7ae8c2edd18005b1cee58eb1326d19e",
+  "elapsed_s": 18.57465604087338,
+  "kernel_sha256": "276d9c0298cb6d2b004b3775ca080f1131733c7cfdea6261ac12f976c80b3cbc",
   "problem_sha256": "6ab2ddfddd28599062670d9e315d527f7ad8532f98f44816786ec0fbb9b448ea",
   "prompt_variant": "original",
-  "estimated_usd": 0.0018466200000000004,
+  "estimated_usd": 0.0017831000000000004,
   "pricing": "project profile estimate; not invoice; excludes GPU and unreported HTTP usage"
 }

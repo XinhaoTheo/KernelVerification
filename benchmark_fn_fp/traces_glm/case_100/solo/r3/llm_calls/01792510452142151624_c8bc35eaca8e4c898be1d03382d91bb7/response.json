@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-b6346e98",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive test over all 65536 FP16 values using the kernel's run().",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8c7268ab657b4696",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, torch, numpy as np\\nsys.path.insert(0, \\\"/root/cases/case_100\\\")\\nimport kernel\\n\\nbits = np.arange(65536, dtype=np.uint16)\\nf16 = torch.from_numpy(bits.view(np.float16).copy())\\n# exclude NaN/Inf\\nfinite = torch.isfinite(f16)\\nx = f16[finite].to(torch.float32)\\nprint(\\\"num finite fp16 values:\\\", x.numel(), \\\"max:\\\", x.max().item(), \\\"min subnormal/normal present\\\")\\n\\ndev = \\\"cuda\\\"\\n# run in chunks of 131072 -> whole set fits (61440 finite values? actually ~65504)\\nxd = x.to(torch.float16).to(dev)\\nout = kernel.run(xd)\\nref = torch.asinh(xd.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nmx = err.max().item()\\nidx = int(err.argmax().item())\\nprint(\\\"max abs err:\\\", mx)\\nprint(\\\"worst input:\\\", xd[idx].item(), \\\"out:\\\", out[idx].item(), \\\"ref:\\\", ref[idx].item())\\nprint(\\\"count > 1e-6:\\\", int((err > 1e-6).sum().item()))\\nprint(\\\"count > 0 (nonzero err):\\\", int((err > 0).sum().item()))\\ntop = torch.topk(err, 10).values\\ntopi = torch.topk(err, 10).indices\\nfor v,i in zip(top.tolist(), topi.tolist()):\\n    print(f\\\"x={xd[i].item():.6g} err={v:.3e} out={out[i].item():.9f} ref={ref[i].item():.9f}\\\")\\nimport json\\nprint(json.dumps({\\\"max_abs_err\\\": mx, \\\"n_over_tol\\\": int((err>1e-6).sum().item()), \\\"n_tested\\\": x.numel()}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run exhaustive probe over all finite FP16 values via the kernel."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510454,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 456,
+    "prompt_tokens": 10284,
+    "total_tokens": 10740,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 13,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4644,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,18 +1,16 @@
-Select a nearest candidate and return its embedding on a fixed workload.
+Solve the fixed symmetric positive definite linear system in kernel.py.
 
-Only make_inputs() supplies the inputs in scope: query is float32 of shape
-(32,), candidates is float32 of shape (16, 32), embeddings is float32 of shape
-(16, 8). For the reference, use the original supplied float32 coordinates
-without quantization. Compute squared Euclidean distances in float64:
-  d[i] = sum_j (candidates[i,j] - query[j])**2.
-Select the index with smallest d[i], breaking ties in favour of the smallest
-index. The reference output is embeddings[index, :].
+Only the float32 tensors returned by make_inputs() are in scope. matrix has
+shape (16,16), and rhs has shape (16,). The entire deterministic generator and
+its seed are public. The reference output is the unique solution x of
+  matrix @ x = rhs
+computed in float64 using the original supplied float32 values. The reference
+is the solution of the system, not the result of a finite iteration count.
 
-The kernel returns a finite vector of shape (8,). It satisfies the contract iff
-  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.1.
+The implementation may use an approximate solver. Its output must be a finite
+vector of shape (16,), with relative L2 error
+  ||output - x||_2 / max(||x||_2, 0.001*sqrt(16))
+at most 0.08. The target execution device is an NVIDIA T4.
 
-Decide whether this implementation meets the numerical contract for this fixed
-generated workload. Alternative queries, candidates and embeddings are outside
-the scope. The kernel's approximate route quantizes coordinates to a grid
-using floor(x*8+0.5)/8, then uses float32 squared distances and the same tie rule.
-The final embedding values are gathered without quantization.
+Decide whether run(*make_inputs()) satisfies this numerical contract for the
+specified workload. Alternative right-hand sides or matrices are outside scope.

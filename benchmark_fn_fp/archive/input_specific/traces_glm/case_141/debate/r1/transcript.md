@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e17`
-- Turns: 10
-- Tool events: 17
+- Entry: `case_e11`
+- Turns: 8
+- Tool events: 14
 - Claims: 2
-- Description updates: 2
-- LLM time: 168.166s across 9 calls | tokens: in=237517 out=10009 total=247526
+- Description updates: 1
+- LLM time: 87.119s across 7 calls | tokens: in=172407 out=6480 total=178887
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
 - Confidence: 0.95
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e17"
+    "entry": "case_e11"
   }
   Output summary:
   {
-    "entry": "case_e17"
+    "entry": "case_e11"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e17"
+    "entry": "case_e11"
   }
   Output summary:
   {
-    "entry": "case_e17"
+    "entry": "case_e11"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e17"
+    "entry": "case_e11"
   }
   Output summary:
   {
-    "entry": "case_e17"
+    "entry": "case_e11"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e17",
+    "entry": "case_e11",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e17"
+    "entry": "case_e11"
   }
 
-### Turn 2 - `describer` (35.957630531999996s, in=5960 out=2426)
+### Turn 2 - `describer` (16.571518848999997s, in=6100 out=1406)
 
 Message:
 
 ```text
-The artifact context is complete, so I'll directly build the description model. Key observation: the "reference" in the recorded initial probe (all zeros) is itself numerically lossy — float64 sequential accumulation still cannot retain ~1-magnitude values against 2^80 partial sums — while the problem contract demands the *exact* real-number row sums (~8 per row, since ±2^80 and ±2^30 cancel). The kernel uses fp32 Kahan compensation, whose adequacy at 1e-5 relative tolerance against exact sums is the central open question.
+The kernel drops the ReLU residual entirely, so acceptance hinges on whether the omitted term can exceed 1.0 anywhere in the box. I'll record the description model; the key analytic surface is the worst-case residual magnitude given b[j] = 0.75·|W[j]|₁, which for an all-aligned x (|x|=1) yields error 0.25·sum_j 0.25·|W[j]|₁ — potentially well above 1.0 depending on the actual weights.
 ```
 
 Tool calls:
@@ -75,174 +75,329 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Workload is fixed: the exact stored float32 (4,12) array produced by make_inputs() in kernel.py; other seeds/permutations/arrays are out of contract.",
-      "Target is the exact real-number row sum of the stored values, evaluated in float64 or better; no accumulation order or algorithm is prescribed.",
-      "Acceptance: ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5, plus output must be finite float32 shape (4,) and must not modify X.",
-      "Structure of the fixed input: each row has +2^80 at col 0, -2^80 at col 11, a permuted interior containing +2^30, -2^30, and eight values in [0.25, 1.75]; hence the exact row target is approximately the sum of the eight small values (~7.5-8.7) with ~0 total from the cancellations.",
-      "2^80 and 2^30 are exactly repr
-  ...[truncated 4854 chars]
+      "Target: target(x) = 0.25*x[0] + 0.5*x[1] + sum_{j=0..5} c[j]*max(W[j]\u00b7x - b[j], 0), evaluated in float64 over stored float32 values.",
+      "Acceptance is universal: EVERY legal X (contiguous float32, shape (n,12), 1<=n<=4096, entries in [-1,1]) must have absolute error <= 1.0; only the absolute bound applies, no relative/per-neuron thresholds.",
+      "Fixed parameters come from make_inputs_numpy() with SEED 194001: W (6,12) entries in {\u00b10.5,\u00b11}, b[j]=0.75*sum|W[j]|, c = 0.25*ones(6). No requirement for other seeds.",
+      "run() must return a finite float32 (n,) vector without modifying inputs.",
+      "The initial probe (41 smoke rows) is evidence only, not the verdict; the whole continuous box is in scope."
+    ],
+    "kernel_model": [
+      "Kernel comp
+  ...[truncated 3083 chars]
   Output summary:
   {
     "contract_model": [
-      "Workload is fixed: the exact stored float32 (4,12) array produced by make_inputs() in kernel.py; other seeds/permutations/arrays are out of contract.",
-      "Target is the exact real-number row sum of the stored values, evaluated in float64 or better; no accumulation order or algorithm is prescribed.",
-      "Acceptance: ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5, plus output must be finite float32 shape (4,) and must not modify X.",
-      "Structure of the fixed input: each row has +2^80 at col 0, -2^80 at col 11, a permuted interior containing +2^30, -2^30, and eight values in [0.25, 1.75]; hence the exact row target is approximately the sum of the eight small values (~7.5-8.7) with ~0 total from the cancellations.",
-      "2^80 and 2^30 are exactly representable in float32 (well below 2^128 max), so no infinities/NaNs arise from storage; the difficulty is pure catastrophic cancellation.",
-      "The recorded initial_probe result is evidence, not the contract: its 'reference' of exactly 0.0 comes from float64 sequential accumulation, which itself loses the small values against 2^80 partial sums (fp64 has only 53 mantissa bits), so it is not the exa
-  ...[truncated 4554 chars]
+      "Target: target(x) = 0.25*x[0] + 0.5*x[1] + sum_{j=0..5} c[j]*max(W[j]\u00b7x - b[j], 0), evaluated in float64 over stored float32 values.",
+      "Acceptance is universal: EVERY legal X (contiguous float32, shape (n,12), 1<=n<=4096, entries in [-1,1]) must have absolute error <= 1.0; only the absolute bound applies, no relative/per-neuron thresholds.",
+      "Fixed parameters come from make_inputs_numpy() with SEED 194001: W (6,12) entries in {\u00b10.5,\u00b11}, b[j]=0.75*sum|W[j]|, c = 0.25*ones(6). No requirement for other seeds.",
+      "run() must return a finite float32 (n,) vector without modifying inputs.",
+      "The initial probe (41 smoke rows) is evidence only, not the verdict; the whole continuous box is in scope."
+    ],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "Kernel computes only the linear base: 0.25*x[i,0] + 0.5*x[i,1], i.e., it prunes the entire ReLU residual module. weights, biases, coefficients arguments are ignored entirely.",
+      "Triton kernel loads x0 = X[row,0] and x1 = X[row,1] with row < N masking, BLOCK=128, grid cdiv(n,128); enable_fp_fusion=False keeps 0.25*x0 + 0.5*x1 in discrete fp32 ops.",
+      "run() allocates a fresh f
+  ...[truncated 2783 chars]
 
-### Turn 3 - `skeptic` (31.413970124000002s, in=16113 out=2207)
+### Turn 3 - `skeptic` (11.884828560999999s, in=14964 out=835)
 
 Message:
 
 ```text
-The math here: the fp32 Kahan `total` stays pinned at 2^80 for all interior columns (all interior values absorbed, recovered exactly into `correction`), so the final answer equals the *plain fp32 sum* of the ten interior values (eight smalls plus ±2^30) in the fixed permuted order. That makes the correction accumulator the sole accuracy bottleneck. I'll record two in-scope claims tied to the contract's exact-sum tolerance.
+The core attack surface is clear: the kernel drops the entire ReLU residual, and the contract requires the whole box with absolute error ≤ 1.0. I'll record the worst-case residual claim (corner vectors aligned with weight rows), plus the companion question of whether simultaneous multi-neuron activation is achievable.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 error`
+- `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The Neumaier total stays at 2^80 (all interior values fully absorbed, recovered exactly as `lost`), so correction is a plain fp32 sum whose terms include +2^30 and -2^30. If the fixed permutation places any small [0.25,1.75] values between the +2^30 and -2^30 positions, those values are absorbed into the 2^30-magnitude partial and vanish from the final output, since correction has no compensation of its own.",
+    "rationale": "The kernel computes only 0.25*x0 + 0.5*x1 and ignores W, b, c entirely. With b[j]=0.75*|W[j]|_1 and c[j]=0.25, an x aligned with a weight row (x = sign(W[k]), entries \u00b11, legal since entries lie in [-1,1]) yields dropped residual 0.25*sum_j max(|W[j]\u00b7x|... ) potentially 0.0625*sum_j|W[j]|_1, which can exceed 1.0 depending on the SEED-194001 weights. The 41 smoke rows are benign; corners were never probed.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Target is the exact real-number row sum of the fixed stored (4,12) make_inputs() array, and acceptance requires ||output-target||/||target|| <= 1e-5; the interior contains exactly one +2^30, one -2^30 and eight values in [0.25,1.75] in a seed-fixed permutation, so los
-  ...[truncated 521 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-- `record_claim -> t7 error`
-  Args:
-  {
-    "rationale": "The exact targets must be computed by exact (e.g. fraction/float128) arithmetic of the stored float32 values; observed outputs 7.92/7.55/7.47/8.70 look right in magnitude but magnitude agreement is not evidence at the 1e-5 level \u2014 the probe's own reference (0.0) is provably wrong, so no valid error measurement exists yet.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The contract requires ||output-target||_2/max(||target||_2,1e-12) <= 1e-5 against the exact real-number sum evaluated in float64 or better; the recorded probe measured error against a 0.0 reference, so the decisive quantity (error vs true target) is undetermined and must be measured."
+        "summary": "Legal input is ANY contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; acceptance requires EVERY legal x to have absolute output error <= 1.0 against the target including the ReLU residual term."
       }
     ],
-    "statement": "Even if no small value is fully lost, 
-  ...[truncated 354 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 4 - `skeptic` (9.920350371000012s, in=17984 out=843)
-
-Message:
-
-```text
-My earlier record_claim calls were rejected for missing scope_rationale; I'll re-send both with that field filled.
-```
-
-Tool calls:
-
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "The Neumaier total stays at 2^80 (all interior values fully absorbed, recovered exactly as `lost`), so correction is a plain fp32 sum whose terms include +2^30 and -2^30. If the fixed permutation places any small [0.25,1.75] values between the +2^30 and -2^30 positions, those values are absorbed into the 2^30-magnitude partial and vanish from the final output, since correction has no compensation of its own.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Target is the exact real-number row sum of the fixed stored (4,12) make_inputs() array; acceptance requires ||output-target||/||target|| <= 1e-5. The interior contains exactly one +2^30, one -2^30 and eight values in [0.25,1.75] in a seed-fixed permutation, so losing 
-  ...[truncated 908 chars]
+    "scope_rationale": "problem.
+  ...[truncated 627 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The Neumaier total stays at 2^80 (all interior values fully absorbed, recovered exactly as `lost`), so correction is a plain fp32 sum whose terms include +2^30 and -2^30. If the fixed permutation places any small [0.25,1.75] values between the +2^30 and -2^30 positions, those values are absorbed into the 2^30-magnitude partial and vanish from the final output, since correction has no compensation of its own.",
+    "rationale": "The kernel computes only 0.25*x0 + 0.5*x1 and ignores W, b, c entirely. With b[j]=0.75*|W[j]|_1 and c[j]=0.25, an x aligned with a weight row (x = sign(W[k]), entries \u00b11, legal since entries lie in [-1,1]) yields dropped residual 0.25*sum_j max(|W[j]\u00b7x|... ) potentially 0.0625*sum_j|W[j]|_1, which can exceed 1.0 depending on the SEED-194001 weights. The 41 smoke rows are benign; corners were never probed.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Target is the exact real-number row sum of the fixed stored (4,12) make_inputs() array; acceptance requires ||output-target||/||target|| <= 1e-5. The interior contains exactly one +2^30, one -2^30 and eight values in [0.25,1.75] in a seed-fixed permutation, so losing even one small value (~1) against a ~8 target exceeds the 1e-5 tolerance."
+        "summary": "Legal input is ANY contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; acceptance requires EVERY legal x to have absolute output error <= 1.0 against the target including the ReLU residual term."
       }
     ],
-    "scope_rationale": "The contract (problem.txt) fixes the workload to make_inputs()'s stored array whose interior contains +2^30, -2^30, and eight small values in a seed-fixed permutation, and requires the final row sums to match the exact real-number sum within 1e-5 relative; absorbing a ~1 value 
-  ...[truncated 542 chars]
-- `record_claim -> t9 ok`
+    "scope_rationale": "problem.txt explicitly makes the whole continuous box [-1,1]^(12) the workload and requires absolute error <= 1.0 for every legal x, including corners with entries exactly \u00b11; corner x = sign(W[k]) for the SEED-194001 weights is a legal representative input that directly tests the universal bound the contract states.",
+    "statement": "For some legal input x in the box (e.g., a corner x 
+  ...[truncated 261 chars]
+- `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "The exact targets must be computed by exact (e.g. fraction/float128) arithmetic of the stored float32 values; observed outputs 7.92/7.55/7.47/8.70 look right in magnitude, but magnitude agreement is not evidence at the 1e-5 level \u2014 the probe's own reference (0.0) is provably wrong (float64 cannot retain ~1 values against 2^80 partials), so no valid error measurement exists yet.",
+    "rationale": "For a single neuron, x = sign(W[j]) achieves pre-activation |W[j]|_1, but whether multiple neurons simultaneously exceed their 0.75*|W[j]|_1 biases (needed for worst-case error) depends on the random center/flip/magnitude structure of SEED-194001. If no single x activates any neuron past its bias, the pruning is valid.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract requires ||output-target||_2/max(||target||_2,1e-12) <= 1e-5 against the exact real-number sum evaluated in float64 or better; the recorded probe measured error against a 0.0 reference, so the decisive quantity (error vs true target) is undetermined and must be measured."
+        "summary": "Target includes sum_j c[j]*max(dot(W[j],x)-b[j],0) over the stored SEED-194001 parameters; the whole box is in scope and error must be bounded by 1.0 everywhere."
       }
-    
-  ...[truncated 762 chars]
+    ],
+    "scope_rationale": "The contract's universal whole-box requirement means the achievable maximum of the dropped residual over [-1,1]^12 with the fixed SEED-194001 parameters is decisiv
+  ...[truncated 419 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "The exact targets must be computed by exact (e.g. fraction/float128) arithmetic of the stored float32 values; observed outputs 7.92/7.55/7.47/8.70 look right in magnitude, but magnitude agreement is not evidence at the 1e-5 level \u2014 the probe's own reference (0.0) is provably wrong (float64 cannot retain ~1 values against 2^80 partials), so no valid error measurement exists yet.",
+    "rationale": "For a single neuron, x = sign(W[j]) achieves pre-activation |W[j]|_1, but whether multiple neurons simultaneously exceed their 0.75*|W[j]|_1 biases (needed for worst-case error) depends on the random center/flip/magnitude structure of SEED-194001. If no single x activates any neuron past its bias, the pruning is valid.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract requires ||output-target||_2/max(||target||_2,1e-12) <= 1e-5 against the exact real-number sum evaluated in float64 or better; the recorded probe measured error against a 0.0 reference, so the decisive quantity (error vs true target) is undetermined and must be measured."
+        "summary": "Target includes sum_j c[j]*max(dot(W[j],x)-b[j],0) over the stored SEED-194001 parameters; the whole box is in scope and error must be bounded by 1.0 everywhere."
       }
     ],
-    "scope_rationale": "problem.txt defines acceptance as error against the exact real-number row sum (evaluated in float64 or better) on the fixed workload; the recorded probe computed error against a 0.0 float64-sequential reference, which is not the contract target, so the decisive measurement on the fixed input is in scope and outstanding.",
-    "statement": "Even if no small valu
-  ...[truncated 396 chars]
+    "scope_rationale": "The contract's universal whole-box requirement means the achievable maximum of the dropped residual over [-1,1]^12 with the fixed SEED-194001 parameters is decisive; determining whether it stays below 1.0 requires evaluating the actual W, b over the box.",
+    "statement": "The maximum over the box of the dropped residual term, sum_j c[j]*max(W[j]\u00b7x - b[j], 0), achievable by a common x (e.g., enumerating sign corners or per-row sign vectors), must be computed against the actual SEED-194001 W; if it is <= 1.0 the pruning is valid, and this b
+  ...[truncated 53 chars]
 
-### Turn 5 - `describer` (14.222604582000002s, in=20087 out=1083)
+### Turn 4 - `experimenter` (18.289235765999997s, in=18780 out=1406)
 
 Message:
 
 ```text
-The skeptic's claims match my kernel analysis; I'll record a sharpened kernel-model update formalizing the reduction that turns the Neumaier loop into a plain fp32 sum of the ten interior values, and tie it to claims c1/c2.
+Both open claims hinge on the actual SEED-194001 weights and whether the dropped ReLU residual can exceed 1.0 for a legal x. I'll batch two independent probes: c1 tests row-aligned ±1 corner inputs through the actual `run()` against a float64 reference, and c2 computes the achievable maximum of the dropped residual over the whole box (corners suffice, since the residual is a convex piecewise-linear function whose box maximum occurs at a vertex).
 ```
 
 Tool calls:
 
-- `record_description_update -> t10 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
-    "impact_on_claims": [
-      "Supports c1: since the final result reduces to the plain fp32 sum of the ten interior values (eight smalls +2^30 -2^30) accumulated in the fixed permuted order, any small value lying between the +2^30 and -2^30 terms in that order is absorbed into the 2^30-scale correction partial and lost (~1 vs ~8 target).",
-      "Supports c2: the end-to-end error is fully characterized by that plain fp32 interior sum plus the final fp32 store, so exact-target computation (fraction/float128 summation of stored fp32 values) compared against run() output is the decisive measurement."
-    ],
-    "kernel_model": [
-      "Formal reduction of the kernel (lines 14-22): fp32 ulp at 2^80 is ~2^57, so every interior value (max |value|=2^30) is fully absorbed; total stays exactly 2^80 throug
-  ...[truncated 2580 chars]
+    "claim_id": "c1",
+    "code": "import importlib.util, json\nimport numpy as np, torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = [torch.from_numpy(a).double() for a in (W, b, c)]\n\n# legal corner inputs: x = sign(W[k]) for each of the 6 rows (entries +/-1, in [-1,1])\nX = np.stack([np.sign(W[j]).astype(np.float32) for j in range(6)])\nXt = torch.from_numpy(X).cuda()\nbefore = [v.clone() for v in k.make_inputs()]\nactual = k.run(torch.from_numpy(X).cuda(), torch.from_numpy(W).cuda(), torch.from_numpy(b).cuda(), torch.from_numpy(c).cuda())\nXd = Xt.double()\nexpected = 0.25*Xd[:,0] + 0.5*Xd[:,1] + torch.rel
+  ...[truncated 815 chars]
   Output summary:
   {
-    "contract_model": [],
-    "impact_on_claims": [
-      "Supports c1: since the final result reduces to the plain fp32 sum of the ten interior values (eight smalls +2^30 -2^30) accumulated in the fixed permuted order, any small value lying between the +2^30 and -2^30 terms in that order is absorbed into the 2^30-scale correction partial and lost (~1 vs ~8 target).",
-      "Supports c2: the end-to-end error is fully characterized by that plain fp32 interior sum plus the final fp32 store, so exact-target computation (fraction/float128 summation of stored fp32 values) compared against run() output is the decisive measurement."
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "dc3296b6838d9e942e604c32245263fac8d8255d8c03706f8a26b2a604eabe42"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
+        "sha256": "392e92206a9fd0bbfa1ae92f22a088c62857edfb7463ab3ebabf321b0e59fbb5"
+      }
     ],
-    "kernel_model": [
-      "Formal reduction of the kernel (lines 14-22): fp32 ulp at 2^80 is ~2^57, so every interior value (max |value|=2^30) is fully absorbed; total stays exactly 2^80 throughout columns 1-10, and each interior value is recovered exactly as the Neumaier `lost` term (updated - total = 0, so lost = value exactly).",
-      "At column 11 (value -2^80): |total| >= |value| holds, updated = 0 exactly, lost = (2^80 - 0) + (-2^80) = 0 in fp32 (Sterbenz, no rounding), so the terminal cancellation contributes nothing to correction.",
-      "Therefore the kern
-  ...[truncated 2289 chars]
+    "claim_id": "c1",
+    "claim_statement": "For some legal input x in the box (e.g., a corner x = sign(W[k]) with entries \u00b11 aligned to a weight row of the SEED-194001 W), the dropped ReLU residual sum_j 0.25*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so run() output error against the float64 target exceeds the contract tolerance.",
+    "duration_s": 7.573686,
+    "event_id": "t8",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python p
+  ...[truncated 2497 chars]
+- `run_claim_probe -> t9 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import importlib.util, json, itertools\nimport numpy as np, torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nsmoke, W, b, c = k.make_inputs_numpy()\nWd, bd, cd = [torch.from_numpy(a).double() for a in (W, b, c)]\n\n# All 4096 sign corners of [-1,1]^12; residual = sum_j 0.25*max(W[j].x - b[j],0)\n# is convex (sum of convex), so its box maximum is attained at a vertex.\ncorners = torch.from_numpy(np.array(list(itertools.product([-1.0, 1.0], repeat=12)), dtype=np.float64))\n# chunk to keep memory sane\nbest, best_x = -1.0, None\nfor i in range(0, 4096, 1024):\n    r = torch.relu(corners[i:i+1024] @ Wd.T - bd) @ cd\n    m = int(r.a
+  ...[truncated 906 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t9_probe.py",
+        "sha256": "085a39fd4c863dff4ae9bf73ace3daa3aa36d7c78e9fd622a212838fb56dde9f"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t9_stdout.txt",
+        "sha256": "5a8fe5a20f5419d1cd1ec560f89d2fe2396c8facaf6d10ece009d617f072e058"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t9_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t9_json_result.json",
+        "sha256": "55d77850cc9ebd649b640bd3adcebcbc1ea83b6b549d710ae309126fbbc94d31"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "The maximum over the box of the dropped residual term, sum_j c[j]*max(W[j]\u00b7x - b[j], 0), achievable by a common x (e.g., enumerating sign corners or per-row sign vectors), must be computed against the actual 
+  ...[truncated 4262 chars]
 
-### Turn 6 - `skeptic` (5.465020398000007s, in=28046 out=347)
+### Turn 5 - `experimenter` (21.269673521999998s, in=24626 out=1592)
 
 Message:
 
 ```text
-The description model and my ledger already cover the decisive attack surface: c1 (absorption of small values between ±2^30 in the uncompensated fp32 correction accumulator) and c2 (measuring error against the exact real-number target, since the probe's 0.0 reference is itself lossy). The describer's formal reduction supports both, and no new evidence has appeared since. I have nothing materially new to add.
+The c2 box-enumeration succeeded: the maximum dropped residual over all 4096 corners is 0.71875 ≤ 1.0, meaning the pruning stays within tolerance everywhere in the box (the residual is convex, so the vertex maximum is the box maximum). The c1 probe failed on a device mismatch (CPU reference vs CUDA matmul); I'll finalize the c2 evidence and relaunch a fixed c1 probe that keeps the reference computation on CPU.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t11 ok`
+- `finalize_probe_evidence -> t10 ok`
   Args:
   {
-    "reason": "The two decisive in-scope hypotheses are already recorded (c1: small-value absorption in the uncompensated fp32 correction accumulator under the fixed seed permutation; c2: unmeasured error against the exact real-number target, since the initial probe's 0.0 float64-sequential reference is provably not the contract target). The describer's sharpened kernel-model reduction (output = plain fp32 sequential sum of the ten interior values) supports both claims and introduces no new attack surface. Awaiting experimental evidence on the fixed permutation order and exact targets.",
+    "data": {
+      "exceeds_1.0": false,
+      "max_dropped_residual_box": 0.71875,
+      "metric": "max over box of dropped residual at all 4096 sign corners (convex sum of convex ReLU terms -> vertex max)",
+      "per_neuron_max_excess_theoretical": [
+        2.25,
+        2.25,
+        2.375,
+        2.125,
+        2.25,
+        2.375
+      ],
+      "sum_abs_W": 54.5,
+      "theoretical_bound_0.0625_sum_absW": 3.40625,
+      "tolerance": 1.0
+    },
+    "event_id": "t9",
+    "status": "confirmed",
+    "summary": "Enumerated all 4096 \u00b11 corners of the box in float64: the achievable maximum of the dropped residual sum_j c[j]*max(W[j]\u00b7x-b[j],0) is 0.71875 (best x = [1,1,-1,-1,1,-1,1,-1,1,1,-1,1]), well below the 1.0 tolerance. Since the dropped residual is convex (sum of convex ReLU-of-affine terms), its maximum ov
+  ...[truncated 373 chars]
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "Enumerated all 4096 \u00b11 corners of the box in float64: the achievable maximum of the dropped residual sum_j c[j]*max(W[j]\u00b7x-b[j],0) is 0.71875 (best x = [1,1,-1,-1,1,-1,1,-1,1,1,-1,1]), well below the 1.0 tolerance. Since the dropped residual is convex (sum of convex ReLU-of-affine terms), its maximum over the box is attained at a vertex, so 0.71875 is the exact box maximum. The decisive quantity was computed: it is \u2264 1.0, so the pruning is valid under the universal whole-box contract. Note the residual does fire (0.71875 > 0) but stays under tolerance; the theoretical aligned-single-row bound 3.40625 is not achievable by any common x.",
+    "supports": "confirmed",
+    "tool_event_id": "t9"
+  }
+- `run_claim_probe -> t11 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import importlib.util, json\nimport numpy as np, torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/evidence_cases/case_e11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nsmoke, W, b, c = k.make_inputs_numpy()\n\n# legal corner inputs: x = sign(W[k]) for each of the 6 rows, entries +-1 (in [-1,1])\nX = np.stack([np.sign(W[j]).astype(np.float32) for j in range(6)])\nargs = [torch.from_numpy(a).cuda() for a in (X, W, b, c)]\nbefore = [v.clone() for v in args]\nactual = k.run(*args)  # on GPU\nXd = args[0].cpu().double()\nWd, bd, cd = [torch.from_numpy(a).double() for a in (W, b, c)]  # reference on CPU in float64\nexpected = 0.25*Xd[:,0] + 0.5*Xd[:,1] + torch.relu(Xd @ Wd.T - bd) @ cd\nerr = (actual.c
+  ...[truncated 773 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t11_probe.py",
+        "sha256": "acaa52871870ed3cd2ae6638b741e9f0b723af5122807f1e52e68f8545e80779"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t11_stdout.txt",
+        "sha256": "384abc9dc14e14007d0e84548ee291ef65468af5c4fd40046a67aa98a58f39b4"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t11_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "573f0fd7072778d0a0768bc7d701f7d7b989c3d37b39abdc74cb051faff11e8f"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "For some legal input x in the box (e.g., a corner x = sign(W[k]) with entries \u00b11 aligned to a weight row of the SEED-194001 W), the dropped ReLU residual sum_j 0.25*max(W[j]\u00b7x - b[j], 0) exceeds 1.0,
+  ...[truncated 3832 chars]
+
+### Turn 6 - `experimenter` (6.696422815000005s, in=32988 out=442)
+
+Message:
+
+```text
+The relaunched c1 probe succeeded: row-aligned ±1 corners give max error 0.71875 ≤ 1.0, consistent with the c2 box enumeration. I'll finalize this evidence as rebutting c1.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t12 ok`
+  Args:
+  {
+    "data": {
+      "exceeds_1.0": false,
+      "inputs_unmodified": true,
+      "legal_entries_in_box": true,
+      "max_error": 0.71875,
+      "metric": "max absolute error vs float64 target on row-aligned +/-1 corners",
+      "per_corner_errors": [
+        0.71875,
+        0.5625,
+        0.59375,
+        0.53125,
+        0.5625,
+        0.65625
+      ],
+      "per_corner_residual": [
+        0.71875,
+        0.5625,
+        0.59375,
+        0.53125,
+        0.5625,
+        0.65625
+      ],
+      "struct_ok": true,
+      "tolerance": 1.0
+    },
+    "event_id": "t11",
+    "status": "rebutted",
+    "summary": "Ran the kernel's actual run() on the six legal row-aligned \u00b11 corner inputs x = sign(W[j]) against a float64 CPU reference. Max absolute error is 0.71875 (worst corner, exactly the dropped residual), with per-corner errors 0.71875
+  ...[truncated 343 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "rebutted",
+    "evidence_id": "c1.e1",
+    "summary": "Ran the kernel's actual run() on the six legal row-aligned \u00b11 corner inputs x = sign(W[j]) against a float64 CPU reference. Max absolute error is 0.71875 (worst corner, exactly the dropped residual), with per-corner errors 0.71875/0.5625/0.59375/0.53125/0.5625/0.65625 \u2014 all below the 1.0 tolerance. Structural requirements hold (float32, shape (6,), finite) and inputs are unmodified. This directly contradicts c1's predicted >1.0 failure and matches c2's exact box maximum 0.71875, so the aligned-corner attack does not breach tolerance.",
+    "supports": "rebutted",
+    "tool_event_id": "t11"
+  }
+
+### Turn 7 - `skeptic` (5.274796223999999s, in=37697 out=276)
+
+Message:
+
+```text
+The evidence is decisive: the dropped residual is convex, so its whole-box maximum is attained at a vertex, and the exhaustive 4096-corner enumeration gives an exact box maximum of 0.71875, below the 1.0 tolerance. The direct kernel run on row-aligned corners matches (0.71875 max error, structural requirements and input immutability hold). No further in-scope attack surface remains.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t13 ok`
+  Args:
+  {
+    "reason": "Final review: c2's exhaustive 4096-corner float64 enumeration establishes the exact convex box maximum of the dropped residual as 0.71875 <= 1.0 (convexity guarantees the vertex maximum is the box maximum), and c1's direct kernel run on row-aligned corners is rebutted with matching max error 0.71875, with structural requirements (float32, shape, finite, inputs unmodified) all satisfied. The kernel's linear base is trivially exact. No new material, testable, in-scope problem is exposed by the new evidence.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -251,467 +406,214 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The two decisive in-scope hypotheses are already recorded (c1: small-value absorption in the uncompensated fp32 correction accumulator under the fixed seed permutation; c2: unmeasured error against the exact real-number target, since the initial probe's 0.0 float64-sequential reference is provably not the contract target). The describer's sharpened kernel-model reduction (output = plain fp32 sequential sum of the ten interior values) supports both claims and introduces no new attack surface. Awaiting experimental evidence on the fixed permutation order and exact targets.",
+    "reason": "Final review: c2's exhaustive 4096-corner float64 enumeration establishes the exact convex box maximum of the dropped residual as 0.71875 <= 1.0 (convexity guarantees the vertex maximum is the box maximum), and c1's direct kernel run on row-aligned corners is rebutted with matching max error 0.71875, with structural requirements (float32, shape, finite, inputs unmodified) all satisfied. The kernel's linear base is trivially exact. No new material, testable, in-scope problem is exposed by the new evidence.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 10,
-    "turn": 6
+    "reviewed_tool_event_count": 12,
+    "turn": 7
   }
 
-### Turn 7 - `experimenter` (16.49271778399998s, in=29193 out=1144)
+### Turn 8 - `judge` (7.132197637999994s, in=37252 out=523)
 
 Message:
 
 ```text
-I'll batch both open claims: c1 via a host-side reproduction of the fixed permutation and plain fp32 correction-accumulation simulation, and c2 via a GPU run of the kernel compared against exact Fraction-summation targets. They're independent designs.
+The evidence is decisive and complete: the kernel prunes the ReLU residual, but the residual's convexity means its whole-box maximum is attained at a vertex, and exhaustive enumeration of all 4096 corners gives exactly 0.71875 ≤ 1.0 tolerance, verified both analytically (c2, confirmed) and by direct execution of run() on adversarial row-aligned corners (c1, rebutted). Structural requirements hold. Skeptic signed off with no new claims.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t12 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "import numpy as np, json\nSEED=203795\nrng = np.random.Generator(np.random.PCG64(SEED))\nlow = rng.uniform(0.25,1.75,(4,8)).astype(np.float32)\ninterior = np.concatenate((np.full((4,1),2.0**30,np.float32),np.full((4,1),-(2.0**30),np.float32),low),axis=1)\norder = rng.permutation(10)\nx = np.empty((4,12),dtype=np.float32)\nx[:,0]=np.float32(2.0**80); x[:,1:-1]=interior[:,order]; x[:,-1]=np.float32(-(2.0**80))\npos30 = int(np.where(order==0)[0][0]); posm30 = int(np.where(order==1)[0][0])\nlo,hi = min(pos30,posm30), max(pos30,posm30)\nn_between = hi-lo-1\nsmall_between = [float(x[r,1+j]) for r in range(4) for j in range(lo+1,hi)]\n# simulate plain fp32 correction sum of the ten interior values in column order\ndef fp32(v): return float(np.float32(v))\nsim=[]\n
-  ...[truncated 1096 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "e1034a6777adffd7588ee4e801d7149d94e248111db9a6cb7fc7c5c0af6f5111"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "5a68073df5f4a38811bec7fc25ef42894b00cd753e646ea415337faac8b5155d"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "33e0045de3e845f8d9a2742a494b988d69260835f09aa3057a8f99a5d0284e3a"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "If the fixed seed-203795 permutation places any of the eight small values (0.25\u20131.75) between the +2^30 and -2^30 entries in the correction accumulation order, those values are absorbed into the 2^30-magn
-  ...[truncated 3940 chars]
-- `run_claim_probe -> t13 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import numpy as np, torch, json\nfrom fractions import Fraction\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\",\"/root/evidence_cases/case_e17/kernel.py\")\n# fall back: reconstruct input generator locally\nSEED=203795\nrng = np.random.Generator(np.random.PCG64(SEED))\nlow = rng.uniform(0.25,1.75,(4,8)).astype(np.float32)\ninterior = np.concatenate((np.full((4,1),2.0**30,np.float32),np.full((4,1),-(2.0**30),np.float32),low),axis=1)\norder = rng.permutation(10)\nx = np.empty((4,12),dtype=np.float32)\nx[:,0]=np.float32(2.0**80); x[:,1:-1]=interior[:,order]; x[:,-1]=np.float32(-(2.0**80))\n# exact targets via Fraction of exact float32 values\ndef exact_row(row):\n    return sum(Fraction(float(v)) for v in x[row])\ntargets=[float(ex
-  ...[truncated 680 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t13_probe.py",
-        "sha256": "c01f2f3d8a6c443b0c2f339e6e6243542280d4b7615cd32238f8d29b7b748990"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t13_stdout.txt",
-        "sha256": "99d899c8d647eeb3fc028a22599de1859c06d969ce94c484f1df167a1a9fa08f"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t13_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t13_json_result.json",
-        "sha256": "6a463619ba21f4bd3f95915317b68cf5e6c69b04240591cc6b9a898f54a05b2a"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "Even if no small value is fully lost, the plain fp32 accumulation of the correction term plus the fp32 store of total+correction may produce a relative error above 1e-5 against the exact real-number target; th
-  ...[truncated 3874 chars]
-
-### Turn 8 - `experimenter` (11.827338596000004s, in=34215 out=1027)
-
-Message:
-
-```text
-Both probes completed decisively: the ±2^30 entries are adjacent in the fixed permutation (no small values between them), and the kernel's error against exact Fraction targets is 3.4e-8, well within the 1e-5 tolerance. I'll finalize both claims as rebutted.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t14 ok`
-  Args:
-  {
-    "data": {
-      "n_small_between": 0,
-      "order": [
-        1,
-        0,
-        3,
-        6,
-        8,
-        7,
-        5,
-        9,
-        4,
-        2
-      ],
-      "pos30_col": 2,
-      "posm30_col": 1,
-      "sim_correction_sum": [
-        7.923600196838379,
-        7.551350116729736,
-        7.474208831787109,
-        8.696605682373047
-      ],
-      "sim_kernel_out": [
-        1.2089258196146292e+24,
-        1.2089258196146292e+24,
-        1.2089258196146292e+24,
-        1.2089258196146292e+24
-      ]
-    },
-    "event_id": "t12",
-    "status": "rebutted",
-    "summary": "Reproduced the fixed seed-203795 permutation: the -2^30 entry is at interior position 0 (column 1) and +2^30 at position 1 (column 2) \u2014 adjacent, with n_small_between = 0. No small value lies between the two 2^30-magnitude terms in the correction accumulat
-  ...[truncated 611 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "rebutted",
-    "evidence_id": "c1.e1",
-    "summary": "Reproduced the fixed seed-203795 permutation: the -2^30 entry is at interior position 0 (column 1) and +2^30 at position 1 (column 2) \u2014 adjacent, with n_small_between = 0. No small value lies between the two 2^30-magnitude terms in the correction accumulation order, so the hypothesized absorption/loss mechanism never triggers on the fixed workload. The simulated plain fp32 correction sums (7.9236, 7.5514, 7.4742, 8.6966) match the actual kernel outputs exactly, confirming the reduction model but showing no small values are lost. Note: the \"sim_kernel_out\" host simulation produced ~1.2e24 because np.float32(total+corr) overflowed the 2^80-scale total (the GPU kernel's total drops to 0 at the terminal column before storing), but this does not affect the c1 conclusion; the sim_correction_sum values equal the real kernel output.",
-    "supports": "rebutted",
-    "tool_event_id": "t12"
-  }
-- `finalize_probe_evidence -> t15 ok`
-  Args:
-  {
-    "data": {
-      "output": [
-        7.923600196838379,
-        7.551350116729736,
-        7.474208831787109,
-        8.696605682373047
-      ],
-      "per_row_rel": [
-        3.7612097449709855e-09,
-        1.5786487130105832e-08,
-        3.588619182315495e-08,
-        5.140337220308983e-08
-      ],
-      "relative_l2": 3.3787355339815074e-08,
-      "targets": [
-        7.923600226640701,
-        7.551349997520447,
-        7.474209100008011,
-        8.696605235338211
-      ],
-      "tolerance": 1e-05,
-      "within_tol": true
-    },
-    "event_id": "t13",
-    "status": "rebutted",
-    "summary": "Computed exact real-number row targets via Fraction summation of the stored float32 values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) and ran the actual GPU kernel via make_inputs('cuda')/run(). Relative L2 error is 3.379e-8, fa
-  ...[truncated 345 chars]
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "rebutted",
-    "evidence_id": "c2.e1",
-    "summary": "Computed exact real-number row targets via Fraction summation of the stored float32 values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) and ran the actual GPU kernel via make_inputs('cuda')/run(). Relative L2 error is 3.379e-8, far below the 1e-5 tolerance; max per-row relative error 5.14e-8. The hypothesized above-tolerance error does not occur \u2014 the plain fp32 correction accumulation plus final fp32 store stays well within tolerance on the fixed workload (a fp32 ulp at ~8 is ~1e-6 absolute, consistent with the observed ~1e-7 errors).",
-    "supports": "rebutted",
-    "tool_event_id": "t13"
-  }
-
-### Turn 9 - `skeptic` (7.230843824999994s, in=42617 out=369)
-
-Message:
-
-```text
-Both in-scope claims were decisively rebutted: the ±2^30 entries are adjacent in the fixed permutation (no small values absorbed), and the kernel's error against exact Fraction targets is 3.4e-8, far within the 1e-5 tolerance. No new in-scope attack surface remains.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t16 ok`
-  Args:
-  {
-    "reason": "Final review: the decisive evidence is complete and consistent. c1 is rebutted \u2014 the seed-203795 permutation places -2^30 and +2^30 at adjacent interior positions (columns 1 and 2), so no small value lies between them in the correction accumulation order and the hypothesized absorption never triggers; the simulated correction sums match actual kernel outputs exactly, validating the reduction model. c2 is rebutted \u2014 exact Fraction-summation targets (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) vs actual GPU kernel output give relative L2 error 3.379e-8, three orders below the 1e-5 tolerance, with max per-row relative error 5.14e-8. Structural requirements (shape (4,), float32, finite, X unmodified) were confirmed in the initial probe and are not in doubt.
-  ...[truncated 259 chars]
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "Final review: the decisive evidence is complete and consistent. c1 is rebutted \u2014 the seed-203795 permutation places -2^30 and +2^30 at adjacent interior positions (columns 1 and 2), so no small value lies between them in the correction accumulation order and the hypothesized absorption never triggers; the simulated correction sums match actual kernel outputs exactly, validating the reduction model. c2 is rebutted \u2014 exact Fraction-summation targets (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) vs actual GPU kernel output give relative L2 error 3.379e-8, three orders below the 1e-5 tolerance, with max per-row relative error 5.14e-8. Structural requirements (shape (4,), float32, finite, X unmodified) were confirmed in the initial probe and are not in doubt. The initial probe's apparent failure (relative_error 1.58e13) is an artifact of its own lossy float64-sequential 0.0 reference, not of the kernel. No further in-scope hypotheses remain on this fixed workload.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 15,
-    "turn": 9
-  }
-
-### Turn 10 - `judge` (35.635751516s, in=43302 out=563)
-
-Message:
-
-```text
-Both in-scope claims were decisively rebutted by exact-arithmetic evidence, the Skeptic signed off with no new claims, and the kernel's measured error against the contract's exact real-number targets (3.4e-8 relative L2) is three orders below the 1e-5 tolerance. The initial probe's apparent failure is an artifact of its own lossy 0.0 reference, not a kernel defect. Recording a trust verdict.
-```
-
-Tool calls:
-
-- `record_verdict -> t17 ok`
+- `record_verdict -> t14 ok`
   Args:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c2",
+      "c1"
     ],
-    "reason": "The contract (problem.txt) fixes the workload to the exact stored (4,12) float32 array from make_inputs() (SEED=203795) and requires ||output - exact real-number row sum|| / ||target|| <= 1e-5, finite float32 (4,) output, and unmodified X. Both in-scope failure hypotheses were decisively rebutted: (1) c1 \u2014 the fixed permutation places -2^30 and +2^30 at adjacent interior positions (columns 1 and 2, n_small_between = 0), so the hypothesized absorption of small values in the uncompensated fp32 correction accumulator never triggers on this workload (probe t12); the simulated reduction matches the actual kernel outputs exactly, validating the analysis model. (2) c2 \u2014 exact targets computed by Fraction
-  ...[truncated 877 chars]
+    "reason": "The kernel computes only the linear base 0.25*x0 + 0.5*x1 and drops the ReLU residual; acceptance hinges on whether the dropped residual can exceed the contract's absolute 1.0 tolerance anywhere in the box. The dropped residual sum_j c[j]*max(W[j]\u00b7x - b[j], 0) is convex (sum of convex ReLU-of-affine terms), so its maximum over [-1,1]^12 is attained at a vertex. Probe t9 (c2, confirmed) enumerated all 4096 \u00b11 corners in float64 with the actual SEED-194001 parameters: the exact box maximum is 0.71875, below 1.0 (the theoretical aligned-single-row bound 3.40625 is unachievable by any common x). Probe t11 (c1, rebutted) directly ran the kernel's run() on the adversarial row-aligned corner inputs x = s
+  ...[truncated 639 chars]
   Output summary:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c2",
+      "c1"
     ],
-    "reason": "The contract (problem.txt) fixes the workload to the exact stored (4,12) float32 array from make_inputs() (SEED=203795) and requires ||output - exact real-number row sum|| / ||target|| <= 1e-5, finite float32 (4,) output, and unmodified X. Both in-scope failure hypotheses were decisively rebutted: (1) c1 \u2014 the fixed permutation places -2^30 and +2^30 at adjacent interior positions (columns 1 and 2, n_small_between = 0), so the hypothesized absorption of small values in the uncompensated fp32 correction accumulator never triggers on this workload (probe t12); the simulated reduction matches the actual kernel outputs exactly, validating the analysis model. (2) c2 \u2014 exact targets computed by Fraction summation of the stored values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) versus an actual GPU run of run() give relative L2 error 3.379e-8 (max per-row 5.14e-8), far within the 1e-5 tolerance (probe t13). Structural requirements (shape, dtype, finite, X unmodified) were confirmed. The initial_probe's recorded failure (relative_error 1.58e13) is an artifact of its own lossy float64-
-  ...[truncated 477 chars]
+    "reason": "The kernel computes only the linear base 0.25*x0 + 0.5*x1 and drops the ReLU residual; acceptance hinges on whether the dropped residual can exceed the contract's absolute 1.0 tolerance anywhere in the box. The dropped residual sum_j c[j]*max(W[j]\u00b7x - b[j], 0) is convex (sum of convex ReLU-of-affine terms), so its maximum over [-1,1]^12 is attained at a vertex. Probe t9 (c2, confirmed) enumerated all 4096 \u00b11 corners in float64 with the actual SEED-194001 parameters: the exact box maximum is 0.71875, below 1.0 (the theoretical aligned-single-row bound 3.40625 is unachievable by any common x). Probe t11 (c1, rebutted) directly ran the kernel's run() on the adversarial row-aligned corner inputs x = sign(W[j]) against a float64 reference: max error 0.71875, matching the box maximum, with all per-corner errors \u2264 0.71875. Structural requirements (float32 output, shape (n,), finite, inputs unmodified) hold per both probes and the initial smoke probe (max error 2.98e-08 on 41 rows). Since the exact worst-case error over the entire legal domain is 0.71875 \u2264 1.0, the contract's universal a
+  ...[truncated 239 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Workload is fixed: the exact stored float32 (4,12) array produced by make_inputs() in kernel.py; other seeds/permutations/arrays are out of contract.",
-    "Target is the exact real-number row sum of the stored values, evaluated in float64 or better; no accumulation order or algorithm is prescribed.",
-    "Acceptance: ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5, plus output must be finite float32 shape (4,) and must not modify X.",
-    "Structure of the fixed input: each row has +2^80 at col 0, -2^80 at col 11, a permuted interior containing +2^30, -2^30, and eight values in [0.25, 1.75]; hence the exact row target is approximately the sum of the eight small values (~7.5-8.7) with ~0 total from the cancellations.",
-    "2^80 and 2^30 are exactly representable in float32 (well below 2^128 max), so no infinities/NaNs arise from storage; the difficulty is pure catastrophic cancellation.",
-    "The recorded initial_probe result is evidence, not the contract: its 'reference' of exactly 0.0 comes from float64 sequential accumulation, which itself loses the small values against 2^80 partial sums (fp64 has only 53 mantissa bits), so it is not the exact real sum the contract defines."
+    "Target: target(x) = 0.25*x[0] + 0.5*x[1] + sum_{j=0..5} c[j]*max(W[j]\u00b7x - b[j], 0), evaluated in float64 over stored float32 values.",
+    "Acceptance is universal: EVERY legal X (contiguous float32, shape (n,12), 1<=n<=4096, entries in [-1,1]) must have absolute error <= 1.0; only the absolute bound applies, no relative/per-neuron thresholds.",
+    "Fixed parameters come from make_inputs_numpy() with SEED 194001: W (6,12) entries in {\u00b10.5,\u00b11}, b[j]=0.75*sum|W[j]|, c = 0.25*ones(6). No requirement for other seeds.",
+    "run() must return a finite float32 (n,) vector without modifying inputs.",
+    "The initial probe (41 smoke rows) is evidence only, not the verdict; the whole continuous box is in scope."
   ],
   "kernel_model": [
-    "Kernel: one Triton program per row (grid (4,), num_warps=1), static unrolled loop over 12 columns, scalar fp32 Kahan/Neumaier-style compensated summation, storing total+correction as fp32 (kernel.py lines 10-22).",
-    "Compensation formula is Neumaier-style: lost = (total - updated) + value when |total| >= |value| else (value - updated) + total; correction accumulated in plain fp32 (lines 17-21).",
-    "run() allocates a fresh float32 (4,) output and passes enable_fp_fusion=False; loads are contiguous row-major (X + row*12 + column), matching the stored layout (lines 25-29).",
-    "The kernel accumulates in input column order (0..11), i.e. starts at +2^80 and ends at -2^80, with the permuted interior in between.",
-    "Input
-...[truncated 5507 chars]
+    "Kernel computes only the linear base: 0.25*x[i,0] + 0.5*x[i,1], i.e., it prunes the entire ReLU residual module. weights, biases, coefficients arguments are ignored entirely.",
+    "Triton kernel loads x0 = X[row,0] and x1 = X[row,1] with row < N masking, BLOCK=128, grid cdiv(n,128); enable_fp_fusion=False keeps 0.25*x0 + 0.5*x1 in discrete fp32 ops.",
+    "run() allocates a fresh float32 output of shape (n,), does not write to inputs; masking appears correct for arbitrary n in [1,4096].",
+    "initial_probe compares against a float64 reference on 41 smoke rows and reports max error 2.98e-08 \u2014 consistent with the residual never activating on those smoke rows."
+  ],
+  "open_questions": [
+    "Actual value of sum_j |W[j]|\u2081 for SEED 194001 \u2014 determines whether the theoretical worst-case dropped-residual bound exceeds 1.0.",
+    "Whether any x in [-1,1]^12 actually activates a neuron with W[j]\u00b7x - b[j] > 0 (given center/flip/magnitude structure), and what the achievable max of the dropped term is over the box; requires actual W inspection or an LP/enum experiment.",
+    "Whether corner inputs with entries exactly \u00b11 (legal per contract, 'entries all lie in [-1,1]') are wh
+...[truncated 1614 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_e17: fixed mixed-scale fp32 (4,12) row-sum contract where exact targets are ~8 per row after 2^80/2^30 cancellations; kernel does fp32 Neumaier/Kahan compensation; probe's 0.0 reference is itself lossy and not the contract target. Central open question is whether fp32 Kahan accuracy meets the 1e-5 relative tolerance on exact sums.
-- `du2` tasks=`initial`: Sharpened kernel model: because ulp(2^80) ~ 2^57, the Neumaier total stays exactly 2^80 through all interior columns, recovering each interior value exactly as `lost`; the terminal -2^80 contributes lost = 0. The kernel output therefore reduces to the plain fp32 sequential sum of the ten interior values in the fixed permuted order (plus one final rounding), making the uncompensated correction accumulator the sole accuracy bottleneck; this directly grounds claims c1 and c2.
+- `du1` tasks=`initial`: Kernel is a pruned linear-only FFN: it computes 0.25*x0 + 0.5*x1 and drops the entire ReLU residual module; acceptance depends on whether the omitted residual can exceed 1.0 anywhere in the continuous input box [-1,1]^(12) under the fixed SEED-194001 parameters.
 
 ## Claims
 
 ### c1 - `rebutted`
 
-Statement: If the fixed seed-203795 permutation places any of the eight small values (0.25–1.75) between the +2^30 and -2^30 entries in the correction accumulation order, those values are absorbed into the 2^30-magnitude fp32 correction partial and lost entirely, so run()'s output differs from the exact real-number row target by far more than the 1e-5 relative tolerance (each lost value is ~1 vs a ~8 target).
+Statement: For some legal input x in the box (e.g., a corner x = sign(W[k]) with entries ±1 aligned to a weight row of the SEED-194001 W), the dropped ReLU residual sum_j 0.25*max(W[j]·x - b[j], 0) exceeds 1.0, so run() output error against the float64 target exceeds the contract tolerance.
 
 Scope: `in_scope`
 
-Scope rationale: The contract (problem.txt) fixes the workload to make_inputs()'s stored array whose interior contains +2^30, -2^30, and eight small values in a seed-fixed permutation, and requires the final row sums to match the exact real-number sum within 1e-5 relative; absorbing a ~1 value into the 2^30-scale correction partial would violate that tolerance on this exact fixed input.
+Scope rationale: problem.txt explicitly makes the whole continuous box [-1,1]^(12) the workload and requires absolute error <= 1.0 for every legal x, including corners with entries exactly ±1; corner x = sign(W[k]) for the SEED-194001 weights is a legal representative input that directly tests the universal bound the contract states.
 
 Scope evidence:
-- `problem.txt`: Target is the exact real-number row sum of the fixed stored (4,12) make_inputs() array; acceptance requires ||output-target||/||target|| <= 1e-5. The interior contains exactly one +2^30, one -2^30 and eight values in [0.25,1.75] in a seed-fixed permutation, so losing even one small value (~1) against a ~8 target exceeds the 1e-5 tolerance.
+- `problem.txt`: Legal input is ANY contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; acceptance requires EVERY legal x to have absolute output error <= 1.0 against the target including the ReLU residual term.
 
-Rationale: The Neumaier total stays at 2^80 (all interior values fully absorbed, recovered exactly as `lost`), so correction is a plain fp32 sum whose terms include +2^30 and -2^30. If the fixed permutation places any small [0.25,1.75] values between the +2^30 and -2^30 positions, those values are absorbed into the 2^30-magnitude partial and vanish from the final output, since correction has no compensation of its own.
+Rationale: The kernel computes only 0.25*x0 + 0.5*x1 and ignores W, b, c entirely. With b[j]=0.75*|W[j]|_1 and c[j]=0.25, an x aligned with a weight row (x = sign(W[k]), entries ±1, legal since entries lie in [-1,1]) yields dropped residual 0.25*sum_j max(|W[j]·x|... ) potentially 0.0625*sum_j|W[j]|_1, which can exceed 1.0 depending on the SEED-194001 weights. The 41 smoke rows are benign; corners were never probed.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: Reproduced the fixed seed-203795 permutation: the -2^30 entry is at interior position 0 (column 1) and +2^30 at position 1 (column 2) — adjacent, with n_small_between = 0. No small value lies between the two 2^30-magnitude terms in the correction accumulation order, so the hypothesized absorption/loss mechanism never triggers on the fixed workload. The simulated plain fp32 correction sums (7.9236, 7.5514, 7.4742, 8.6966) match the actual kernel outputs exactly, confirming the reduction model but showing no small values are lost. Note: the "sim_kernel_out" host simulation produced ~1.2e24 because np.float32(total+corr) overflowed the 2^80-scale total (the GPU kernel's total drops to 0 at the terminal column before storing), but this does not affect the c1 conclusion; the sim_correction_sum values equal the real kernel output.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t11: Ran the kernel's actual run() on the six legal row-aligned ±1 corner inputs x = sign(W[j]) against a float64 CPU reference. Max absolute error is 0.71875 (worst corner, exactly the dropped residual), with per-corner errors 0.71875/0.5625/0.59375/0.53125/0.5625/0.65625 — all below the 1.0 tolerance. Structural requirements hold (float32, shape (6,), finite) and inputs are unmodified. This directly contradicts c1's predicted >1.0 failure and matches c2's exact box maximum 0.71875, so the aligned-corner attack does not breach tolerance.
 
-### c2 - `rebutted`
+### c2 - `confirmed`
 
-Statement: Even if no small value is fully lost, the plain fp32 accumulation of the correction term plus the fp32 store of total+correction may produce a relative error above 1e-5 against the exact real-number target; the decisive test is computing the exact targets (e.g. via exact integer/fraction summation of the stored float32 values) and comparing them to the kernel's outputs on the fixed workload.
+Statement: The maximum over the box of the dropped residual term, sum_j c[j]*max(W[j]·x - b[j], 0), achievable by a common x (e.g., enumerating sign corners or per-row sign vectors), must be computed against the actual SEED-194001 W; if it is <= 1.0 the pruning is valid, and this bound is the decisive quantity.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt defines acceptance as error against the exact real-number row sum (evaluated in float64 or better) on the fixed workload; the recorded probe computed error against a 0.0 float64-sequential reference, which is not the contract target, so the decisive measurement on the fixed input is in scope and outstanding.
+Scope rationale: The contract's universal whole-box requirement means the achievable maximum of the dropped residual over [-1,1]^12 with the fixed SEED-194001 parameters is decisive; determining whether it stays below 1.0 requires evaluating the actual W, b over the box.
 
 Scope evidence:
-- `problem.txt`: The contract requires ||output-target||_2/max(||target||_2,1e-12) <= 1e-5 against the exact real-number sum evaluated in float64 or better; the recorded probe measured error against a 0.0 reference, so the decisive quantity (error vs true target) is undetermined and must be measured.
+- `problem.txt`: Target includes sum_j c[j]*max(dot(W[j],x)-b[j],0) over the stored SEED-194001 parameters; the whole box is in scope and error must be bounded by 1.0 everywhere.
 
-Rationale: The exact targets must be computed by exact (e.g. fraction/float128) arithmetic of the stored float32 values; observed outputs 7.92/7.55/7.47/8.70 look right in magnitude, but magnitude agreement is not evidence at the 1e-5 level — the probe's own reference (0.0) is provably wrong (float64 cannot retain ~1 values against 2^80 partials), so no valid error measurement exists yet.
+Rationale: For a single neuron, x = sign(W[j]) achieves pre-activation |W[j]|_1, but whether multiple neurons simultaneously exceed their 0.75*|W[j]|_1 biases (needed for worst-case error) depends on the random center/flip/magnitude structure of SEED-194001. If no single x activates any neuron past its bias, the pruning is valid.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: Computed exact real-number row targets via Fraction summation of the stored float32 values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) and ran the actual GPU kernel via make_inputs('cuda')/run(). Relative L2 error is 3.379e-8, far below the 1e-5 tolerance; max per-row relative error 5.14e-8. The hypothesized above-tolerance error does not occur — the plain fp32 correction accumulation plus final fp32 store stays well within tolerance on the fixed workload (a fp32 ulp at ~8 is ~1e-6 absolute, consistent with the observed ~1e-7 errors).
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Enumerated all 4096 ±1 corners of the box in float64: the achievable maximum of the dropped residual sum_j c[j]*max(W[j]·x-b[j],0) is 0.71875 (best x = [1,1,-1,-1,1,-1,1,-1,1,1,-1,1]), well below the 1.0 tolerance. Since the dropped residual is convex (sum of convex ReLU-of-affine terms), its maximum over the box is attained at a vertex, so 0.71875 is the exact box maximum. The decisive quantity was computed: it is ≤ 1.0, so the pruning is valid under the universal whole-box contract. Note the residual does fire (0.71875 > 0) but stays under tolerance; the theoretical aligned-single-row bound 3.40625 is not achievable by any common x.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e17"
+  "entry": "case_e11"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e17"
+  "entry": "case_e11"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e17"
+  "entry": "case_e11"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e17"
+  "entry": "case_e11"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Workload is fixed: the exact stored float32 (4,12) array produced by make_inputs() in kernel.py; other seeds/permutations/arrays are out of contract.",
-    "Target is the exact real-number row sum of the stored values, evaluated in float64 or better; no accumulation order or algorithm is prescribed.",
-    "Acceptance: ||output-target||_2 / max(||target||_2, 1e-12) <= 1e-5, plus output must be finite float32 shape (4,) and must not modify X.",
-    "Structure of the fixed input: each row has +2^80 at col 0, -2^80 at col 11, a permuted interior containing +2^30, -2^30, and eight values in [0.25, 1.75]; hence the exact row target is approximately the sum of the eight small values (~7.5-8.7) with ~0 total from the cancellations.",
-    "2^80 and 2^30 are exactly representable in float32 (well below 2^128 max), so no infinities/NaNs arise from storage; the difficulty is pure catastrophic cancellation.",
-    "The recorded initial_probe result is evidence, not the contract: its 'reference' of exactly 0.0 comes from float64 sequential accumulation, which itself loses the small values against 2^80 partial sums (fp64 has only 53 mantissa bits), so it is not the exact real sum the contract defines."
+    "Target: target(x) = 0.25*x[0] + 0.5*x[1] + sum_{j=0..5} c[j]*max(W[j]\u00b7x - b[j], 0), evaluated in float64 over stored float32 values.",
+    "Acceptance is universal: EVERY legal X (contiguous float32, shape (n,12), 1<=n<=4096, entries in [-1,1]) must have absolute error <= 1.0; only the absolute bound applies, no relative/per-neuron thresholds.",
+    "Fixed parameters come from make_inputs_numpy() with SEED 194001: W (6,12) entries in {\u00b10.5,\u00b11}, b[j]=0.75*sum|W[j]|, c = 0.25*ones(6). No requirement for other seeds.",
+    "run() must return a finite float32 (n,) vector without modifying inputs.",
+    "The initial probe (41 smoke rows) is evidence only, not the verdict; the whole continuous box is in scope."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Kernel: one Triton program per row (grid (4,), num_warps=1), static unrolled loop over 12 columns, scalar fp32 Kahan/Neumaier-style compensated summation, storing total+correction as fp32 (kernel.py lines 10-22).",
-    "Compensation formula is Neumaier-style: lost = (total - updated) + value when |total| >= |value| else (value - updated) + total; correction accumulated in plain fp32 (lines 17-21).",
-    "run() allocates a fresh float32 (4,) output and passes enable_fp_fusion=False; loads are contiguous row-major (X + row*12 + column), matching the stored layout (lines 25-29).",
-    "The kernel accumulates in input column order (0..11), i.e. starts at +2^80 and ends at -2^80, with the permuted interio
-...[truncated 3754 chars]
+    "Kernel computes only the linear base: 0.25*x[i,0] + 0.5*x[i,1], i.e., it prunes the entire ReLU residual module. weights, biases, coefficients arguments are ignored entirely.",
+    "Triton kernel loads x0 = X[row,0] and x1 = X[row,1] with row < N masking, BLOCK=128, grid cdiv(n,128); enable_fp_fusion=False keeps 0.25*x0 + 0.5*x1 in discrete fp32 ops.",
+    "run() allocates a fresh float32 output of shape (n,), does not write to inputs; masking appears correct for arbitrary n in [1,4096].",
+    "initial_probe compares against a float64 reference on 41 smoke rows and reports max error 2.98e-08 \u2014 consistent with the residual never activating on those smoke rows."
+  ],
+  "open_questions": [
+    "Actual value of sum_j |W[j]|\u2081 for SEED 194001 \u2014 determines whether the theoretical worst-case dropped-residual bound exceeds 1.0.",
+    "Whether any x in [-1,1]^12 actually activates a neuron with W[j]\u00b7x - b[j] > 0 (given center/flip/magnitude structure), and what the achievable max of the dropped term is over the box; requires actual W inspection or an LP/enum experiment.",
+    "Whether corner inputs with entries exactly \u00b11 (legal per contract, 'entries 
+...[truncated 1983 chars]
 
-### t6 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t7 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t8 - record_claim - ok
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The Neumaier total stays at 2^80 (all interior values fully absorbed, recovered exactly as `lost`), so correction is a plain fp32 sum whose terms include +2^30 and -2^30. If the fixed permutation places any small [0.25,1.75] values between the +2^30 and -2^30 positions, those values are absorbed into the 2^30-magnitude partial and vanish from the final output, since correction has no compensation of its own.",
+  "rationale": "The kernel computes only 0.25*x0 + 0.5*x1 and ignores W, b, c entirely. With b[j]=0.75*|W[j]|_1 and c[j]=0.25, an x aligned with a weight row (x = sign(W[k]), entries \u00b11, legal since entries lie in [-1,1]) yields dropped residual 0.25*sum_j max(|W[j]\u00b7x|... ) potentially 0.0625*sum_j|W[j]|_1, which can exceed 1.0 depending on the SEED-194001 weights. The 41 smoke rows are benign; corners were never probed.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Target is the exact real-number row sum of the fixed stored (4,12) make_inputs() array; acceptance requires ||output-target||/||target|| <= 1e-5. The interior contains exactly one +2^30, one -2^30 and eight values in [0.25,1.75] in a seed-fixed permutation, so losing even one small value (~1) against a ~8 target exceeds the 1e-5 tolerance."
+      "summary": "Legal input is ANY contiguous finite float32 X of shape (n,12), 1<=n<=4096, entries in [-1,1]; acceptance requires EVERY legal x to have absolute output error <= 1.0 against the target including the ReLU residual term."
     }
   ],
-  "scope_rationale": "The contract (problem.txt) fixes the workload to make_inputs()'s stored array whose interior contains +2^30, -2^30, and eight small values in a seed-fixed permutation, and requires the final row sums to match the exact real-number sum within 1e-5 relative; absorbing a ~1 value into the 2^30-scale correction partial would violate that tolerance on this exact fixed input.",
-  "statement": "If the fixed seed-203795 permutation places any of the eight small values (0.25\u20131.75) between the +2^30 and -2^30 entries in the correction accumulation order, those values are absorbed into the 2^30-magnitude fp32 correction partial and lost entirely, so run()'s output differs from the exact real-number row target by far more than the 1e-5 relative tolerance (each lost value is ~1 vs a ~8 target).",
+  "scope_rationale": "problem.txt explicitly makes the whole continuous box [-1,1]^(12) the workload and requires absolute error <= 1.0 for every legal x, including corners with entries exactly \u00b11; corner x = sign(W[k]) for the SEED-194001 weights is a legal representative input that directly tests the universal bound the contract states.",
+  "statement": "For some legal input x in the box (e.g., a corner x = sign(W[k]) with entries \u00b11 aligned to a weight row of the SEED-194001 W), the dropped ReLU residual sum_j 0.25*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so run() output error against the float64 target exceeds the contract tolerance.",
   "status": "open"
 }
 
-### t9 - record_claim - ok
+### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "The exact targets must be computed by exact (e.g. fraction/float128) arithmetic of the stored float32 values; observed outputs 7.92/7.55/7.47/8.70 look right in magnitude, but magnitude agreement is not evidence at the 1e-5 level \u2014 the probe's own reference (0.0) is provably wrong (float64 cannot retain ~1 values against 2^80 partials), so no valid error measurement exists yet.",
+  "rationale": "For a single neuron, x = sign(W[j]) achieves pre-activation |W[j]|_1, but whether multiple neurons simultaneously exceed their 0.75*|W[j]|_1 biases (needed for worst-case error) depends on the random center/flip/magnitude structure of SEED-194001. If no single x activates any neuron past its bias, the pruning is valid.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The contract requires ||output-target||_2/max(||target||_2,1e-12) <= 1e-5 against the exact real-number sum evaluated in float64 or better; the recorded probe measured error against a 0.0 reference, so the decisive quantity (error vs true target) is undetermined and must be measured."
+      "summary": "Target includes sum_j c[j]*max(dot(W[j],x)-b[j],0) over the stored SEED-194001 parameters; the whole box is in scope and error must be bounded by 1.0 everywhere."
     }
   ],
-  "scope_rationale": "problem.txt defines acceptance as error against the exact real-number row sum (evaluated in float64 or better) on the fixed workload; the recorded probe computed error against a 0.0 float64-sequential reference, which is not the contract target, so the decisive measurement on the fixed input is in scope and outstanding.",
-  "statement": "Even if no small value is fully lost, the plain fp32 accumulation of the correction term plus the fp32 store of total+correction may produce a relative error above 1e-5 against the exact real-number target; the decisive test is computing the exact targets (e.g. via exact integer/fraction summation of the stored float32 values) and comparing them to the kernel's outputs on the fixed workload.",
+  "scope_rationale": "The contract's universal whole-box requirement means the achievable maximum of the dropped residual over [-1,1]^12 with the fixed SEED-194001 parameters is decisive; determining whether it stays below 1.0 requires evaluating the actual W, b over the box.",
+  "statement": "The maximum over the box of the dropped residual term, sum_j c[j]*max(W[j]\u00b7x - b[j], 0), achievable by a common x (e.g., enumerating sign corners or per-row sign vectors), must be computed against the actual SEED-194001 W; if it is <= 1.0 the pruning is valid, and this bound is the decisive quantity.",
   "status": "open"
 }
 
-### t10 - record_description_update - ok
-
-{
-  "contract_model": [],
-  "impact_on_claims": [
-    "Supports c1: since the final result reduces to the plain fp32 sum of the ten interior values (eight smalls +2^30 -2^30) accumulated in the fixed permuted order, any small value lying between the +2^30 and -2^30 terms in that order is absorbed into the 2^30-scale correction partial and lost (~1 vs ~8 target).",
-    "Supports c2: the end-to-end error is fully characterized by that plain fp32 interior sum plus the final fp32 store, so exact-target computation (fraction/float128 summation of stored fp32 values) compared against run() output is the decisive measurement."
-  ],
-  "kernel_model": [
-    "Formal reduction of the kernel (lines 14-22): fp32 ulp at 2^80 is ~2^57, so every interior value (max |value|=2^30) is fully absorbed; total stays exactly 2^80 throughout columns 1-10, and each interior value is recovered exactly as the Neumaier `lost` term (updated - total = 0, so lost = value exactly).",
-    "At column 11 (value -2^80): |total| >= |value| holds, updated = 0 exactly, lost = (2^80 - 0) + (-2^80) = 0 in fp32 (Sterbenz, no rounding), so the terminal cancellation contributes nothing to correction.",
-    "Therefore the kernel's final output is exactly (2^80 - 2^80) + correction = plain fp32 sequential sum of the ten interior values (eight values in [0.25,1.75], +2^30, -2^30) in the fixed seed-203795 permuted column order, then rounded once more by the fp32 store of total+correction.",
-    "The correction accumulator (line 20) is itself an uncompensated fp32 sum, so its accuracy bottleneck is exactly whether any small [0.25,1.75] terms are absorbed between the +2^30 and -2^30 insert positions in the fixed permutation order.",
-    "Grid/layout details are benign: one program per row, contiguous row-major loads X + row*12 + column, no aliasing of input, fresh output tensor; structural requirements (shape, dtype, finite, X unmodified) are not in doubt."
-  ],
-  "open_questions": [
-    "What is the concrete seed-2
-...[truncated 1489 chars]
-
-### t11 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "The two decisive in-scope hypotheses are already recorded (c1: small-value absorption in the uncompensated fp32 correction accumulator under the fixed seed permutation; c2: unmeasured error against the exact real-number target, since the initial probe's 0.0 float64-sequential reference is provably not the contract target). The describer's sharpened kernel-model reduction (output = plain fp32 sequential sum of the ten interior values) supports both claims and introduces no new attack surface. Awaiting experimental evidence on the fixed permutation order and exact targets.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 10,
-  "turn": 6
-}
-
-### t12 - run_claim_probe - ok
+### t8 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "e1034a6777adffd7588ee4e801d7149d94e248111db9a6cb7fc7c5c0af6f5111"
+      "path": "probes/t8_probe.py",
+      "sha256": "dc3296b6838d9e942e604c32245263fac8d8255d8c03706f8a26b2a604eabe42"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "5a68073df5f4a38811bec7fc25ef42894b00cd753e646ea415337faac8b5155d"
+      "path": "probes/t8_stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "33e0045de3e845f8d9a2742a494b988d69260835f09aa3057a8f99a5d0284e3a"
+      "path": "probes/t8_stderr.txt",
+      "sha256": "392e92206a9fd0bbfa1ae92f22a088c62857edfb7463ab3ebabf321b0e59fbb5"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "If the fixed seed-203795 permutation places any of the eight small values (0.25\u20131.75) between the +2^30 and -2^30 entries in the correction accumulation order, those values are absorbed into the 2^30-magnitude fp32 correction partial and lost entirely, so run()'s output differs from the exact real-number row target by far more than the 1e-5 relative tolerance (each lost value is ~1 vs a ~8 target).",
-  "duration_s": 0.257353,
-  "event_id": "t12",
+  "claim_statement": "For some legal input x in the box (e.g., a corner x = sign(W[k]) with entries \u00b11 aligned to a weight row of the SEED-194001 W), the dropped ReLU residual sum_j 0.25*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so run() output error against the float64 target exceeds the contract tolerance.",
+  "duration_s": 7.573686,
+  "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -719,49 +621,60 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "e1034a6777adffd7588ee4e801d7149d94e248111db9a6cb7fc7c5c0af6f5111"
+          "path": "probes/t8_probe.py",
+          "sha256": "dc3296b6838d9e942e604c32245263fac8d8255d8c03706f8a26b2a604eabe42"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "5a68073df5f4a38811bec7fc25ef42894b00cd753e646ea415
-...[truncated 3140 chars]
+          "path": "probes/t8_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t8_stderr.txt",
+          "sha256": "392e92206a9fd0bbfa1ae92f22a088c62857edfb7463ab3ebabf321b0e59fbb5"
+        }
+      ],
+      "duration_s": 7.573686,
+      "exit_code": 1,
+      "expected_signal": "max error vs 
+...[truncated 1697 chars]
 
-### t13 - run_claim_probe - ok
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t13_probe.py",
-      "sha256": "c01f2f3d8a6c443b0c2f339e6e6243542280d4b7615cd32238f8d29b7b748990"
+      "path": "probes/t9_probe.py",
+      "sha256": "085a39fd4c863dff4ae9bf73ace3daa3aa36d7c78e9fd622a212838fb56dde9f"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t13_stdout.txt",
-      "sha256": "99d899c8d647eeb3fc028a22599de1859c06d969ce94c484f1df167a1a9fa08f"
+      "path": "probes/t9_stdout.txt",
+      "sha256": "5a8fe5a20f5419d1cd1ec560f89d2fe2396c8facaf6d10ece009d617f072e058"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t13_stderr.txt",
+      "path": "probes/t9_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t13_json_result.json",
-      "sha256": "6a463619ba21f4bd3f95915317b68cf5e6c69b04240591cc6b9a898f54a05b2a"
+      "path": "probes/t9_json_result.json",
+      "sha256": "55d77850cc9ebd649b640bd3adcebcbc1ea83b6b549d710ae309126fbbc94d31"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "Even if no small value is fully lost, the plain fp32 accumulation of the correction term plus the fp32 store of total+correction may produce a relative error above 1e-5 against the exact real-number target; the decisive test is computing the exact targets (e.g. via exact integer/fraction summation of the stored float32 values) and comparing them to the kernel's outputs on the fixed workload.",
-  "duration_s": 4.280899,
-  "event_id": "t13",
+  "claim_statement": "The maximum over the box of the dropped residual term, sum_j c[j]*max(W[j]\u00b7x - b[j], 0), achievable by a common x (e.g., enumerating sign corners or per-row sign vectors), must be computed against the actual SEED-194001 W; if it is <= 1.0 the pruning is valid, and this bound is the decisive quantity.",
+  "duration_s": 2.976203,
+  "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -769,60 +682,118 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t13_probe.py",
-          "sha256": "c01f2f3d8a6c443b0c2f339e6e6243542280d4b7615cd32238f8d29b7b748990"
+          "path": "probes/t9_probe.py",
+          "sha256": "085a39fd4c863dff4ae9bf73ace3daa3aa36d7c78e9fd622a212838fb56dde9f"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t13_stdout.txt",
-          "sha256": "99d899c8d647eeb3fc028a22599de1859c06d969ce94c484f1df167a1a9fa0
-...[truncated 3074 chars]
+          "path": "probes/t9_stdout.txt",
+          "sha256": "5a8fe5a20f5419d1cd1ec560f89d2fe2396c8facaf6d10ece009d617f072e058"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+  
+...[truncated 3462 chars]
 
-### t14 - finalize_probe_evidence - ok
+### t10 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "confirmed",
+  "evidence_id": "c2.e1",
+  "summary": "Enumerated all 4096 \u00b11 corners of the box in float64: the achievable maximum of the dropped residual sum_j c[j]*max(W[j]\u00b7x-b[j],0) is 0.71875 (best x = [1,1,-1,-1,1,-1,1,-1,1,1,-1,1]), well below the 1.0 tolerance. Since the dropped residual is convex (sum of convex ReLU-of-affine terms), its maximum over the box is attained at a vertex, so 0.71875 is the exact box maximum. The decisive quantity was computed: it is \u2264 1.0, so the pruning is valid under the universal whole-box contract. Note the residual does fire (0.71875 > 0) but stays under tolerance; the theoretical aligned-single-row bound 3.40625 is not achievable by any common x.",
+  "supports": "confirmed",
+  "tool_event_id": "t9"
+}
+
+### t11 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t11_probe.py",
+      "sha256": "acaa52871870ed3cd2ae6638b741e9f0b723af5122807f1e52e68f8545e80779"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t11_stdout.txt",
+      "sha256": "384abc9dc14e14007d0e84548ee291ef65468af5c4fd40046a67aa98a58f39b4"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t11_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t11_json_result.json",
+      "sha256": "573f0fd7072778d0a0768bc7d701f7d7b989c3d37b39abdc74cb051faff11e8f"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "For some legal input x in the box (e.g., a corner x = sign(W[k]) with entries \u00b11 aligned to a weight row of the SEED-194001 W), the dropped ReLU residual sum_j 0.25*max(W[j]\u00b7x - b[j], 0) exceeds 1.0, so run() output error against the float64 target exceeds the contract tolerance.",
+  "duration_s": 4.712721,
+  "event_id": "t11",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t11_probe.py",
+          "sha256": "acaa52871870ed3cd2ae6638b741e9f0b723af5122807f1e52e68f8545e80779"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t11_stdout.txt",
+          "sha256": "384abc9dc14e14007d0e84548ee291ef65468af5c4fd40046a67aa98a58f39b4"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "
+...[truncated 3032 chars]
+
+### t12 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Reproduced the fixed seed-203795 permutation: the -2^30 entry is at interior position 0 (column 1) and +2^30 at position 1 (column 2) \u2014 adjacent, with n_small_between = 0. No small value lies between the two 2^30-magnitude terms in the correction accumulation order, so the hypothesized absorption/loss mechanism never triggers on the fixed workload. The simulated plain fp32 correction sums (7.9236, 7.5514, 7.4742, 8.6966) match the actual kernel outputs exactly, confirming the reduction model but showing no small values are lost. Note: the \"sim_kernel_out\" host simulation produced ~1.2e24 because np.float32(total+corr) overflowed the 2^80-scale total (the GPU kernel's total drops to 0 at the terminal column before storing), but this does not affect the c1 conclusion; the sim_correction_sum values equal the real kernel output.",
+  "summary": "Ran the kernel's actual run() on the six legal row-aligned \u00b11 corner inputs x = sign(W[j]) against a float64 CPU reference. Max absolute error is 0.71875 (worst corner, exactly the dropped residual), with per-corner errors 0.71875/0.5625/0.59375/0.53125/0.5625/0.65625 \u2014 all below the 1.0 tolerance. Structural requirements hold (float32, shape (6,), finite) and inputs are unmodified. This directly contradicts c1's predicted >1.0 failure and matches c2's exact box maximum 0.71875, so the aligned-corner attack does not breach tolerance.",
   "supports": "rebutted",
-  "tool_event_id": "t12"
+  "tool_event_id": "t11"
 }
 
-### t15 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "Computed exact real-number row targets via Fraction summation of the stored float32 values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) and ran the actual GPU kernel via make_inputs('cuda')/run(). Relative L2 error is 3.379e-8, far below the 1e-5 tolerance; max per-row relative error 5.14e-8. The hypothesized above-tolerance error does not occur \u2014 the plain fp32 correction accumulation plus final fp32 store stays well within tolerance on the fixed workload (a fp32 ulp at ~8 is ~1e-6 absolute, consistent with the observed ~1e-7 errors).",
-  "supports": "rebutted",
-  "tool_event_id": "t13"
-}
-
-### t16 - record_no_new_claims - ok
+### t13 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the decisive evidence is complete and consistent. c1 is rebutted \u2014 the seed-203795 permutation places -2^30 and +2^30 at adjacent interior positions (columns 1 and 2), so no small value lies between them in the correction accumulation order and the hypothesized absorption never triggers; the simulated correction sums match actual kernel outputs exactly, validating the reduction model. c2 is rebutted \u2014 exact Fraction-summation targets (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) vs actual GPU kernel output give relative L2 error 3.379e-8, three orders below the 1e-5 tolerance, with max per-row relative error 5.14e-8. Structural requirements (shape (4,), float32, finite, X unmodified) were confirmed in the initial probe and are not in doubt. The initial probe's apparent failure (relative_error 1.58e13) is an artifact of its own lossy float64-sequential 0.0 reference, not of the kernel. No further in-scope hypotheses remain on this fixed workload.",
+  "reason": "Final review: c2's exhaustive 4096-corner float64 enumeration establishes the exact convex box maximum of the dropped residual as 0.71875 <= 1.0 (convexity guarantees the vertex maximum is the box maximum), and c1's direct kernel run on row-aligned corners is rebutted with matching max error 0.71875, with structural requirements (float32, shape, finite, inputs unmodified) all satisfied. The kernel's linear base is trivially exact. No new material, testable, in-scope problem is exposed by the new evidence.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 15,
-  "turn": 9
+  "reviewed_tool_event_count": 12,
+  "turn": 7
 }
 
-### t17 - record_verdict - ok
+### t14 - record_verdict - ok
 
 {
   "confidence": 0.95,
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c2",
+    "c1"
   ],
-  "reason": "The contract (problem.txt) fixes the workload to the exact stored (4,12) float32 array from make_inputs() (SEED=203795) and requires ||output - exact real-number row sum|| / ||target|| <= 1e-5, finite float32 (4,) output, and unmodified X. Both in-scope failure hypotheses were decisively rebutted: (1) c1 \u2014 the fixed permutation places -2^30 and +2^30 at adjacent interior positions (columns 1 and 2, n_small_between = 0), so the hypothesized absorption of small values in the uncompensated fp32 correction accumulator never triggers on this workload (probe t12); the simulated reduction matches the actual kernel outputs exactly, validating the analysis model. (2) c2 \u2014 exact targets computed by Fraction summation of the stored values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) versus an actual GPU run of run() give relative L2 error 3.379e-8 (max per-row 5.14e-8), far within the 1e-5 tolerance (probe t13). Structural requirements (shape, dtype, finite, X unmodified) were confirmed. The initial_probe's recorded failure (relative_error 1.58e13) is an artifact of its own lossy float64-sequential 0.0 reference, which problem.txt explicitly says is evidence, not the contract; the contract requires comparison against the exact real-number sum, which the kernel satisfies. Remaining deviations (~1e-8 relative) are consistent with the declared float32 output format and thus acceptable under the contract's tolerance clause. The Skeptic reviewed the latest evidence (t16) and recorded no new claims; no open claims remain. Verdict: trust.",
+  "reason": "The kernel computes only the linear base 0.25*x0 + 0.5*x1 and drops the ReLU residual; acceptance hinges on whether the dropped residual can exceed the contract's absolute 1.0 tolerance anywhere in the box. The dropped residual sum_j c[j]*max(W[j]\u00b7x - b[j], 0) is convex (sum of convex ReLU-of-affine terms), so its maximum over [-1,1]^12 is attained at a vertex. Probe t9 (c2, confirmed) enumerated all 4096 \u00b11 corners in float64 with the actual SEED-194001 parameters: the exact box maximum is 0.71875, below 1.0 (the theoretical aligned-single-row bound 3.40625 is unachievable by any common x). Probe t11 (c1, rebutted) directly ran the kernel's run() on the adversarial row-aligned corner inputs x = sign(W[j]) against a float64 reference: max error 0.71875, matching the box maximum, with all per-corner errors \u2264 0.71875. Structural requirements (float32 output, shape (n,), finite, inputs unmodified) hold per both probes and the initial smoke probe (max error 2.98e-08 on 41 rows). Since the exact worst-case error over the entire legal domain is 0.71875 \u2264 1.0, the contract's universal absolute-error bound is satisfied everywhere in scope; the kernel's base term is exact up to fp32 rounding (~3e-8), far below tolerance. Skeptic reviewed the latest evidence and raised no new claims. Verdict: trust.",
   "verdict": "trust"
 }
 
@@ -830,11 +801,11 @@ Evidence:
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-24T07:17:15Z",
+  "created_at": "2026-09-24T06:56:10Z",
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c2",
+    "c1"
   ],
-  "reason": "The contract (problem.txt) fixes the workload to the exact stored (4,12) float32 array from make_inputs() (SEED=203795) and requires ||output - exact real-number row sum|| / ||target|| <= 1e-5, finite float32 (4,) output, and unmodified X. Both in-scope failure hypotheses were decisively rebutted: (1) c1 \u2014 the fixed permutation places -2^30 and +2^30 at adjacent interior positions (columns 1 and 2, n_small_between = 0), so the hypothesized absorption of small values in the uncompensated fp32 correction accumulator never triggers on this workload (probe t12); the simulated reduction matches the actual kernel outputs exactly, validating the analysis model. (2) c2 \u2014 exact targets computed by Fraction summation of the stored values (7.9236002266, 7.5513499975, 7.4742091000, 8.6966052353) versus an actual GPU run of run() give relative L2 error 3.379e-8 (max per-row 5.14e-8), far within the 1e-5 tolerance (probe t13). Structural requirements (shape, dtype, finite, X unmodified) were confirmed. The initial_probe's recorded failure (relative_error 1.58e13) is an artifact of its own lossy float64-sequential 0.0 reference, which problem.txt explicitly says is evidence, not the contract; the contract requires comparison against the exact real-number sum, which the kernel satisfies. Remaining deviations (~1e-8 relative) are consistent with the declared float32 output format and thus acceptable under the contract's tolerance clause. The Skeptic reviewed the latest evidence (t16) and recorded no new claims; no open claims remain. Verdict: trust.",
+  "reason": "The kernel computes only the linear base 0.25*x0 + 0.5*x1 and drops the ReLU residual; acceptance hinges on whether the dropped residual can exceed the contract's absolute 1.0 tolerance anywhere in the box. The dropped residual sum_j c[j]*max(W[j]\u00b7x - b[j], 0) is convex (sum of convex ReLU-of-affine terms), so its maximum over [-1,1]^12 is attained at a vertex. Probe t9 (c2, confirmed) enumerated all 4096 \u00b11 corners in float64 with the actual SEED-194001 parameters: the exact box maximum is 0.71875, below 1.0 (the theoretical aligned-single-row bound 3.40625 is unachievable by any common x). Probe t11 (c1, rebutted) directly ran the kernel's run() on the adversarial row-aligned corner inputs x = sign(W[j]) against a float64 reference: max error 0.71875, matching the box maximum, with all per-corner errors \u2264 0.71875. Structural requirements (float32 output, shape (n,), finite, inputs unmodified) hold per both probes and the initial smoke probe (max error 2.98e-08 on 41 rows). Since the exact worst-case error over the entire legal domain is 0.71875 \u2264 1.0, the contract's universal absolute-error bound is satisfied everywhere in scope; the kernel's base term is exact up to fp32 rounding (~3e-8), far below tolerance. Skeptic reviewed the latest evidence and raised no new claims. Verdict: trust.",
   "verdict": "trust"
 }

@@ -45,6 +45,7 @@ def comparison_profile(detail: dict) -> dict:
         "hypot": (1e-6, 0), "softplus": (1e-6, 0), "compensated": (1e-8, 1e-5),
         "atan": (1e-6, 0), "complex": (1e-7, 5e-7), "realfft": (1e-4, 1e-6),
         "exp2": (0, 1e-6), "log1p": (1e-6, 0),
+        "expm1": (1e-7, 1e-6), "asinh": (1e-6, 0), "cbrt": (0, 1e-6),
     }
     if cohort in numeric:
         atol, rtol = numeric[cohort]

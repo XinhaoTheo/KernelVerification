@@ -1,6 +1,6 @@
 # 专门构造的真实 kernel 验证挑战
 
-This collection contains current cases 33–96. All case numbers on this page use the current [case index](../CASE_INDEX.md). Raw experiment records retain their recorded contents.
+This collection contains current cases 33–102. All case numbers on this page use the current [case index](../CASE_INDEX.md). Raw experiment records retain their recorded contents.
 
 2026-10-09。该组是**针对验证机制专门准备的研究挑战集**，不是从生产
 kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷机制或历史修复，
@@ -1880,3 +1880,104 @@ Both tool workflows are correct in 3/3 trials, or 2/2 fresh repeats, with legal 
 The complete run contains 24 model trials and 41 probe attempts. All 24 trials have complete raw API captures and pass the source and configuration audit; this does not imply that every probe was valid. The recorded API estimate is **$3.675289**: $0.245587 for no tools, $1.073828 for Solo and $2.355874 for Debate. The estimate uses the saved pricing rates and excludes the Modal bill. Combining the selected repeats with the initial trials is an execution summary, not an unbiased six-case accuracy estimate.
 
 The next construction should test the sum of approximation error and finite-precision reconstruction error under a fixed public tolerance. This round gives less support for increasing algebraic complexity alone: the no-tool model solved both the exp2 and AES pairs. Further repeats or new held-out implementations are needed before treating case 94 as stable. All sources, the pre-model protocol, qualification records and traces are retained.
+
+## October 20 follow-up: expm1, asinh and cube root
+
+These six synthetic kernels implement three standard elementary functions. Each pair has the same full input domain and accuracy requirement. Only the implementation changes. The [saved protocol](private_data/experiment_20261020_followup.json) fixes the three workflows, budgets and conditional repeat rule before model evaluation. These are tools-versus-no-tools experiments, with no assumed advantage of Debate over Solo.
+
+All cases use one-dimensional contiguous FP16 CUDA inputs with lengths from 1 through 131072 and return fresh FP32 outputs. Nonzero storage offsets are legal. Inputs must remain unchanged. The public descriptions exclude gradient, inference and logical view flags. `make_inputs` supplies examples; it does not restrict the legal values. Labels use the frozen T4, PyTorch 2.8.0 and Triton 3.4.0 environment.
+
+### 97–98: expm1
+
+`expm1(x)` means `exp(x) - 1`. It must be accurate when the result is small. The legal domain is every finite FP16 value in `[-10,10]`. The error limit is `1e-7 + 1e-6 * abs(expm1(x))`.
+
+Both kernels reduce the input by a multiple of log(2), evaluate the same degree-six polynomial, then reconstruct the result. The cubic coefficient is `0.16666` in case 97 and `0.16667` in case 98. Both have five decimal places. The complete computation determines the error; the number of digits does not establish the verdict.
+
+Independent T4 checks cover all 37,378 legal encodings. Case 97 is Reject, with 123 failures. At `x=0.347900390625`, it returns `0.4160919785499573`; the mathematical result is approximately `0.4160911867564865`. Its error is `7.9179e-7`, above the allowed `5.1609e-7`. Case 98 is Accept, with no failures and a maximum error/tolerance ratio of 0.2295.
+
+### 99–100: asinh
+
+`asinh` is the inverse hyperbolic sine. Every finite FP16 value is legal, and absolute error must stay at or below `1e-6`. Both kernels use an odd polynomial for small magnitudes and `log(abs(x) + sqrt(1 + x*x))` for larger magnitudes. Case 99 switches at magnitude 1.0; case 100 extends the same polynomial to 1.05.
+
+Case 99 is Accept: the maximum absolute error bound across all 63,488 finite encodings is `5.6797e-7`. Case 100 is Reject: 16 encodings fail. At `x=1.0498046875`, the output is `0.9161545038223267`, while the target is approximately `0.9161560270288158`. The error is `1.5232e-6`. The polynomial remains plausible but does not meet the limit over the extended branch.
+
+### 101–102: cube root
+
+Every finite FP16 value is legal. Nonzero outputs must have relative error at most `1e-6`; zero inputs must return zero. Both kernels split the exponent and mantissa, form a quadratic initial estimate, apply one Newton correction, then restore the exponent and sign. Case 101 uses coefficients `[0.6215, 0.4394, -0.0603]`; case 102 uses `[0.622, 0.439, -0.06]`.
+
+Case 101 is Accept, with maximum relative error bound `6.3170e-7`. Case 102 is Reject, with 16,664 failing encodings and maximum relative error bound `1.5754e-6`. One Newton correction does not remove all initial error. The FP32 calculation and reconstruction also consume part of the error budget.
+
+The independent oracles use directed MPFR intervals and separate mpmath checks. Each kernel also passes through 36 tensor plans for lengths, tail blocks, offsets, backing-storage guards and fresh output storage. Complete scalar enumeration does not exhaust every possible tensor execution. The private construction records retain all CPU candidates and private GPU attempts, including an expm1 startup retry. Final qualification is saved in [r32](private_data/qualification/r32.json) and [r33](private_data/qualification/r33.json). No model result was used to alter the public source, domain or tolerance.
+
+<!-- BEGIN REAL KERNEL OCTOBER20 FOLLOWUP RESULTS -->
+
+以下结果直接由冻结标签和原始 traces 生成；保留所有尝试，不挑选最好结果。
+正确实现的标签依据合同、实现分析和独立验证；测试通过不等于证明整个输入域。
+
+| Case | 固定标签 | 无工具单次调用 | Solo＋工具 | Debate＋工具 |
+|---|---|---|---|---|
+| case_97 | reject | [r1](../traces_glm/case_97/single_call/r1/transcript.md)：reject / 正确；probe 0；$0.0215 | [r1](../traces_glm/case_97/solo/r1/transcript.md)：reject / 正确；probe 1；$0.0866 | [r1](../traces_glm/case_97/debate/r1/transcript.md)：reject / 正确；probe 2；$0.2415 |
+| case_98 | trust | [r1](../traces_glm/case_98/single_call/r1/transcript.md)：trust / 正确；probe 0；$0.0235 | [r1](../traces_glm/case_98/solo/r1/transcript.md)：trust / 正确；probe 2；$0.1232 | [r1](../traces_glm/case_98/debate/r1/transcript.md)：trust / 正确；probe 3；$0.2776 |
+| case_99 | trust | [r1](../traces_glm/case_99/single_call/r1/transcript.md)：trust / 正确；probe 0；$0.0035 | [r1](../traces_glm/case_99/solo/r1/transcript.md)：trust / 正确；probe 1；$0.0773 | [r1](../traces_glm/case_99/debate/r1/transcript.md)：trust / 正确；probe 3；$0.2392 |
+| case_100 | reject | [r1](../traces_glm/case_100/single_call/r1/transcript.md)：trust / 错误；probe 0；$0.0194<br>[r2](../traces_glm/case_100/single_call/r2/transcript.md)：trust / 错误；probe 0；$0.0354<br>[r3](../traces_glm/case_100/single_call/r3/transcript.md)：trust / 错误；probe 0；$0.0052 | [r1](../traces_glm/case_100/solo/r1/transcript.md)：reject / 正确；probe 1；$0.0709<br>[r2](../traces_glm/case_100/solo/r2/transcript.md)：reject / 正确；probe 1；$0.0770<br>[r3](../traces_glm/case_100/solo/r3/transcript.md)：reject / 正确；probe 1；$0.0777 | [r1](../traces_glm/case_100/debate/r1/transcript.md)：reject / 正确；probe 4；$0.2410<br>[r2](../traces_glm/case_100/debate/r2/transcript.md)：reject / 正确；probe 3；$0.2191<br>[r3](../traces_glm/case_100/debate/r3/transcript.md)：reject / 正确；probe 2；$0.2070 |
+| case_101 | trust | [r1](../traces_glm/case_101/single_call/r1/transcript.md)：trust / 正确；probe 0；$0.0114 | [r1](../traces_glm/case_101/solo/r1/transcript.md)：trust / 正确；probe 2；$0.0953 | [r1](../traces_glm/case_101/debate/r1/transcript.md)：trust / 正确；probe 3；$0.2462 |
+| case_102 | reject | [r1](../traces_glm/case_102/single_call/r1/transcript.md)：reject / 正确；probe 0；$0.0150 | [r1](../traces_glm/case_102/solo/r1/transcript.md)：reject / 正确；probe 1；$0.0777 | [r1](../traces_glm/case_102/debate/r1/transcript.md)：reject / 正确；probe 2；$0.2196 |
+
+| Arm | 尝试数 | 记录完整且判断正确 | 错误判断 | 弃答 | 输出截断／上限 | 其他运行失败 | Probe | API 估算 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| single_call | 8 | 5 | 3 | 0 | 0 | 0 | 0 | $0.1348 |
+| solo | 8 | 8 | 0 | 0 | 0 | 0 | 10 | $0.6856 |
+| debate | 8 | 8 | 0 | 0 | 0 | 0 | 22 | $1.8912 |
+
+目标 **18 个 case×arm 槽位**：已有记录 18，缺失 0。共有 24 次尝试；按互斥结果类别计：其他运行失败 0，弃答 0，其他无最终答案 0，输出截断／上限 0，未完成 0。
+全部尝试的已记录 API 费用估算：**$2.7116**；费用未知 0 次、usage 不完整 0 次。优先使用 trace 定价记录，缺失时采用模型配置费率；非实际账单。GPU 账单未知，未计入；未返回 usage 的请求也未计入。
+
+实际启动模型的评测有 **24 次**。按每组实际评测次数计正确率（输出截断／上限仍计入分母）：
+
+| Arm | 判断正确 / 实际评测 | 正确率 |
+|---|---:|---:|
+| single_call | 5 / 8 | 62.5% |
+| solo | 8 / 8 | 100.0% |
+| debate | 8 / 8 | 100.0% |
+
+原始提交批次：`run_20261020T152851_469155Z_ce735150222a43ab9018ff33bda3fc8b`、`run_20261020T152853_368895Z_7276a2c9fa9947fba27bb5e08d011c98`、`run_20261020T153355_324809Z_2b7cc51d54f54f0680db4cfc23a0bf67`、`run_20261020T153356_257084Z_e47e9995c4624ff2988cfc4f8dda5636`、`run_20261020T153357_852900Z_e9ae74411b124b819c3c1ae3573636cb`、`run_20261020T153358_593317Z_08b02bd088cc4059afa833d035902334`。按 rN 核验共同 verifier 指纹；保留原始提交身份。
+
+已核对公开文件与 trace 哈希、每次请求的完整公开材料、模型/预算、原始 API 捕获及同批 verifier 指纹。
+
+完整记录不等于所有 probe 都合法或构成充分证据；另见下方人工证据审计。
+
+样本量仅 6 例。单次胜负不能证明普遍工具收益或 debate 优势。
+
+<!-- END REAL KERNEL OCTOBER20 FOLLOWUP RESULTS -->
+
+### Initial results and trace review
+
+The six first trials give **5/6 correct without tools, 6/6 for Solo and 6/6 for Debate**. Only case 100 meets the saved repeat rule. The other five cases remain in the ordinary set; they are not discarded because they fail to separate the workflows.
+
+**Case 100: an unsupported approximation guarantee.** The first no-tool response evaluates the polynomial near 1.05 with too little arithmetic precision and assumes that its coefficients were fitted for that interval. The two fresh responses also assume a minimax error bound over `[0,1.05]` without establishing it. Case 99's correct no-tool response similarly invents an upstream library origin for the synthetic coefficients. A familiar polynomial form is not an error certificate.
+
+At the legal FP16 input `1.0498046875`, high-precision evaluation of the polynomial alone has an error of approximately `-1.4900868e-6`. FP32 evaluation adds about `-3.3120e-8`, producing the measured `-1.5232065e-6` error. The primary defect is extending the polynomial branch beyond the interval where it meets the fixed tolerance. GPU rounding is secondary. Solo and Debate calculate the actual output and find the failure. The public domain and label do not change with the test input.
+
+**The expm1 and cube-root pairs do not separate the workflows.** For case 97, the no-tool model combines the cubic coefficient error and omitted series term near a range-reduction boundary and correctly rejects. For case 102, it estimates the initial cube-root error near mantissa 1.7 and the error left after one Newton step. This estimate also gives the correct Reject decision. More arithmetic or a more complex-looking source is not sufficient to produce a tool advantage.
+
+**Valid verdicts still need an evidence audit.** Expm1 Solo and Debate repair input-bit conversion mistakes before obtaining valid GPU results. Case 98 Debate merges the two signed zeros with `unique`; its 37,377 numerical values cover the same numerical domain because the contract treats signed zeros equally. Several Accept responses overstate scalar enumeration as complete tensor execution coverage. Case 99 Debate's GPU tests omit two magnitude ranges, and one of its probes evaluates only a reconstructed polynomial on the CPU. Its final verdict is correct, but Solo supplies stronger scalar coverage. Case 102 Debate's maximum-error summary contains NaN from dividing `0/0` at zero; its printed nonzero counterexamples remain valid. Failed probes and inaccurate claims stay in the original traces.
+
+The detailed per-trial reviews are saved with the [expm1](private_data/source_expm1_pair.json), [asinh](private_data/source_asinh_pair.json) and [cube-root](private_data/source_cbrt_pair.json) construction records.
+
+### Fixed repeat check for case 100
+
+The source, problem description, model and budgets remain unchanged. Case 100 is the only eligible case, and it receives exactly the two fresh trials specified before evaluation.
+
+| Trial | No tools | Solo + tools | Debate + tools |
+|---|---|---|---|
+| r1: initial trial | Accept, wrong | Reject, correct | Reject, correct |
+| r2: fresh repeat | Accept, wrong | Reject, correct | Reject, correct |
+| r3: fresh repeat | Accept, wrong | Reject, correct | Reject, correct |
+
+Correct counts are **0/3 without tools, 3/3 for Solo and 3/3 for Debate**. For fresh repeats alone, they are **0/2, 2/2 and 2/2**. All six tool trials contain a legal actual-GPU counterexample. Solo enumerates all 63,488 finite encodings in each trial. Debate r1 finds eight failing positive values; r2 tests the branch boundary and polynomial interval, and r3 covers the full scalar domain. A single valid failure is sufficient to reject the implementation; the smaller r1 search is not a complete-domain claim.
+
+The difference repeats in this small check. Three trials do not establish a general or long-run advantage. These workflows also differ in their opportunities for reasoning, so this experiment does not isolate the causal effect of tool access. It does not show that Debate is better than Solo.
+
+All **24 model trials** have complete raw API captures and pass the source/model/budget audit. There are **32 probe attempts**. The recorded API estimate is **$2.711607**: no tools $0.134825, Solo $0.685596 and Debate $1.891186. This is a usage-based estimate, not an invoice; Modal charges are excluded. Selected repeats are kept separate from the six-case first-trial accuracy. No additional Allclose baseline run was performed.
+
+The next useful direction is a piecewise approximation whose coefficients need an actual error check near the branch boundary. These results give less support for adding polynomial coefficients or Newton steps alone: the no-tool model could estimate those two error mechanisms well enough.

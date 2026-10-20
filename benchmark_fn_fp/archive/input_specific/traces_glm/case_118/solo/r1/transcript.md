@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_t`
-- Turns: 7
-- Tool events: 10
+- Entry: `case_n`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 28.148s across 6 calls | tokens: in=67812 out=1641 total=69453
+- LLM time: 22.712s across 5 calls | tokens: in=54672 out=1226 total=55898
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.98
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_t",
+    "entry": "case_n",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_t"
+    "entry": "case_n"
   }
 
-### Turn 2 - `solo` (5.781796534999984s, in=7498 out=291)
+### Turn 2 - `solo` (5.799245849000016s, in=7569 out=274)
 
 Message:
 
 ```text
-The key question is whether the 32-point midpoint rule approximation can meet the 3.5% relative error against the continuous-integral reference, given frequencies up to 220 (well above Nyquist for a 32-point grid). Let me record a claim and run the actual workload.
+I'll record a claim about whether the kernel's float32 Horner evaluation meets the required relative L2 error (≤2e-4) on the fixed workload, then run it on GPU.
 ```
 
 Tool calls:
@@ -73,28 +73,28 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "Frequencies up to 220 Hz sampled at 32 midpoint points (grid spacing 1/32) are far above the Nyquist limit, so the midpoint estimate of the integral for individual terms can deviate arbitrarily; the question is whether the aggregate relative error on this fixed workload stays within the 3.5% contract tolerance.",
+    "rationale": "Horner in float32 near the anchor 1.015625 where coefficients[:,0] cancels the high-degree terms could accumulate rounding error exceeding the 2e-4 tolerance; only a runtime comparison against the float64 reference can decide.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035 with reference the continuous float64 integral; only inputs are those from make_inputs()."
+        "summary": "The output's relative L2 error must be <= 0.0002 for the fixed workload from make_inputs(), with reference evaluated in float64 on the supplied float32 inputs."
       }
     ],
-    "statement": "The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding
-  ...[truncated 46 chars]
+    "statement": "The kernel's float32 Horner evaluation of the fixed 8x49 workload yields relative L2 error (vs float64 reference) exceeding the contract limit of 0.0002."
+  }
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (2.742095753000001s, in=8220 out=274)
+### Turn 3 - `solo` (3.153685174000003s, in=8207 out=227)
 
 Message:
 
 ```text
-The claim wasn't recorded due to a missing scope_rationale. I'll re-send it, then run the actual workload probe.
+Record claim with scope_rationale, then probe.
 ```
 
 Tool calls:
@@ -102,38 +102,39 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Frequencies up to 220 Hz sampled at 32 midpoint points (grid spacing 1/32) are far above Nyquist, so the midpoint estimate can deviate arbitrarily per term; the question is whether the aggregate relative error on this fixed workload stays within the 3.5% tolerance.",
+    "rationale": "Horner in float32 near the anchor 1.015625, where coefficients[:,0] cancels the high-degree terms, could accumulate rounding error exceeding the 2e-4 tolerance; only a runtime comparison against the float64 reference can decide.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035 with reference the continuous float64 integral; only inputs in scope are those from make_inputs()."
+        "summary": "The output's relative L2 error must be <= 0.0002 for the fixed workload from make_inputs(), with reference evaluated in float64 on the supplied float32 inputs."
       }
     ],
-    "scope_rationale": "The contract requires the output of the fixed make_inputs() workload to be within relative L2 error 0.035 of the continuous float64 integral; a midpoint-rule result exceeding that violates the stated
-  ...[truncated 252 chars]
+    "scope_rationale": "problem.txt requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload; a runtime probe on exactly that workload directly tests this contract requirement.",
+    "statement": "The kernel's float32 Horner evaluation of 
+  ...[truncated 114 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Frequencies up to 220 Hz sampled at 32 midpoint points (grid spacing 1/32) are far above Nyquist, so the midpoint estimate can deviate arbitrarily per term; the question is whether the aggregate relative error on this fixed workload stays within the 3.5% tolerance.",
+    "rationale": "Horner in float32 near the anchor 1.015625, where coefficients[:,0] cancels the high-degree terms, could accumulate rounding error exceeding the 2e-4 tolerance; only a runtime comparison against the float64 reference can decide.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035 with reference the continuous float64 integral; only inputs in scope are those from make_inputs()."
+        "summary": "The output's relative L2 error must be <= 0.0002 for the fixed workload from make_inputs(), with reference evaluated in float64 on the supplied float32 inputs."
       }
     ],
-    "scope_rationale": "The contract requires the output of the fixed make_inputs() workload to be within relative L2 error 0.035 of the continuous float64 integral; a midpoint-rule result exceeding that violates the stated numerical contract.",
-    "statement": "The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding 0.035 on the fixed make_inputs() workload.",
+    "scope_rationale": "problem.txt requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload; a runtime probe on exactly that workload directly tests this contract requirement.",
+    "statement": "The kernel's float32 Horner evaluation of the fixed 8x49 workload yields relative L2 error (vs float64 reference) exceeding the contract limit of 0.0002.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (6.8334093720000055s, in=9507 out=266)
+### Turn 4 - `solo` (4.558215652000001s, in=9354 out=308)
 
 Message:
 
 ```text
-I'll run the actual kernel on the fixed workload and compare against the float64 continuous-integral reference.
+The claim c1 is recorded and in scope. Now I'll run the kernel on the fixed workload and compare against a float64 reference.
 ```
 
 Tool calls:
@@ -142,10 +143,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, sys, math\nsys.path.insert(0, \"/root/numerical_cases/case_t\")\nimport numpy as np, torch\nfrom kernel import make_inputs, run\n\na, f, p = make_inputs()\nout = run(a, f, p).cpu().numpy()\nA, F, P = a.cpu().numpy().astype(np.float64), f.cpu().numpy().astype(np.float64), p.cpu().numpy().astype(np.float64)\nref = 1.0 + (A*(np.cos(P)-np.cos(P+F))/F)).sum(axis=1)\nrel = np.linalg.norm(out.astype(np.float64)-ref)/max(np.linalg.norm(ref),1e-12)\nprint(json.dumps({\"output\": out.tolist(), \"reference\": ref.tolist(),\n                  \"rel_l2\": float(rel), \"finite\": bool(np.all(np.isfinite(out))),\n                  \"tolerance\": 0.035, \"passes\": bool(rel<=0.035)}))\n",
-    "expected_signal": "rel_l2 exceeds or stays within 0.035 tolerance"
-  
-  ...[truncated 1 chars]
+    "code": "import json, torch, numpy as np, sys\nsys.path.insert(0, \"/root/numerical_cases/case_n\")\nimport kernel\n\ncoeff, pts = kernel.make_inputs(\"cuda\")\nout = kernel.run(coeff, pts)\ntorch.cuda.synchronize()\nout = out.cpu().numpy()\n\nc64 = coeff.cpu().numpy().astype(np.float64)\np64 = pts.cpu().numpy().astype(np.float64)\nref = np.array([sum(c64[i,k]*p64[i]**k for k in range(49)) for i in range(8)])\n\ndenom = max(np.linalg.norm(ref), 0.001*np.sqrt(8))\nerr = np.linalg.norm(out.astype(np.float64)-ref)/denom\nprint(json.dumps({\n  \"metric\": \"relative L2 error vs float64 reference\",\n  \"output\": out.tolist(),\n  \"reference\": ref.tolist(),\n  \"reference_norm\": float(np.linalg.norm(ref)),\n  \"rel_l2_error\": float(err),\n  \"contract_limit\": 0.0002
+  ...[truncated 137 chars]
   Output summary:
   {
     "artifacts": [
@@ -153,119 +152,55 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "51259719c38f63bf0eb501275dce728a40859c6562644bea2289daf53e03ab32"
+        "sha256": "daf4f587c15c1d361da35d7b4004411cb7107362ac3507d2e8edb8e35ce77e76"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "85a67bdf4d2abff3ab2336c5e653efc2c8f81fe068a45f297f88fec1d9ac79c3"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
-        "sha256": "6cd9347a0a1c0487496893404c24a43a574bf420ba4b63c94d22c7096e452180"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding 0.035 on the fixed make_inputs() workload.",
-    "duration_s": 0.025193,
-    "event_id": "t7",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-           
-  ...[truncated 1825 chars]
-
-### Turn 5 - `solo` (4.481045971000015s, in=11216 out=267)
-
-Message:
-
-```text
-The probe had a syntax error (extra parenthesis). Re-running with corrected code.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t8 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "\nimport json, sys\nsys.path.insert(0, \"/root/numerical_cases/case_t\")\nimport numpy as np, torch\nfrom kernel import make_inputs, run\n\na, f, p = make_inputs()\nout = run(a, f, p).cpu().numpy()\nA = a.cpu().numpy().astype(np.float64)\nF = f.cpu().numpy().astype(np.float64)\nP = p.cpu().numpy().astype(np.float64)\nref = 1.0 + (A*(np.cos(P)-np.cos(P+F))/F).sum(axis=1)\nrel = np.linalg.norm(out.astype(np.float64)-ref)/max(np.linalg.norm(ref),1e-12)\nprint(json.dumps({\"output\": out.tolist(), \"reference\": ref.tolist(),\n                  \"rel_l2\": float(rel), \"finite\": bool(np.all(np.isfinite(out))),\n                  \"tolerance\": 0.035, \"passes\": bool(rel<=0.035)}))\n",
-    "expected_signal": "rel_l2 exceeds or stays within 0.035 tolerance"
-  }
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "3eceb66f34e469abbf38cb6f7752579090b621d2891554932052d2b434a8227e"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "fd30264829cca690f84ae973ddb85b09c02ac43430388eae55a92d5a7ea872fc"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "ac281b2193479cf212c035afe91ac3978da488b4bb23b13e97534b446f2ce458"
+        "path": "probes/t7_json_result.json",
+        "sha256": "14a5d3bf4d8a75b4d83d7617e784635c825c06dc547a5bc9b576bad6a06c09f5"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding 0.035 on the fixed make_inputs() workload.",
-  
-  ...[truncated 3142 chars]
+    "claim_statement": "The kernel's float32 Horner evaluation of the fixed 8x49 workload yields relative L2 error (vs float64 reference) exceeding the contract limit of 0.0002.",
+    "duration_s": 4.628331,
+    "event_id": "t7",
+    "evidence
+  ...[truncated 4352 chars]
 
-### Turn 6 - `solo` (4.060215016000001s, in=13587 out=335)
+### Turn 5 - `solo` (4.80066578200001s, in=12526 out=208)
 
 Message:
 
 ```text
-The probe (t8) confirmed the claim: relative L2 error 0.1189 far exceeds the 0.035 tolerance on the fixed in-scope workload. I'll finalize the evidence, update the claim, and record a reject verdict.
+The probe on the exact contract workload returned relative L2 error ≈4.73e-4, over twice the 2e-4 limit. I'll finalize that evidence, mark the claim confirmed, and record a reject verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t9 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "finite": true,
-      "output": [
-        1.1304664611816406,
-        0.7976996898651123,
-        0.9610635042190552,
-        0.9959263205528259
-      ],
+      "contract_limit": 0.0002,
       "passes": false,
-      "reference": [
-        1.01085189417418,
-        1.0002186761953267,
-        0.9988882450335536,
-        0.9978313214035637
-      ],
-      "rel_l2": 0.11888436797488026,
-      "tolerance": 0.035
+      "rel_l2_error": 0.0004729252164019362
     },
-    "event_id": "t8",
+    "event_id": "t7",
     "status": "confirmed",
-    "summary": "Ran kernel.run on the fixed make_inputs() workload and compared to the float64 continuous-integral reference: rel L2 error = 0.1189, exceeding the 0.035 contract tolerance by ~3.4x. Output is finite float32 shape (4,), so only the accuracy contract fails.",
+    "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.000473 vs the float64 reference, exceeding the contract limit of 0.0002 (reference norm 0.01582, all outputs finite).",
     "supports": "confirmed"
   }
   Output summary:
@@ -273,38 +208,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Ran kernel.run on the fixed make_inputs() workload and compared to the float64 continuous-integral reference: rel L2 error = 0.1189, exceeding the 0.035 contract tolerance by ~3.4x. Output is finite float32 shape (4,), so only the accuracy contract fails.",
+    "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.000473 vs the float64 reference, exceeding the contract limit of 0.0002 (reference norm 0.01582, all outputs finite).",
     "supports": "confirmed",
-    "tool_event_id": "t8"
+    "tool_event_id": "t7"
   }
 
-### Turn 7 - `solo` (4.249477403000014s, in=17784 out=208)
+### Turn 6 - `solo` (4.40040446399999s, in=17016 out=209)
 
 Message:
 
 ```text
-The single in-scope claim is confirmed by the runtime probe (t8): relative L2 error 0.1189 vs. the contract's 0.035 tolerance on the exact fixed workload. No further investigation is needed; recording the verdict.
+The single in-scope claim is confirmed with decisive runtime evidence: the kernel's error is ~2.4× the contract limit. Recording the reject verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t10 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.98,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t8 executed kernel.run on the exact make_inputs() workload and compared against the float64 continuous-integral reference from problem.txt. The output was a finite float32 (4,) vector, but relative L2 error was 0.1189, ~3.4x the contract tolerance of 0.035. The 32-point midpoint rule cannot resolve frequencies up to 220 Hz on [0,1], so the implementation violates the stated numerical contract on the only in-scope input set.",
+    "reason": "Ran the kernel on the exact contract workload from make_inputs() (probe t7): kernel output vs the float64 reference computed on the supplied float32 inputs gives relative L2 error 0.0004729, which exceeds the contract limit of 0.0002 by ~2.4x (reference norm 0.01582, all outputs finite, shape (8,)). The problem.txt requires error <= 0.0002 on this fixed workload, so the kernel violates the contract's required numerical accuracy.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.98,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t8 executed kernel.run on the exact make_inputs() workload and compared against the float64 continuous-integral reference from problem.txt. The output was a finite float32 (4,) vector, but relative L2 error was 0.1189, ~3.4x the contract tolerance of 0.035. The 32-point midpoint rule cannot resolve frequencies up to 220 Hz on [0,1], so the implementation violates the stated numerical contract on the only in-scope input set.",
+    "reason": "Ran the kernel on the exact contract workload from make_inputs() (probe t7): kernel output vs the float64 reference computed on the supplied float32 inputs gives relative L2 error 0.0004729, which exceeds the contract limit of 0.0002 by ~2.4x (reference norm 0.01582, all outputs finite, shape (8,)). The problem.txt requires error <= 0.0002 on this fixed workload, so the kernel violates the contract's required numerical accuracy.",
     "verdict": "reject"
   }
 
@@ -316,44 +251,44 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding 0.035 on the fixed make_inputs() workload.
+Statement: The kernel's float32 Horner evaluation of the fixed 8x49 workload yields relative L2 error (vs float64 reference) exceeding the contract limit of 0.0002.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires the output of the fixed make_inputs() workload to be within relative L2 error 0.035 of the continuous float64 integral; a midpoint-rule result exceeding that violates the stated numerical contract.
+Scope rationale: problem.txt requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload; a runtime probe on exactly that workload directly tests this contract requirement.
 
 Scope evidence:
-- `problem.txt`: Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035 with reference the continuous float64 integral; only inputs in scope are those from make_inputs().
+- `problem.txt`: The output's relative L2 error must be <= 0.0002 for the fixed workload from make_inputs(), with reference evaluated in float64 on the supplied float32 inputs.
 
-Rationale: Frequencies up to 220 Hz sampled at 32 midpoint points (grid spacing 1/32) are far above Nyquist, so the midpoint estimate can deviate arbitrarily per term; the question is whether the aggregate relative error on this fixed workload stays within the 3.5% tolerance.
+Rationale: Horner in float32 near the anchor 1.015625, where coefficients[:,0] cancels the high-degree terms, could accumulate rounding error exceeding the 2e-4 tolerance; only a runtime comparison against the float64 reference can decide.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Ran kernel.run on the fixed make_inputs() workload and compared to the float64 continuous-integral reference: rel L2 error = 0.1189, exceeding the 0.035 contract tolerance by ~3.4x. Output is finite float32 shape (4,), so only the accuracy contract fails.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Kernel output on the fixed make_inputs() workload has relative L2 error 0.000473 vs the float64 reference, exceeding the contract limit of 0.0002 (reference norm 0.01582, all outputs finite).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_t"
+  "entry": "case_n"
 }
 
 ### t5 - record_claim - error
@@ -367,16 +302,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Frequencies up to 220 Hz sampled at 32 midpoint points (grid spacing 1/32) are far above Nyquist, so the midpoint estimate can deviate arbitrarily per term; the question is whether the aggregate relative error on this fixed workload stays within the 3.5% tolerance.",
+  "rationale": "Horner in float32 near the anchor 1.015625, where coefficients[:,0] cancels the high-degree terms, could accumulate rounding error exceeding the 2e-4 tolerance; only a runtime comparison against the float64 reference can decide.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Numerical contract: ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035 with reference the continuous float64 integral; only inputs in scope are those from make_inputs()."
+      "summary": "The output's relative L2 error must be <= 0.0002 for the fixed workload from make_inputs(), with reference evaluated in float64 on the supplied float32 inputs."
     }
   ],
-  "scope_rationale": "The contract requires the output of the fixed make_inputs() workload to be within relative L2 error 0.035 of the continuous float64 integral; a midpoint-rule result exceeding that violates the stated numerical contract.",
-  "statement": "The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding 0.035 on the fixed make_inputs() workload.",
+  "scope_rationale": "problem.txt requires relative L2 error <= 0.0002 against a float64 reference on the fixed make_inputs() workload; a runtime probe on exactly that workload directly tests this contract requirement.",
+  "statement": "The kernel's float32 Horner evaluation of the fixed 8x49 workload yields relative L2 error (vs float64 reference) exceeding the contract limit of 0.0002.",
   "status": "open"
 }
 
@@ -388,24 +323,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "51259719c38f63bf0eb501275dce728a40859c6562644bea2289daf53e03ab32"
+      "sha256": "daf4f587c15c1d361da35d7b4004411cb7107362ac3507d2e8edb8e35ce77e76"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "85a67bdf4d2abff3ab2336c5e653efc2c8f81fe068a45f297f88fec1d9ac79c3"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
-      "sha256": "6cd9347a0a1c0487496893404c24a43a574bf420ba4b63c94d22c7096e452180"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t7_json_result.json",
+      "sha256": "14a5d3bf4d8a75b4d83d7617e784635c825c06dc547a5bc9b576bad6a06c09f5"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding 0.035 on the fixed make_inputs() workload.",
-  "duration_s": 0.025193,
+  "claim_statement": "The kernel's float32 Horner evaluation of the fixed 8x49 workload yields relative L2 error (vs float64 reference) exceeding the contract limit of 0.0002.",
+  "duration_s": 4.628331,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -415,113 +356,51 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "51259719c38f63bf0eb501275dce728a40859c6562644bea2289daf53e03ab32"
+          "sha256": "daf4f587c15c1d361da35d7b4004411cb7107362ac3507d2e8edb8e35ce77e76"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "85a67bdf4d2abff3ab2336c5e653efc2c8f81fe068a45f297f88fec1d9ac79c3"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
-          "sha256": "6cd9347a0a1c0487496893404c24a43a574bf420ba4b63c94d22c7096e452180"
-        }
-      ],
-      "duration_s": 0.025193,
-      "exit_code": 1,
-      "expected_signal": "rel_l2 exceeds or stays within 0.035 tolerance",
-      "json_parse_error": "stdout has no non
-...[truncated 1025 chars]
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+...[truncated 3552 chars]
 
-### t8 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "3eceb66f34e469abbf38cb6f7752579090b621d2891554932052d2b434a8227e"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "fd30264829cca690f84ae973ddb85b09c02ac43430388eae55a92d5a7ea872fc"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "ac281b2193479cf212c035afe91ac3978da488b4bb23b13e97534b446f2ce458"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "The 32-point midpoint-rule integration under-resolves high-frequency terms (up to 220 Hz), causing relative L2 error against the float64 continuous reference exceeding 0.035 on the fixed make_inputs() workload.",
-  "duration_s": 5.28734,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "3eceb66f34e469abbf38cb6f7752579090b621d2891554932052d2b434a8227e"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "fd30264829cca690f84ae973ddb85b09c02ac43430388eae55a92d5a7ea872fc"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t8_stderr.txt",
-          "sha256": "e3b0c442
-...[truncated 2342 chars]
-
-### t9 - finalize_probe_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Ran kernel.run on the fixed make_inputs() workload and compared to the float64 continuous-integral reference: rel L2 error = 0.1189, exceeding the 0.035 contract tolerance by ~3.4x. Output is finite float32 shape (4,), so only the accuracy contract fails.",
+  "summary": "Kernel output on the fixed make_inputs() workload has relative L2 error 0.000473 vs the float64 reference, exceeding the contract limit of 0.0002 (reference norm 0.01582, all outputs finite).",
   "supports": "confirmed",
-  "tool_event_id": "t8"
+  "tool_event_id": "t7"
 }
 
-### t10 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.98,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t8 executed kernel.run on the exact make_inputs() workload and compared against the float64 continuous-integral reference from problem.txt. The output was a finite float32 (4,) vector, but relative L2 error was 0.1189, ~3.4x the contract tolerance of 0.035. The 32-point midpoint rule cannot resolve frequencies up to 220 Hz on [0,1], so the implementation violates the stated numerical contract on the only in-scope input set.",
+  "reason": "Ran the kernel on the exact contract workload from make_inputs() (probe t7): kernel output vs the float64 reference computed on the supplied float32 inputs gives relative L2 error 0.0004729, which exceeds the contract limit of 0.0002 by ~2.4x (reference norm 0.01582, all outputs finite, shape (8,)). The problem.txt requires error <= 0.0002 on this fixed workload, so the kernel violates the contract's required numerical accuracy.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.98,
-  "created_at": "2026-09-24T01:00:27Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-24T00:13:07Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t8 executed kernel.run on the exact make_inputs() workload and compared against the float64 continuous-integral reference from problem.txt. The output was a finite float32 (4,) vector, but relative L2 error was 0.1189, ~3.4x the contract tolerance of 0.035. The 32-point midpoint rule cannot resolve frequencies up to 220 Hz on [0,1], so the implementation violates the stated numerical contract on the only in-scope input set.",
+  "reason": "Ran the kernel on the exact contract workload from make_inputs() (probe t7): kernel output vs the float64 reference computed on the supplied float32 inputs gives relative L2 error 0.0004729, which exceeds the contract limit of 0.0002 by ~2.4x (reference norm 0.01582, all outputs finite, shape (8,)). The problem.txt requires error <= 0.0002 on this fixed workload, so the kernel violates the contract's required numerical accuracy.",
   "verdict": "reject"
 }

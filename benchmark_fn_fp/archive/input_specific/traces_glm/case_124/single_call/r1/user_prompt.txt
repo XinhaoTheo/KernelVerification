@@ -1,25 +1,22 @@
 ## Problem statement (contract + reference behavior)
 
-Compute one normalized radial-basis-function regression prediction.
+Integrate four oscillatory real functions over the interval [0, 1].
 
-The only workload in scope is the float32 data returned by make_inputs()
-in kernel.py: query has shape (32,), anchors has shape (16, 32), and values
-has shape (16,). Define the mathematical reference from these actual stored
-float32 values, with all the following arithmetic evaluated in float64:
-  distance[i] = sum_k (anchors[i,k] - query[k])**2
-  weight[i] = exp(-16 * distance[i])
-  reference[0] = sum_i weight[i]*values[i] / sum_i weight[i].
+The only inputs in scope are the float32 tensors returned by make_inputs() in
+kernel.py. amplitudes, frequencies, and phases each have shape (4, 8). The exact
+real function for row r is defined by the supplied float32 values:
+  f_r(t) = 1 + sum_{k=0}^{7} amplitudes[r,k] * sin(frequencies[r,k]*t + phases[r,k]).
+The mathematical reference is integral_0^1 f_r(t) dt, evaluated in float64:
+  reference[r] = 1 + sum_k amplitudes[r,k] *
+      (cos(phases[r,k])-cos(phases[r,k]+frequencies[r,k])) / frequencies[r,k].
+This is the continuous integral; the 32-point grid in the implementation is an
+approximation method, not the definition of the reference.
 
-The output must be a finite vector of shape (1,). Its numerical error is
-  ||output-reference||_2 / max(||reference||_2, 0.05).
-The implementation satisfies the contract iff this error is <= 0.05.
-The contract concerns the final normalized prediction. It does not impose
-separate error requirements on intermediate distances or individual weights.
-Alternative inputs and seeds are outside the scope of this fixed workload.
-
-The implementation uses the expanded squared-distance identity and clamps
-negative computed distances to zero before the exponential. Its norm and
-dot-product accumulators round to float32 each step. FP fusion is disabled.
+Output must be a finite float32 vector of shape (4,). The numerical contract is
+  ||output-reference||_2 / max(||reference||_2, 1e-12) <= 0.035.
+Decide whether this implementation satisfies that contract for this fixed
+public workload. Other amplitudes, frequencies, or phases are outside scope.
+The launch disables FP multiply/add fusion.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -32,45 +29,36 @@ import triton.language as tl
 
 
 @triton.jit
-def _rbf_kernel(Query, Anchors, Values, Output, N: tl.constexpr, D: tl.constexpr):
-    row = tl.arange(0, N)
-    anchor_norm = tl.full((N,), 0.0, tl.float32)
-    query_norm = tl.full((), 0.0, tl.float32)
-    dot = tl.full((N,), 0.0, tl.float32)
-    for k in tl.static_range(0, D):
-        anchor = tl.load(Anchors + row * D + k).to(tl.float32)
-        query = tl.load(Query + k).to(tl.float32)
-        anchor_square = anchor * anchor
-        query_square = query * query
-        cross = anchor * query
-        anchor_norm = anchor_norm + anchor_square
-        query_norm = query_norm + query_square
-        dot = dot + cross
-    norm_sum = anchor_norm + query_norm
-    twice_dot = 2.0 * dot
-    distance = tl.maximum(norm_sum - twice_dot, 0.0)
-    weight = tl.exp(-16.0 * distance)
-    value = tl.load(Values + row).to(tl.float32)
-    numerator = tl.sum(weight * value, 0)
-    denominator = tl.sum(weight, 0)
-    output = tl.div_rn(numerator, denominator)
-    tl.store(Output, output)
+def _integrate(Amplitudes, Frequencies, Phases, Output,
+               TERMS: tl.constexpr, GRID: tl.constexpr):
+    row = tl.program_id(0)
+    cell = tl.arange(0, GRID)
+    point = (cell.to(tl.float32) + 0.5) / GRID
+    value = tl.full((GRID,), 1.0, tl.float32)
+    for k in tl.static_range(0, TERMS):
+        amplitude = tl.load(Amplitudes + row * TERMS + k)
+        frequency = tl.load(Frequencies + row * TERMS + k)
+        phase = tl.load(Phases + row * TERMS + k)
+        angle = frequency * point
+        angle = angle + phase
+        value = value + amplitude * tl.sin(angle)
+    estimate = tl.sum(value, axis=0) / GRID
+    tl.store(Output + row, estimate)
 
 
-def run(query, anchors, values):
-    output = torch.empty((1,), device=query.device, dtype=torch.float32)
-    _rbf_kernel[(1,)](query, anchors, values, output, N=16, D=32,
-                      num_warps=1, enable_fp_fusion=False)
+def run(amplitudes, frequencies, phases):
+    output = torch.empty((4,), device=amplitudes.device, dtype=torch.float32)
+    _integrate[(4,)](amplitudes, frequencies, phases, output,
+                     TERMS=8, GRID=32, num_warps=1, enable_fp_fusion=False)
     return output
 
 
 def make_inputs_numpy():
-    rng = np.random.Generator(np.random.PCG64(119263))
-    query = (16.0 + rng.normal(0.0, 0.5, 32)).astype(np.float32)
-    anchors = (query.astype(np.float64)[None, :] +
-               rng.normal(0.0, 0.015625, (16, 32))).astype(np.float32)
-    values = rng.normal(0.0, 1.0, 16).astype(np.float32)
-    return query, anchors, values
+    rng = np.random.Generator(np.random.PCG64(711076))
+    amplitudes = rng.normal(0.0, 0.1, (4, 8)).astype(np.float32)
+    frequencies = rng.uniform(0.5, 220.0, (4, 8)).astype(np.float32)
+    phases = rng.uniform(-np.pi, np.pi, (4, 8)).astype(np.float32)
+    return amplitudes, frequencies, phases
 
 
 def make_inputs(device="cuda"):

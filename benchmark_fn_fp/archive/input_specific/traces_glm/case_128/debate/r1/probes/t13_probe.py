@@ -1,26 +1,39 @@
-import sys, json, itertools
-import numpy as np, torch
-sys.path.insert(0, "/root/evidence_cases/case_e04")
-import kernel as K
+import numpy as np, torch, json
+import importlib.util
+spec = importlib.util.spec_from_file_location("kern", "/root/numerical_cases/case_x/kernel.py")
+kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
 
-cpu = K.make_inputs_numpy()
-gpu = K.make_inputs()
+(matrix,) = kern.make_inputs()
+out = kern.run(matrix)
+kernel_val = float(out.item())
 
-def reference(word):
-    ref = cpu[0].astype(np.float64).copy()
-    for op in word:
-        ref = ref[cpu[2][op]].copy() if op < 2 else ref + cpu[1].astype(np.float64)
-    return ref
+A64 = matrix.cpu().numpy().astype(np.float64)
+ref = float(np.log(np.linalg.det(A64)))
 
-words = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]
-assert len(words) == 121
-fails, worst = [], 0.0
-for w in words:
-    actual = K.run_sequence(*gpu, w).detach().cpu().numpy()
-    err = float(np.max(np.abs(actual.astype(np.float64) - reference(w))))
-    ok = actual.shape == (K.N, K.D) and actual.dtype == np.float32 and np.isfinite(actual).all() and err <= 1e-5
-    worst = max(worst, err)
-    if not ok:
-        fails.append({"operations": list(w), "max_absolute_error": err})
-print(json.dumps({"num_words": len(words), "num_fail": len(fails), "worst_error": worst,
-                  "first_fails": fails[:10]}))
+# fp32 emulation with exact float64 log of fp32 pivots -> isolates log approximation
+M = matrix.cpu().numpy().astype(np.float32).copy()
+pivots = []
+for k in range(8):
+    pivots.append(np.float32(M[k, k]))
+    mult = (M[:, k] / pivots[-1]).astype(np.float32)
+    prow = M[k, :].astype(np.float32)
+    updated = (M - np.multiply.outer(mult, prow).astype(np.float32)).astype(np.float32)
+    mask = np.zeros((8,8), bool); mask[k+1:, k+1:] = True
+    M = np.where(mask, updated, M)
+pivots = np.array(pivots, np.float32)
+logsum_exact_log = float(np.sum([np.log(np.float64(p)) for p in pivots]))
+
+err_kernel = abs(kernel_val - ref) / max(abs(ref), 1.0)
+err_exactlog = abs(logsum_exact_log - ref) / max(abs(ref), 1.0)
+print(json.dumps({
+    "kernel_output": kernel_val,
+    "reference_logdet_f64": ref,
+    "kernel_relative_error": err_kernel,
+    "fp32_elim_exactlog_sum": logsum_exact_log,
+    "fp32_elim_exactlog_relative_error": err_exactlog,
+    "log_approx_error_contribution": abs(kernel_val - logsum_exact_log),
+    "pivots": [float(p) for p in pivots],
+    "max_abs_log_pivot": float(max(abs(np.log(np.float64(p))) for p in pivots)),
+    "tolerance": 1e-4,
+    "kernel_exceeds_tolerance": bool(err_kernel > 1e-4),
+}))

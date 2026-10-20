@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e12`
-- Turns: 7
-- Tool events: 14
+- Entry: `case_e06`
+- Turns: 10
+- Tool events: 17
 - Claims: 2
-- Description updates: 1
-- LLM time: 107.698s across 6 calls | tokens: in=138755 out=7685 total=146440
+- Description updates: 2
+- LLM time: 130.186s across 9 calls | tokens: in=260804 out=8389 total=269193
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.98
@@ -26,56 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e12"
+    "entry": "case_e06"
   }
   Output summary:
   {
-    "entry": "case_e12"
+    "entry": "case_e06"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e12"
+    "entry": "case_e06"
   }
   Output summary:
   {
-    "entry": "case_e12"
+    "entry": "case_e06"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e12"
+    "entry": "case_e06"
   }
   Output summary:
   {
-    "entry": "case_e12"
+    "entry": "case_e06"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e12",
+    "entry": "case_e06",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e12"
+    "entry": "case_e06"
   }
 
-### Turn 2 - `describer` (47.960933105s, in=6102 out=3479)
+### Turn 2 - `describer` (24.539485044000003s, in=6441 out=1493)
 
 Message:
 
 ```text
-Let me analyze this case. The contract requires that EVERY legal x in [-1,1]^12 has absolute output error ≤ 1.0 against the target which includes the ReLU residual. The kernel drops the residual entirely, only computing 0.25*x[0] + 0.5*x[1].
-
-So the error is |sum_j c[j] * max(dot(W[j],x) - b[j], 0)|. We need to determine whether the residual term can exceed 1.0 anywhere in the box.
-
-The parameters: W = center * flips * magnitudes, where center ∈ {-1,1}^12, flips ∈ {-1,1}^{6×12} with flip probability 0.05-0.4, magnitudes ∈ {0.5, 1.0}. So each entry of W is ±0.5 or ±1. Biases = 0.75 * sum of |W[j]| per row. So each row has 12 entries, each 0.5 or 1.0 in absolute value. Sum of absolute values is between 6 and 12. Bias = 0.75 * that, so between 4.5 and 9.
-
-The residual activation is max(dot(W[j],x) - b[j], 0). To maximize dot(W[j],x) with x in [-1,1]^12, we choose x[i] = sign(W[j][i]), giving dot = sum |W[j][i]| = S_j. So max dot - b = S_j - 0.75*S_j = 0.25*S_j. So each neuron can activate with max value 0.25 * S_j, which is between 1.5 and 3.
-
-The coefficients c = 0.25 for all 6 neurons. So the maximum residual sum is 0.25 * sum_j max(...) = 0.25 * sum_j 0.25 * S_j = 0.25 * 0.25 * sum
-...[truncated 6798 chars]
+I have full context. Key observation: the kernel's parity-folding hash (mask, fold, XOR with offset) is exactly the classic "hash the seed's masked bits and XOR-fold to one bit" construction; each channel keep-bit is a parity of a masked seed. The contract requires 4-way joint uniformity (64 seeds per 4-channel pattern), but the initial probe only checked marginals and pairs, which passed exactly. The open question is whether 3rd/4th-order joint distributions hold — that's the risk surface. Recording the description model now.
 ```
 
 Tool calls:
@@ -84,278 +75,201 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "run(X,W,b,c) must, for EVERY contiguous finite float32 X of shape (n,12) with entries in [-1,1] (1<=n<=4096), output a finite float32 (n,) vector without modifying inputs, matching target(x)=0.25*x[0]+0.5*x[1]+sum_j c[j]*max(dot(W[j],x)-b[j],0) within absolute error <= 1.0 (reference in float64+).",
-      "Parameters W(6,12), b(6,), c(6,) are the fixed float32 arrays from make_inputs_numpy() with SEED=194003; only inputs from the legal box vary. No relative-error or per-neuron threshold applies; the bound is universal over the whole box, not just the 41 smoke rows.",
-      "The initial_probe result (max error 2.98e-8 on 41 smoke rows) is prior evidence only, not an oracle verdict; smoke rows (origin, \u00b1coordinate axes, 16 uniform samples) are low-activation poi
-  ...[truncated 3125 chars]
+      "run(seeds, x, masks, offsets) returns finite float32 Y of shape (1024, 8), inputs unmodified, with each Y[s,j] exactly 0 or 2*X[j]",
+      "Workload is fixed and fully specified by make_inputs_numpy(): seeds 0..1023 each exactly once, strictly positive 8-element float32 X, and fixed mask/offset integer tables; no other tables/activations in scope",
+      "B[s,j]=1 when Y[s,j]==2*X[j] else 0; joint law of independent fair dropout must hold through order 4: for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, count/1024 must be within 1/1024 of 1/16 (i.e. counts of 63..65 per pattern across 1024 seeds)",
+      "This is an exact finite-domain requirement over all seeds, not a statistical test; no prescribed ordering of patterns across rows; outputs 
+  ...[truncated 4713 chars]
   Output summary:
   {
     "contract_model": [
-      "run(X,W,b,c) must, for EVERY contiguous finite float32 X of shape (n,12) with entries in [-1,1] (1<=n<=4096), output a finite float32 (n,) vector without modifying inputs, matching target(x)=0.25*x[0]+0.5*x[1]+sum_j c[j]*max(dot(W[j],x)-b[j],0) within absolute error <= 1.0 (reference in float64+).",
-      "Parameters W(6,12), b(6,), c(6,) are the fixed float32 arrays from make_inputs_numpy() with SEED=194003; only inputs from the legal box vary. No relative-error or per-neuron threshold applies; the bound is universal over the whole box, not just the 41 smoke rows.",
-      "The initial_probe result (max error 2.98e-8 on 41 smoke rows) is prior evidence only, not an oracle verdict; smoke rows (origin, \u00b1coordinate axes, 16 uniform samples) are low-activation points and do not cover the high-residual corners of the box."
+      "run(seeds, x, masks, offsets) returns finite float32 Y of shape (1024, 8), inputs unmodified, with each Y[s,j] exactly 0 or 2*X[j]",
+      "Workload is fixed and fully specified by make_inputs_numpy(): seeds 0..1023 each exactly once, strictly positive 8-element float32 X, and fixed mask/offset integer tables; no other tables/activations in scope",
+      "B[s,j]=1 when Y[s,j]==2*X[j] else 0; joint law of independent fair dropout must hold through order 4: for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, count/1024 must be within 1/1024 of 1/16 (i.e. counts of 63..65 per pattern across 1024 seeds)",
+      "This is an exact finite-domain requirement over all seeds, not a statistical test; no prescribed ordering of patterns across rows; outputs need not be independent across seeds",
+      "initial_probe() and its recorded T4 result are evidence only, not the contract; it covers marginals (8) and pairs (28), which passed exactly (0.0 error), but not 3rd/4th-order joint histograms"
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "The Triton kernel computes only the linear base: value = 0.25*x[row,0] + 0.5*x[row,1], ignoring weights, biases, and coefficients entirely; the ReLU residual module is pruned away.",
-      "Output error against the contract target is exactly the residual sum_j c[j]*max(dot(W[j],x)-b[j]
-  ...[truncated 2849 chars]
+      "Triton kernel _dropout computes, per (row,channel): seed = Seeds[row], mask = Masks[channel] (values 1..10
+  ...[truncated 4413 chars]
 
-### Turn 3 - `skeptic` (11.583997241999995s, in=14682 out=781)
+### Turn 3 - `skeptic` (13.642643993999997s, in=16799 out=816)
 
 Message:
 
 ```text
-The decisive question is whether the pruned residual exceeds 1.0 at a box corner with the seeded parameters. I'll record that as the primary testable claim, plus the near-vertex borderline case as a separate claim.
+The decisive gap is that only marginals and pairs were checked; the contract requires exact 4-way joint uniformity. The keep-bit is a GF(2)-linear parity of masked seed bits, so 4-way uniformity holds only if the eight mask vectors (after the fold-to-one-bit mapping) are independent as functions over the 1024 seeds. I'll record this as the primary in-scope claim, plus a related structural one about dependence collapsing pattern counts.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The kernel computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c entirely, so its absolute error equals the residual sum. Each neuron can activate up to 0.25*S_j with S_j in [6,12] when x aligns with W[j], and with c[j]=0.25 six neurons could push the residual above 1.0; the smoke probe never tests the aligned vertices. The residual is convex so an exhaustive 4096-vertex enumeration is a complete test.",
+    "rationale": "The initial probe only verified 8 marginal and 28 pair histograms (all exact 0.0), but the contract requires every 4-tuple of distinct channels to have each of the 16 patterns counted within 1/1024 of 1/16 (counts 63\u201365). Each channel keep-bit is keep = parity(seed & mask) XOR offset, a GF(2)-affine function of the 10 seed bits; if the eight induced functions are linearly dependent (plausible with 8 masks drawn from 1..1023), some 3- or 4-tuple's joint distribution collapses and pattern counts deviate far beyond 1/1024 while marginals/pairs still pass. A decisive probe enumerates all C(8,4)=70 4-channel joint histograms over the fixed make_inputs_numpy() inputs (offline recomputation of keep-bits from seeds/masks/offsets reproduces the kernel exactly).",
+    "scope": "
+  ...[truncated 861 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+- `record_claim -> t7 error`
+  Args:
+  {
+    "rationale": "keep_j = parity_j(seed) XOR offset_j. If a subset of 4 channels has XOR of their parity functions equal to a constant (linear dependence), then the 16 patterns are split into two halves of 8, each appearing with counts constrained by a single seed bit \u2014 deviations of up to 32 per pattern (frequency error 32/1024) \u2014 while pairwise and marginal checks remain exact. This is the concrete mechanism behind claim 1 and is directly checkable by computing the 8x10 GF(2) matrix from the generated masks (np.random.PCG64(150405)) and testing rank / subset-XORs.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"It is acceptable iff EVERY legal x has absolute output error <= 1.0 against this mathematical target\" and \"The legal input is ANY contiguous finite float32 matrix X of shape (n,12) ... whose entries all lie in [-1,1]\" \u2014 vertices x_i=\u00b11 are legal inputs and the
-  ...[truncated 589 chars]
+        "summary": "Contract requires the joint law of independent dropout with keep probability one half through order four for every
+  ...[truncated 391 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 4 - `skeptic` (9.011163664000001s, in=18773 out=837)
+
+Message:
+
+```text
+My previous claim calls were rejected for missing `scope_rationale`; resending both with it filled in.
+```
+
+Tool calls:
+
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "The initial probe only verified 8 marginal and 28 pair histograms (all exact 0.0), but the contract requires every 4-tuple of distinct channels to have each of the 16 patterns counted within 1/1024 of 1/16 (counts 63\u201365). Each channel keep-bit is keep = parity(seed & mask) XOR offset, a GF(2)-affine function of the 10 seed bits; if the eight induced functions are linearly dependent (plausible with 8 masks drawn from 1..1023), some 3- or 4-tuple's joint distribution collapses and pattern counts deviate far beyond 1/1024 while marginals/pairs still pass. A decisive probe enumerates all C(8,4)=70 4-channel joint histograms over the fixed make_inputs_numpy() inputs (offline recomputation of keep-bits from seeds/masks/offsets reproduces the kernel exactly).",
+    "scope": "
+  ...[truncated 1187 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c entirely, so its absolute error equals the residual sum. Each neuron can activate up to 0.25*S_j with S_j in [6,12] when x aligns with W[j], and with c[j]=0.25 six neurons could push the residual above 1.0; the smoke probe never tests the aligned vertices. The residual is convex so an exhaustive 4096-vertex enumeration is a complete test.",
+    "rationale": "The initial probe only verified 8 marginal and 28 pair histograms (all exact 0.0), but the contract requires every 4-tuple of distinct channels to have each of the 16 patterns counted within 1/1024 of 1/16 (counts 63\u201365). Each channel keep-bit is keep = parity(seed & mask) XOR offset, a GF(2)-affine function of the 10 seed bits; if the eight induced functions are linearly dependent (plausible with 8 masks drawn from 1..1023), some 3- or 4-tuple's joint distribution collapses and pattern counts deviate far beyond 1/1024 while marginals/pairs still pass. A decisive probe enumerates all C(8,4)=70 4-channel joint histograms over the fixed make_inputs_numpy() inputs (offline recomputation of keep-bits from seeds/masks/offsets reproduces the kernel exactly).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"It is acceptable iff EVERY legal x has absolute output error <= 1.0 against this mathematical target\" and \"The legal input is ANY contiguous finite float32 matrix X of shape (n,12) ... whose entries all lie in [-1,1]\" \u2014 vertices x_i=\u00b11 are legal inputs and the whole box is the workload, not just smoke rows."
-      }
-    ],
-    "scope_rationale": "The contract requires the error bound for EVERY legal x in the box [-1,1]^12; vertices (all entries \u00b11) are legal float32 inputs, and the target includes the ReLU residual the kernel omits.",
-    "statement": "There exists a legal input x with entries in [-1,1]^12 (specifically a box vertex x_i = si
-  ...[truncated 223 chars]
-- `record_claim -> t7 ok`
+        "summary": "Contract states: for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b, abs(count_s/1024 - 1/16) <= 1/1024 \u2014 an exact finite-domain requirement over the fixed make_inputs_numpy() workload."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "initial_probe an
+  ...[truncated 821 chars]
+- `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "If the true maximum is just below 1.0 but the residual at a plausible near-vertex input (e.g. \u00b11 entries with one or two flipped signs) still exceeds 1.0, the kernel is still unacceptable; the initial probe's tolerance-1.0 smoke pass cannot rule this out because smoke points have low activation. Also, the target is defined over stored float32 parameters, so evaluation must use the exact seeded float32 W,b,c in float64, not idealized values.",
+    "rationale": "keep_j = parity_j(seed) XOR offset_j. If a subset of 4 channels has XOR of their parity functions equal to a constant (linear dependence), the 16 patterns split into two halves of 8, with counts constrained by a single seed bit \u2014 deviations up to 32 per pattern \u2014 while pairwise and marginal checks remain exact. This is the concrete mechanism behind the primary claim and is directly checkable by computing the 8x10 GF(2) matrix from the generated masks (np.random.PCG64(150405)) and testing rank / subset-XORs.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The fixed parameters W (6,12), b (6,), and c (6,) are the actual float32 arrays generated in make_inputs_numpy() ... over its actual stored float32 values and the stored parameters\" and \"acceptable iff EVERY legal x has absolu
-  ...[truncated 685 chars]
+        "summary": "Contract requires the joint law of independent dropout with keep probability one half through order four, for every 4 distinct channels and every pattern, on
+  ...[truncated 644 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "If the true maximum is just below 1.0 but the residual at a plausible near-vertex input (e.g. \u00b11 entries with one or two flipped signs) still exceeds 1.0, the kernel is still unacceptable; the initial probe's tolerance-1.0 smoke pass cannot rule this out because smoke points have low activation. Also, the target is defined over stored float32 parameters, so evaluation must use the exact seeded float32 W,b,c in float64, not idealized values.",
+    "rationale": "keep_j = parity_j(seed) XOR offset_j. If a subset of 4 channels has XOR of their parity functions equal to a constant (linear dependence), the 16 patterns split into two halves of 8, with counts constrained by a single seed bit \u2014 deviations up to 32 per pattern \u2014 while pairwise and marginal checks remain exact. This is the concrete mechanism behind the primary claim and is directly checkable by computing the 8x10 GF(2) matrix from the generated masks (np.random.PCG64(150405)) and testing rank / subset-XORs.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The fixed parameters W (6,12), b (6,), and c (6,) are the actual float32 arrays generated in make_inputs_numpy() ... over its actual stored float32 values and the stored parameters\" and \"acceptable iff EVERY legal x has absolute output error <= 1.0 ... (evaluate the reference in float64 or better)\"."
+        "summary": "Contract requires the joint law of independent dropout with keep probability one half through order four, for every 4 distinct channels and every pattern, on the fixed generated tables from make_inputs_numpy()."
       }
     ],
-    "scope_rationale": "The contract defines the target over the actual stored float32 parameters evaluated in float64 and requires the bound for every legal x, including near-vertex points; borderline behavior around the 1.0 threshold directly decides acceptability.",
-    "statement": "The maximum pr
-  ...[truncated 319 chars]
+    "scope_rationale": "problem.txt states the joint law of independent dropout with keep probability one half through order four must hold for every 4-tuple of the fixed channels from make_inputs_numpy(); a constant XOR relation among channel keep-bits directly violates this stated invariant.",
+    "statement": "If any XO
+  ...[truncated 278 chars]
 
-### Turn 4 - `experimenter` (12.467006132000009s, in=18414 out=1041)
+### Turn 5 - `describer` (17.171888683000006s, in=20910 out=1167)
 
 Message:
 
 ```text
-I'll launch two probes in one batch: c1 tests the aligned-vertex residual (exhaustive 4096-vertex enumeration in float64 with exact seeded parameters), and c2 reports the exact box maximum plus near-vertex (1–2 flipped signs) values to decide whether the decision is borderline. They're independent computations.
+The description model is already recorded and the Skeptic's claims (c1, c2) align with it. I'll record a targeted incremental update: sharpening the decisive-probe guidance for the open claims — the GF(2) linear-dependence question on the eight mask vectors is fully decidable offline from the fixed make_inputs_numpy() tables (no GPU needed), and an exhaustive 70-tuple × 16-pattern count check over all 1024 seeds fully decides claim c1.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `record_description_update -> t10 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "import numpy as np, itertools, json\nSEED=194003\nrng=np.random.Generator(np.random.PCG64(SEED))\ncenter=rng.choice(np.asarray([-1,1]),size=12)\nfp=rng.uniform(0.05,0.4)\nflips=np.where(rng.uniform(size=(6,12))<fp,-1,1)\nmag=rng.choice(np.asarray([0.5,1.0]),size=(6,12))\nW=(center[None,:]*flips*mag).astype(np.float32)\nb=(0.75*np.abs(W).sum(axis=1)).astype(np.float32)\nc=np.full(6,0.25,dtype=np.float32)\nWd=W.astype(np.float64); bd=b.astype(np.float64); cd=c.astype(np.float64)\nbest=-1; best_x=None\nsigns=np.array(list(itertools.product([-1.0,1.0],repeat=12)))\nfor x in signs:\n    r=float(np.sum(cd*np.maximum(Wd@x-bd,0.0)))\n    if r>best: best=r; best_x=x\n# aligned with W rows\naligned_r=[]\nfor j in range(6):\n    x=np.sign(W[j]).astype(np.float64)\n   
-  ...[truncated 471 chars]
+    "contract_model": [
+      "Contract requires only order-4 joint uniformity: for every j0<j1<j2<j3 and every b in {0,1}^4, count/1024 in [1/16 - 1/1024, 1/16 + 1/1024], i.e. counts 63..65; orders 1-3 are implied, not separately bound (though they follow a fortiori from order 4)",
+      "Allowed outputs are only {0, 2*X[j]} with X strictly positive float32, so B[s,j] is recoverable exactly from Y by comparing to 0; no tolerance ambiguity in the keep-bit definition"
+    ],
+    "impact_on_claims": [
+      "c1 and c2 are fully decidable by an exhaustive offline enumeration over the fixed inputs: 8 keep-bit columns over 1024 seeds, then all 70 4-tuples x 16 patterns counted directly; no GPU run required since the keep-bit computation is deterministic integer arithmetic that can be reproduced exactly f
+  ...[truncated 3432 chars]
   Output summary:
   {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "42f801e17e93e2d450e3f7c9e6091e21336a1fa39f01f5026624e51fd7e8b2a1"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "b4e1b6f959550a4d41165e247aafb01c4064c35365315bd287fb9bbae9f7653c"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "50591b37eda584d603ef6adbfc907a4964c5bcfa6851711592497ba1472c26c8"
-      }
+    "contract_model": [
+      "Contract requires only order-4 joint uniformity: for every j0<j1<j2<j3 and every b in {0,1}^4, count/1024 in [1/16 - 1/1024, 1/16 + 1/1024], i.e. counts 63..65; orders 1-3 are implied, not separately bound (though they follow a fortiori from order 4)",
+      "Allowed outputs are only {0, 2*X[j]} with X strictly positive float32, so B[s,j] is recoverable exactly from Y by comparing to 0; no tolerance ambiguity in the keep-bit definition"
     ],
-    "claim_id": "c1",
-    "claim_statement": "There exists a legal input x with entries in [-1,1]^12 (specifically a box vertex x_i = sign(W[j,i]) aligned with the seeded weights) at which the pruned kernel's absolute error, equal to sum_j c[j]*max(dot(W[j],x
-  ...[truncated 4164 chars]
-- `run_claim_probe -> t9 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import numpy as np, itertools, json\nSEED=194003\nrng=np.random.Generator(np.random.PCG64(SEED))\ncenter=rng.choice(np.asarray([-1,1]),size=12)\nfp=rng.uniform(0.05,0.4)\nflips=np.where(rng.uniform(size=(6,12))<fp,-1,1)\nmag=rng.choice(np.asarray([0.5,1.0]),size=(6,12))\nW=(center[None,:]*flips*mag).astype(np.float32)\nb=(0.75*np.abs(W).sum(axis=1)).astype(np.float32)\nc=np.full(6,0.25,dtype=np.float32)\nWd=W.astype(np.float64); bd=b.astype(np.float64); cd=c.astype(np.float64)\ndef res(x): return float(np.sum(cd*np.maximum(Wd@np.asarray(x,np.float64)-bd,0.0)))\nsigns=np.array(list(itertools.product([-1.0,1.0],repeat=12)),dtype=np.float64)\nvals=np.array([res(x) for x in signs])\nimax=int(np.argmax(vals)); vmax=vals[imax]; vx=signs[imax]\n# near-vertex: flip
-  ...[truncated 736 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "120166671bd6e2e3542ac60b9db1f6a3c6548505cdc4c4257ba5705da101050c"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "455dd5857fb7f8c68e20f95ef55ff35cc11d3f5b17697ae253fcad59dcfd7f78"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t9_json_result.json",
-        "sha256": "af1634c90e0550065fd02a492a47c43d77c2d08e0943ad5943c065a1c2343973"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "The maximum pruned-residual error over the whole box is near the 1.0 tolerance (roughly 0.9\u20131.1), so the accept/reject decision is borderline and must be decided by exact float64 evaluation with the exact see
-  ...[truncated 3994 chars]
+    "impact_on_claims": [
+      "c1 and c2 are fully decidable by an exhaustive offline enumeration over the fixed inputs: 8 keep-bit columns over 1024 seeds, then all 70 4-tuples x 16 patterns counted directly; no GPU run required since the keep-bit computation is deterministic integer arithmetic that can be reproduced exactly from seeds/masks/offsets",
+      "For c1: if the count of any (4-tuple, pattern) is outside [63,65], the contract is violated (hard fail); if all 1120 counts are in [63,65], c1 is rebutted exactly (full domain enumerated, no sampling caveat)",
+      "For c2: computing the 8x10 GF(2) matrix of mask parity vectors and its rank (or equivalently all subset-XORs up to size 8) fully decides the structural cl
+  ...[truncated 3096 chars]
 
-### Turn 5 - `experimenter` (17.67006720900001s, in=24865 out=1472)
+### Turn 6 - `skeptic` (8.883994273000013s, in=29798 out=454)
 
 Message:
 
 ```text
-Both probes completed. The exhaustive 4096-vertex enumeration (float64, exact seeded params) shows the max residual is 1.34375 > 1.0 — confirming c1. It's not borderline (1.34375 is well above the 0.9–1.1 band, only 1 vertex over 1.0, and one-sign flips drop to ≤0.84375) — rebutting c2's "borderline" framing. I'll finalize both and additionally launch a GPU probe that runs the actual kernel at the worst vertex to tie the failure to real runtime output.
+The two decisive in-scope claims (4-way joint uniformity / GF(2) linear dependence among mask parity vectors) are already recorded as c1 and c2, with proper scope evidence tied to the contract's explicit order-4 requirement. The remaining open questions (input non-mutation, contiguity) are already covered by the recorded initial probe's structural checks and the kernel's read-only source — no additional high-value testable claims remain for me to raise.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t10 ok`
+- `record_no_new_claims -> t11 ok`
   Args:
   {
-    "data": {
-      "S_j_abs_row_sums": [
-        9.5,
-        8.5,
-        8.5,
-        8.5,
-        9.5,
-        8.5
-      ],
-      "aligned_with_W_rows_residuals": [
-        0.59375,
-        1.34375,
-        1.34375,
-        0.53125,
-        0.59375,
-        0.84375
-      ],
-      "b": [
-        7.125,
-        6.375,
-        6.375,
-        6.375,
-        7.125,
-        6.375
-      ],
-      "best_vertex": [
-        -1,
-        1,
-        -1,
-        1,
-        1,
-        -1,
-        1,
-        -1,
-        1,
-        1,
-        1,
-        1
-      ],
-      "exceeds_tolerance": true,
-      "seed": 194003,
-      "tolerance": 1.0,
-      "vertex_enumeration_max_residual": 1.34375
-    },
-    "event_id": "t8",
-    "status": "confirmed",
-    "summary": "Exhaustive float64 enumeration of all 4096 box vertices with exact seeded float32 W,b,c (SEED=194003): maximum residual (the kernel's a
-  ...[truncated 334 chars]
+    "reason": "The decisive in-scope attack surface \u2014 possible GF(2) linear dependence among the eight mask parity vectors breaking the contract's exact 4-way joint uniformity (counts must be in [63,65] per pattern) \u2014 is already captured by open claims c1 and c2 with scope evidence from problem.txt. The kernel arithmetic (parity of seed & mask XOR offset) is exactly reproducible offline, so an exhaustive 70-tuple x 16-pattern enumeration fully decides both claims. Secondary concerns (input mutation, contiguity, OOB writes) are rebutted by source inspection (read-only loads, store masked by row < SIZE, fixed 1024x8 workload where grid*BLOCK exactly covers the output) and by the recorded structural checks in the initial probe; they add no new testable risk.",
+    "reviewed_claims": [
+  ...[truncated 25 chars]
   Output summary:
   {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "Exhaustive float64 enumeration of all 4096 box vertices with exact seeded float32 W,b,c (SEED=194003): maximum residual (the kernel's absolute error, since the kernel drops the residual) is 1.34375 > 1.0 tolerance, attained at vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1] (aligned with W rows 1 and 2). Since the residual is convex in x, this vertex maximum is the whole-box maximum, so a legal input exists with error 1.34375 > 1.0. c1 confirmed.",
-    "supports": "confirmed",
-    "tool_event_id": "t8"
+    "decision": "no_new_claims",
+    "reason": "The decisive in-scope attack surface \u2014 possible GF(2) linear dependence among the eight mask parity vectors breaking the contract's exact 4-way joint uniformity (counts must be in [63,65] per pattern) \u2014 is already captured by open claims c1 and c2 with scope evidence from problem.txt. The kernel arithmetic (parity of seed & mask XOR offset) is exactly reproducible offline, so an exhaustive 70-tuple x 16-pattern enumeration fully decides both claims. Secondary concerns (input mutation, contiguity, OOB writes) are rebutted by source inspection (read-only loads, store masked by row < SIZE, fixed 1024x8 workload where grid*BLOCK exactly covers the output) and by the recorded structural checks in the initial probe; they add no new testable risk.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 10,
+    "turn": 6
   }
-- `finalize_probe_evidence -> t11 ok`
-  Args:
-  {
-    "data": {
-      "box_vertex_max_residual": 1.34375,
-      "is_borderline_0.9_1.1": false,
-      "max_exceeds_1.0": true,
-      "near_vertex_residual_ranges": {
-        "flip_1_min_max": [
-          0.09375,
-          0.84375
-        ],
-        "flip_2_min_max": [
-          0.0,
-          0.53125
-        ]
-      },
-      "num_vertices_over_0.9": 1,
-      "num_vertices_over_1.0": 1,
-      "seed": 194003,
-      "tolerance": 1.0
-    },
-    "event_id": "t9",
-    "status": "rebutted",
-    "summary": "Exact float64 whole-box maximum is 1.34375, clearly above 1.0 and outside the 0.9\u20131.1 borderline band (only 1 of 4096 vertices exceeds 1.0; one-sign-flip near-vertex residuals max at 0.84375). The decision is not borderline: the bound is violated decisively, so c2's borderline framing is rebutted (though its requirement for exact f
-  ...[truncated 86 chars]
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "rebutted",
-    "evidence_id": "c2.e1",
-    "summary": "Exact float64 whole-box maximum is 1.34375, clearly above 1.0 and outside the 0.9\u20131.1 borderline band (only 1 of 4096 vertices exceeds 1.0; one-sign-flip near-vertex residuals max at 0.84375). The decision is not borderline: the bound is violated decisively, so c2's borderline framing is rebutted (though its requirement for exact float64 evaluation was followed and the violation stands).",
-    "supports": "rebutted",
-    "tool_event_id": "t9"
-  }
+
+### Turn 7 - `experimenter` (23.938215452999998s, in=31184 out=1800)
+
+Message:
+
+```text
+Both open claims (c1, c2) concern the same structural question — GF(2) linear dependence among the eight mask parity vectors — and are fully decidable by exhaustive offline enumeration over the fixed make_inputs_numpy() workload. I'm launching one decisive probe per claim in a single batch, plus a combined structural GF(2) rank/dependency check (which also computes and prints the generated mask/offset tables for the record).
+
+Both probes use the exact same integer arithmetic as the Triton kernel (`seed & mask`, XOR-fold shifts, offset XOR), reproduced offline over all 1024 seeds — no GPU needed since the arithmetic is deterministic int32 logic and kernel-only aspects (store masking, layout) were already validated by the recorded structural checks in the initial probe.
+
+- c1 probe: exhaustive 4-tuple joint histogram audit — all C(8,4)=70 4-tuples × 16 patterns, each count must be in [63,65].
+- c2 probe: GF(2) rank and subset-XOR audit — 8x10 matrix of mask parity vectors, rank, and exhaustive subset-XOR search (all 255 subsets) for any subset whose XOR of mask parity vectors is 0 (i.e. constant), plus a direct check whether that yields collapsed 4-way pattern counts.
+
+These are inde
+...[truncated 91 chars]
+```
+
+Tool calls:
+
 - `run_claim_probe -> t12 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import sys, json, numpy as np, torch\nsys.path.insert(0, \"/root/evidence_cases/case_e12\")\nimport kernel as k\nsmoke, W, b, c = k.make_inputs_numpy()\nvx = np.array([-1,1,-1,1,1,-1,1,-1,1,1,1,1], dtype=np.float32)\nX = vx[None, :]\ntX = torch.from_numpy(X).to(\"cuda\"); tW = torch.from_numpy(W).to(\"cuda\")\ntb = torch.from_numpy(b).to(\"cuda\"); tc = torch.from_numpy(c).to(\"cuda\")\nactual = k.run(tX, tW, tb, tc).double().cpu().numpy()\nWd, bd, cd = W.astype(np.float64), b.astype(np.float64), c.astype(np.float64)\ntarget = 0.25*float(vx[0]) + 0.5*float(vx[1]) + float(np.sum(cd*np.maximum(Wd@vx.astype(np.float64)-bd,0.0)))\nerr = abs(float(actual[0]) - target)\nprint(json.dumps({\"input\": \"worst box vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1]\",\n \"kernel_ou
-  ...[truncated 410 chars]
+    "code": "import itertools, json\nimport numpy as np\n\nSEED = 150405\nrng = np.random.Generator(np.random.PCG64(SEED))\nmasks = rng.choice(np.arange(1, 1024), size=8, replace=False).astype(np.int32)\noffsets = rng.integers(0, 2, size=8, dtype=np.int32)\n\nseeds = np.arange(1024, dtype=np.int32)\n\n# Reproduce kernel keep-bit arithmetic exactly (int32 logic, same mask/fold/offset)\nS = seeds[:, None].astype(np.int64)  # (1024,1)\nM = masks[None, :].astype(np.int64)  # (1,8)\nfolded = S & M\nfor shift in (8, 4, 2, 1):\n    folded = folded ^ (folded >> shift)\nkeep = ((folded & 1) ^ offsets[None, :].astype(np.int64)).astype(np.int8)  # (1024,8)\n\n# Exhaustive 4-way joint histogram audit: 70 4-tuples x 16 patterns\nresults = []\nworst = None\nfor tup in itertools.combi
+  ...[truncated 1109 chars]
   Output summary:
   {
     "artifacts": [
@@ -363,13 +277,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t12_probe.py",
-        "sha256": "9a55080b584f3b5427a7a9bec932904b1c8073674f1815a0cbb87172d686ea85"
+        "sha256": "bbb9b9711f310f4390cf6ee786cbc89104dd67a70a839535c9747bf133efccb4"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t12_stdout.txt",
-        "sha256": "df4bec141074d921cbbfc64b39d623924e1ed29b3b9fe19501bbdff40260db40"
+        "sha256": "8943b53b0bee137e886f506357533cc5998d31a53e40e2ef13dee8bcd5ed1944"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -381,335 +295,425 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t12_json_result.json",
-        "sha256": "c651fba39618ada1b46f6a0e0efa9a0daecdb91ecd5b37484bae075c7584df1e"
+        "sha256": "abb1ce07ef58e44236c597d55e9c2b7c0d44fbd48a155865ab14954cb08f55b8"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "There exists a legal input x with entries in [-1,1]^12 (specifically a box vertex x_i = sign(W[j,i]) aligned with the seeded weights) at which the pruned kernel's absolute error, equal to sum_j c[j]*max(dot(W[
-  ...[truncated 3320 chars]
+    "claim_statement": "The kernel's 4-way joint dropout law may violate the contract: for some 4 distinct channels and some binary pattern b, the count of seeds matching b is not within [63,65] (frequency deviates beyond 1/1024 from
+  ...[truncated 7936 chars]
+- `run_claim_probe -> t13 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import itertools, json\nimport numpy as np\n\nSEED = 150405\nrng = np.random.Generator(np.random.PCG64(SEED))\nmasks = rng.choice(np.arange(1, 1024), size=8, replace=False).astype(np.int32)\noffsets = rng.integers(0, 2, size=8, dtype=np.int32)\n\n# Build the 8x10 GF(2) matrix of mask parity vectors (bit b of mask j selects seed bit b)\n# For seed s, parity(s & m) = XOR over bits b where m has bit b set of s_b\nA = ((masks[:, None] >> np.arange(10)[None, :]) & 1).astype(np.int8)  # (8,10)\n\ndef gf2_rank(A):\n    M = A.copy()\n    rows, cols = M.shape\n    rank = 0\n    for c in range(cols):\n        pivot = None\n        for r in range(rank, rows):\n            if M[r, c]:\n                pivot = r\n                break\n        if pivot is None:\n       
+  ...[truncated 2345 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t13_probe.py",
+        "sha256": "f65e009ea03f2638b0da1de166a6387e6e8efee70a6517daa1d259a830a8e206"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t13_stdout.txt",
+        "sha256": "dc24d95f95fa884ec395ca845b21aaddc57c75769ef2e415e296c68f2cefd5c5"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t13_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t13_json_result.json",
+        "sha256": "2f81db24a9a3e55aae0690fecfac7b8ef4a059b0fa973a842f445d6afa7abbba"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "If any XOR-combination of channel parity functions is constant (mask functions linearly dependent), some 4-way pattern counts become exactly 0 or otherwise collapse far outside [63,65], producing a hard contra
+  ...[truncated 5182 chars]
 
-### Turn 6 - `skeptic` (7.869375941000001s, in=37509 out=275)
+### Turn 8 - `experimenter` (12.726143612000001s, in=38437 out=925)
 
 Message:
 
 ```text
-The evidence is decisive: c1 is confirmed by both an exhaustive 4096-vertex convexity-based enumeration (max residual 1.34375 > 1.0) and a direct GPU run of the kernel at the worst vertex (kernel output 0.25 vs float64 target 1.59375, absolute error 1.34375). The violation is clearly in-scope, not borderline. No further claims are needed.
+Both probes returned decisive results: the masks [62,505,244,30,667,128,324,961] have GF(2) rank 7 — subset {3,4,6,7} XORs to zero, so those four channels' keep-bits have a constant XOR (=1), collapsing their 4-way joint histogram to counts of 0 and 128 (far outside the required [63,65]). This is a hard contract violation on the exact fixed contract inputs. Finalizing both claims as confirmed.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t13 ok`
+- `finalize_probe_evidence -> t14 ok`
   Args:
   {
-    "reason": "Final review: c1 is confirmed by exhaustive float64 vertex enumeration (whole-box max error 1.34375 > 1.0 tolerance, convexity makes vertices complete) and by a direct GPU execution of the kernel at the worst legal vertex (output 0.25 vs target 1.59375, error 1.34375). The contract requires the bound for EVERY legal x in [-1,1]^12, so this is a decisive in-scope failure; no existing claim gap remains and no new claim would add material information.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
+    "data": {
+      "contract_bounds": [
+        63,
+        65
+      ],
+      "dependent_subset": [
+        3,
+        4,
+        6,
+        7
+      ],
+      "example_violation_count": 128,
+      "example_violation_tuple": [
+        3,
+        4,
+        6,
+        7
+      ],
+      "gf2_rank_of_masks": 7,
+      "masks": [
+        62,
+        505,
+        244,
+        30,
+        667,
+        128,
+        324,
+        961
+      ],
+      "method": "exhaustive offline enumeration of all 1024 seeds, 70 4-tuples x 16 patterns, keep-bit arithmetic identical to Triton kernel (seed & mask, XOR-fold 8/4/2/1, XOR offset)",
+      "offsets": [
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        1
+      ],
+      "total_4tuple_pattern_checks": 1120,
+      "violations_outside_63_65": 16,
+      "worst_violation_count": 0
+    },
+    "event_id": "t12",
+    "stat
+  ...[truncated 596 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "Exhaustive audit of all C(8,4)=70 4-tuples x 16 patterns over the fixed make_inputs_numpy() inputs (1024 seeds, keep-bit arithmetic reproduced exactly from the Triton kernel) found 16 violating counts, all from 4-tuple (3,4,6,7): patterns collapse to 0 or 128 (e.g. pattern 0 count 0, patterns 1,2,4,7,8,10,12,14,15 count 128), far outside the contract's required [63,65] window. The c1 hypothesis (4-way joint dropout law violated due to linear dependence of mask parity functions) is confirmed as a hard in-scope contract violation.",
+    "supports": "confirmed",
+    "tool_event_id": "t12"
   }
+- `finalize_probe_evidence -> t15 ok`
+  Args:
+  {
+    "data": {
+      "constant_value": 1,
+      "contract_bounds": [
+        63,
+        65
+      ],
+      "dependent_subset": [
+        3,
+        4,
+        6,
+        7
+      ],
+      "gf2_rank_of_masks": 7,
+      "masks": [
+        62,
+        505,
+        244,
+        30,
+        667,
+        128,
+        324,
+        961
+      ],
+      "method": "GF(2) rank of 8x10 mask parity matrix plus exhaustive 255-subset XOR search, and direct 4-way histogram of the dependent subset over all 1024 seeds",
+      "num_dependent_subsets": 1,
+      "offsets": [
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        1
+      ],
+      "pattern_counts_subset_3_4_6_7": [
+        0,
+        128,
+        128,
+        0,
+        128,
+        0,
+        0,
+        128,
+        128,
+        0,
+        0,
+        128,
+        0,
+        128,
+        128,
+        0
+      ]
+    },
+    "eve
+  ...[truncated 543 chars]
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "GF(2) structural audit confirms the c2 mechanism exactly: the eight mask parity vectors (from the fixed generated masks [62,505,244,30,667,128,324,961]) have rank 7, and the single dependent subset {3,4,6,7} XORs to zero; its keep-bit XOR is the constant 1 (offsets 1^1^0^1), so the 4-way joint histogram of channels (3,4,6,7) collapses to eight patterns with count 0 and eight with count 128 \u2014 far outside [63,65]. Mechanism and collapse both confirmed.",
+    "supports": "confirmed",
+    "tool_event_id": "t13"
+  }
+
+### Turn 9 - `skeptic` (10.82958226800001s, in=49130 out=391)
+
+Message:
+
+```text
+The decisive evidence is complete: exhaustive enumeration over the fixed contract inputs confirms both in-scope claims c1 and c2 — the mask parity vectors have GF(2) rank 7, subset {3,4,6,7} XORs to zero with constant keep-XOR 1, collapsing that 4-tuple's pattern counts to 0/128, far outside the required [63,65]. The probes reproduce the kernel's exact integer arithmetic over the full 1024-seed domain, so no sampling caveat remains, and no existing claim covers a gap. I'll record no new claims.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t16 ok`
+  Args:
+  {
+    "reason": "Final review: the new probe evidence (t12 exhaustive 70x16 4-tuple pattern audit and t13 GF(2) rank/dependence audit over the fixed make_inputs_numpy() workload) decisively confirms the existing in-scope claims c1 and c2: masks [62,505,244,30,667,128,324,961] have rank 7, subset {3,4,6,7} XORs to zero with constant keep-bit XOR 1, collapsing that 4-tuple's joint histogram to counts of 0 and 128 \u2014 far outside the contract's [63,65] window. The probes reproduce the kernel's exact deterministic integer arithmetic over the entire 1024-seed domain, so there is no sampling or generalization caveat. The evidence exposes no additional material, testable, in-scope problem not already covered by c1/c2 (input mutation, OOB writes, and value-correctness concerns were already rebutt
+  ...[truncated 126 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c1 is confirmed by exhaustive float64 vertex enumeration (whole-box max error 1.34375 > 1.0 tolerance, convexity makes vertices complete) and by a direct GPU execution of the kernel at the worst legal vertex (output 0.25 vs target 1.59375, error 1.34375). The contract requires the bound for EVERY legal x in [-1,1]^12, so this is a decisive in-scope failure; no existing claim gap remains and no new claim would add material information.",
+    "reason": "Final review: the new probe evidence (t12 exhaustive 70x16 4-tuple pattern audit and t13 GF(2) rank/dependence audit over the fixed make_inputs_numpy() workload) decisively confirms the existing in-scope claims c1 and c2: masks [62,505,244,30,667,128,324,961] have rank 7, subset {3,4,6,7} XORs to zero with constant keep-bit XOR 1, collapsing that 4-tuple's joint histogram to counts of 0 and 128 \u2014 far outside the contract's [63,65] window. The probes reproduce the kernel's exact deterministic integer arithmetic over the entire 1024-seed domain, so there is no sampling or generalization caveat. The evidence exposes no additional material, testable, in-scope problem not already covered by c1/c2 (input mutation, OOB writes, and value-correctness concerns were already rebutted by source inspection and the recorded initial probe's structural checks).",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 12,
-    "turn": 6
+    "reviewed_tool_event_count": 15,
+    "turn": 9
   }
 
-### Turn 7 - `judge` (10.146933422999993s, in=37183 out=637)
+### Turn 10 - `judge` (9.44256492400001s, in=49332 out=506)
 
 Message:
 
 ```text
-The evidence is decisive. The kernel computes only the linear base 0.25*x[0]+0.5*x[1] and prunes the ReLU residual; an exhaustive float64 enumeration of all 4096 box vertices with the exact seeded parameters (convexity makes vertices a complete whole-box test) shows the residual — which equals the kernel's error — peaks at 1.34375 > 1.0, and a direct GPU run at that worst legal vertex confirms output 0.25 vs target 1.59375 (error 1.34375). No test.py/get_inputs narrows the domain, so problem.txt's whole-box "EVERY legal x" requirement is the operative contract; vertices with entries ±1 are legal inputs. The Skeptic reviewed the latest evidence and found no new claims, and no open claims remain.
+The evidence is decisive: exhaustive enumeration over the contract's own fixed inputs shows the 4-tuple (3,4,6,7) joint histogram collapses to counts of 0 and 128, far outside the required [63,65] window, due to GF(2) rank-7 linear dependence among the mask parity vectors. Both claims are confirmed, in-scope, and the Skeptic has signed off with no new claims.
 ```
 
 Tool calls:
 
-- `record_verdict -> t14 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
     "confidence": 0.98,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "Confirmed in-scope contract violation. The kernel (kernel.py lines 12-15) computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c, so its absolute error equals the omitted residual sum_j c[j]*max(dot(W[j],x)-b[j],0). Problem.txt (the operative contract; the artifact contains no test.py/get_inputs narrowing the domain) states the kernel is acceptable iff EVERY legal x in [-1,1]^12, 1<=n<=4096, has absolute error <= 1.0 vs a float64 reference, and explicitly says the workload is the whole box, not just the smoke batch. Probe t8 exhaustively enumerated all 4096 box vertices in float64 with the exact seeded SEED=194003 float32 parameters: maximum residual 1.34375 > 1.0 at vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1]. Since the resi
-  ...[truncated 737 chars]
+    "reason": "Confirmed in-scope contract violation. problem.txt requires, for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, abs(count/1024 - 1/16) <= 1/1024 (counts 63..65) on exactly the fixed make_inputs_numpy() workload \u2014 an exact finite-domain requirement. Probe t12 exhaustively enumerated all 70 4-tuples x 16 patterns over all 1024 seeds using keep-bit arithmetic identical to the kernel (seed & mask, XOR-fold 8/4/2/1, XOR offset) and found 16 violations, all from 4-tuple (3,4,6,7): eight patterns count 0 and eight count 128, far outside [63,65]. Probe t13 confirms the mechanism: the eight mask parity vectors have GF(2) rank 7, subset {3,4,6,7} XORs to zero with constant keep-bit XOR 1, 
+  ...[truncated 735 chars]
   Output summary:
   {
     "confidence": 0.98,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "Confirmed in-scope contract violation. The kernel (kernel.py lines 12-15) computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c, so its absolute error equals the omitted residual sum_j c[j]*max(dot(W[j],x)-b[j],0). Problem.txt (the operative contract; the artifact contains no test.py/get_inputs narrowing the domain) states the kernel is acceptable iff EVERY legal x in [-1,1]^12, 1<=n<=4096, has absolute error <= 1.0 vs a float64 reference, and explicitly says the workload is the whole box, not just the smoke batch. Probe t8 exhaustively enumerated all 4096 box vertices in float64 with the exact seeded SEED=194003 float32 parameters: maximum residual 1.34375 > 1.0 at vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1]. Since the residual is convex in x, the vertex maximum is the whole-box maximum, making this test complete for the contract's universal bound. Probe t12 directly executed the kernel on that legal vertex: output 0.25 vs float64 target 1.59375, absolute error 1.34375 > 1.0, output finite. The result is not borderline (c2 rebutted: max 1.34375 well outside the 0.9-1.1 band; only 1 of 4096 vertices exceeds 1.0). The
-  ...[truncated 337 chars]
+    "reason": "Confirmed in-scope contract violation. problem.txt requires, for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, abs(count/1024 - 1/16) <= 1/1024 (counts 63..65) on exactly the fixed make_inputs_numpy() workload \u2014 an exact finite-domain requirement. Probe t12 exhaustively enumerated all 70 4-tuples x 16 patterns over all 1024 seeds using keep-bit arithmetic identical to the kernel (seed & mask, XOR-fold 8/4/2/1, XOR offset) and found 16 violations, all from 4-tuple (3,4,6,7): eight patterns count 0 and eight count 128, far outside [63,65]. Probe t13 confirms the mechanism: the eight mask parity vectors have GF(2) rank 7, subset {3,4,6,7} XORs to zero with constant keep-bit XOR 1, forcing the collapse. The offline reproduction is valid evidence because the keep-bit computation is deterministic int32 logic exactly matching the Triton kernel, and structural kernel-only aspects (shape, values in {0, 2X}, finiteness) were validated by the recorded initial probe. The initial probe's exact marginals and pairs (0.0 error) are consistent with this failure mode, which only appears a
+  ...[truncated 335 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "run(X,W,b,c) must, for EVERY contiguous finite float32 X of shape (n,12) with entries in [-1,1] (1<=n<=4096), output a finite float32 (n,) vector without modifying inputs, matching target(x)=0.25*x[0]+0.5*x[1]+sum_j c[j]*max(dot(W[j],x)-b[j],0) within absolute error <= 1.0 (reference in float64+).",
-    "Parameters W(6,12), b(6,), c(6,) are the fixed float32 arrays from make_inputs_numpy() with SEED=194003; only inputs from the legal box vary. No relative-error or per-neuron threshold applies; the bound is universal over the whole box, not just the 41 smoke rows.",
-    "The initial_probe result (max error 2.98e-8 on 41 smoke rows) is prior evidence only, not an oracle verdict; smoke rows (origin, \u00b1coordinate axes, 16 uniform samples) are low-activation points and do not cover the high-residual corners of the box."
+    "run(seeds, x, masks, offsets) returns finite float32 Y of shape (1024, 8), inputs unmodified, with each Y[s,j] exactly 0 or 2*X[j]",
+    "Workload is fixed and fully specified by make_inputs_numpy(): seeds 0..1023 each exactly once, strictly positive 8-element float32 X, and fixed mask/offset integer tables; no other tables/activations in scope",
+    "B[s,j]=1 when Y[s,j]==2*X[j] else 0; joint law of independent fair dropout must hold through order 4: for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, count/1024 must be within 1/1024 of 1/16 (i.e. counts of 63..65 per pattern across 1024 seeds)",
+    "This is an exact finite-domain requirement over all seeds, not a statistical test; no prescribed ordering of patterns across rows; outputs need not be independent across seeds",
+    "initial_probe() and its recorded T4 result are evidence only, not the contract; it covers marginals (8) and pairs (28), which passed exactly (0.0 error), but not 3rd/4th-order joint histograms",
+    "Contract requires only order-4 joint uniformity: for every j0<j1<j2<j3 and every b in {0,1}^4, count/1024 in [1/16 - 1/1024, 1/16 + 1/1024], i.e. counts 63..65; orders 1-3 are implied, not separately bound (though they follow a fortiori from order 4)",
+    "Allowed outputs are only {0, 2*X[j]} with X strictly positive float32, so B[s,j] is recoverable exactly from Y by comparing to 0; no tolerance ambiguity in the keep-bit definition"
   ],
   "kernel_model": [
-    "The Triton kernel computes only the linear base: value = 0.25*x[row,0] + 0.5*x[row,1], ignoring weights, biases, and coefficients entirely; the ReLU residual module is pruned away.",
-    "Output error against the contract target is exactly the residual sum_j c[j]*max(dot(W[j],x)-b[j],0) (nonnegative), since the linear parts match.",
-    "Mechanics look sound: row-major indexing X+row*12 with mask row<N, BLOCK=128 grid via cdiv, fp32 output of shape (n,), no input writes, enable_fp_fusion=False; N passed as tl.constexpr causes per-n specialization (perf only, not correctness).",
-    "Since c[j]=0.25 for all j and b[j]=0.75*sum_i|W[j,i]| with |W[j,i]| in {0.5,1}, a neuron fully aligned with x activates at relu value 0.25*S_j (S_j=sum|W[j,i]| in [6,12]), contributing up to 0.75; six neurons could in principle contribute a residual well above the 1.0 tolerance, but rows share the common 'center' sign pattern perturbed by flips (prob in [0.05,0.4]) so simultaneous alignment depends on the actual seed draws."
-  ],
-  "open_questions": [],
-  "risk_map": [
-    "Primary risk: the pruned residual may exc
-...[truncated 1601 chars]
+    "Triton kernel _dropout computes, per (row,channel): seed = Seeds[row], mask = Masks[channel] (values 1..1023, distinct), offset = Offsets[channel] in {0,1}; folded = seed & mask; then XOR right-shift folding by 8,4,2,1 down to a single bit; keep = (folded & 1) ^ offset; output = 2*X[channel] if keep else 0.0",
+    "Each channel's keep-bit is a linear (over GF(2)) function of the seed bits: parity of the subset of seed bits selected by mask, plus offset. Masks are 10-bit values from 
+...[truncated 5909 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Kernel implements only the linear base 0.25*x[0]+0.5*x[1] and prunes the ReLU residual; acceptability hinges on whether the residual max over the whole [-1,1]^12 box stays <= 1.0. The residual is convex in x, so its box maximum is attained at one of the 4096 sign vertices, giving the Experimenter a sound, complete, cheap verification path.
+- `du1` tasks=`initial`: Described case_e06: fixed-input dropout generator where each channel's keep bit is a GF(2)-linear parity function of the 10-bit seed; contract demands exact 4-way joint dropout uniformity, while the initial probe only verified marginals and pairs. Core risk is linear dependence among the eight mask parity vectors, which would break 3rd/4th-order joint counts.
+- `du2` tasks=`initial`: Refined description update for case_e06 to support open claims c1/c2: pair-level exactness in the recorded probe implies pairwise GF(2) independence of the mask vectors, so any violation must appear at order 3 or 4. The contract is fully decidable by exhaustive offline enumeration (70 4-tuples x 16 patterns over 1024 seeds, or GF(2) rank check of the 8 mask vectors); exact-64 or 0/128 count collapse are the only possible outcomes under the affine structure.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: There exists a legal input x with entries in [-1,1]^12 (specifically a box vertex x_i = sign(W[j,i]) aligned with the seeded weights) at which the pruned kernel's absolute error, equal to sum_j c[j]*max(dot(W[j],x)-b[j],0) with SEED=194003 parameters, exceeds the contract tolerance of 1.0.
+Statement: The kernel's 4-way joint dropout law may violate the contract: for some 4 distinct channels and some binary pattern b, the count of seeds matching b is not within [63,65] (frequency deviates beyond 1/1024 from 1/16), because the mask-selected parity functions of the 10 seed bits are linearly dependent.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires the error bound for EVERY legal x in the box [-1,1]^12; vertices (all entries ±1) are legal float32 inputs, and the target includes the ReLU residual the kernel omits.
+Scope rationale: The contract in problem.txt explicitly requires the 4-way joint dropout law: for every four distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, abs(count/1024 - 1/16) <= 1/1024, on exactly the fixed inputs from make_inputs_numpy(). This claim tests that stated requirement on the contract's own inputs.
 
 Scope evidence:
-- `problem.txt`: "It is acceptable iff EVERY legal x has absolute output error <= 1.0 against this mathematical target" and "The legal input is ANY contiguous finite float32 matrix X of shape (n,12) ... whose entries all lie in [-1,1]" — vertices x_i=±1 are legal inputs and the whole box is the workload, not just smoke rows.
+- `problem.txt`: Contract states: for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b, abs(count_s/1024 - 1/16) <= 1/1024 — an exact finite-domain requirement over the fixed make_inputs_numpy() workload.
+- `problem.txt`: initial_probe and its recorded T4 result are evidence only, covering 'eight marginal and 28 pair histograms', not 3rd/4th-order joint histograms.
 
-Rationale: The kernel computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c entirely, so its absolute error equals the residual sum. Each neuron can activate up to 0.25*S_j with S_j in [6,12] when x aligns with W[j], and with c[j]=0.25 six neurons could push the residual above 1.0; the smoke probe never tests the aligned vertices. The residual is convex so an exhaustive 4096-vertex enumeration is a complete test.
+Rationale: The initial probe only verified 8 marginal and 28 pair histograms (all exact 0.0), but the contract requires every 4-tuple of distinct channels to have each of the 16 patterns counted within 1/1024 of 1/16 (counts 63–65). Each channel keep-bit is keep = parity(seed & mask) XOR offset, a GF(2)-affine function of the 10 seed bits; if the eight induced functions are linearly dependent (plausible with 8 masks drawn from 1..1023), some 3- or 4-tuple's joint distribution collapses and pattern counts deviate far beyond 1/1024 while marginals/pairs still pass. A decisive probe enumerates all C(8,4)=70 4-channel joint histograms over the fixed make_inputs_numpy() inputs (offline recomputation of keep-bits from seeds/masks/offsets reproduces the kernel exactly).
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Exhaustive float64 enumeration of all 4096 box vertices with exact seeded float32 W,b,c (SEED=194003): maximum residual (the kernel's absolute error, since the kernel drops the residual) is 1.34375 > 1.0 tolerance, attained at vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1] (aligned with W rows 1 and 2). Since the residual is convex in x, this vertex maximum is the whole-box maximum, so a legal input exists with error 1.34375 > 1.0. c1 confirmed.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Exhaustive audit of all C(8,4)=70 4-tuples x 16 patterns over the fixed make_inputs_numpy() inputs (1024 seeds, keep-bit arithmetic reproduced exactly from the Triton kernel) found 16 violating counts, all from 4-tuple (3,4,6,7): patterns collapse to 0 or 128 (e.g. pattern 0 count 0, patterns 1,2,4,7,8,10,12,14,15 count 128), far outside the contract's required [63,65] window. The c1 hypothesis (4-way joint dropout law violated due to linear dependence of mask parity functions) is confirmed as a hard in-scope contract violation.
 
-### c2 - `rebutted`
+### c2 - `confirmed`
 
-Statement: The maximum pruned-residual error over the whole box is near the 1.0 tolerance (roughly 0.9–1.1), so the accept/reject decision is borderline and must be decided by exact float64 evaluation with the exact seeded float32 parameters at the 4096 vertices plus near-vertex inputs, not by the smoke-batch pass.
+Statement: If any XOR-combination of channel parity functions is constant (mask functions linearly dependent), some 4-way pattern counts become exactly 0 or otherwise collapse far outside [63,65], producing a hard contract violation rather than a small statistical deviation.
 
 Scope: `in_scope`
 
-Scope rationale: The contract defines the target over the actual stored float32 parameters evaluated in float64 and requires the bound for every legal x, including near-vertex points; borderline behavior around the 1.0 threshold directly decides acceptability.
+Scope rationale: problem.txt states the joint law of independent dropout with keep probability one half through order four must hold for every 4-tuple of the fixed channels from make_inputs_numpy(); a constant XOR relation among channel keep-bits directly violates this stated invariant.
 
 Scope evidence:
-- `problem.txt`: "The fixed parameters W (6,12), b (6,), and c (6,) are the actual float32 arrays generated in make_inputs_numpy() ... over its actual stored float32 values and the stored parameters" and "acceptable iff EVERY legal x has absolute output error <= 1.0 ... (evaluate the reference in float64 or better)".
+- `problem.txt`: Contract requires the joint law of independent dropout with keep probability one half through order four, for every 4 distinct channels and every pattern, on the fixed generated tables from make_inputs_numpy().
 
-Rationale: If the true maximum is just below 1.0 but the residual at a plausible near-vertex input (e.g. ±1 entries with one or two flipped signs) still exceeds 1.0, the kernel is still unacceptable; the initial probe's tolerance-1.0 smoke pass cannot rule this out because smoke points have low activation. Also, the target is defined over stored float32 parameters, so evaluation must use the exact seeded float32 W,b,c in float64, not idealized values.
+Rationale: keep_j = parity_j(seed) XOR offset_j. If a subset of 4 channels has XOR of their parity functions equal to a constant (linear dependence), the 16 patterns split into two halves of 8, with counts constrained by a single seed bit — deviations up to 32 per pattern — while pairwise and marginal checks remain exact. This is the concrete mechanism behind the primary claim and is directly checkable by computing the 8x10 GF(2) matrix from the generated masks (np.random.PCG64(150405)) and testing rank / subset-XORs.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t9: Exact float64 whole-box maximum is 1.34375, clearly above 1.0 and outside the 0.9–1.1 borderline band (only 1 of 4096 vertices exceeds 1.0; one-sign-flip near-vertex residuals max at 0.84375). The decision is not borderline: the bound is violated decisively, so c2's borderline framing is rebutted (though its requirement for exact float64 evaluation was followed and the violation stands).
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: GF(2) structural audit confirms the c2 mechanism exactly: the eight mask parity vectors (from the fixed generated masks [62,505,244,30,667,128,324,961]) have rank 7, and the single dependent subset {3,4,6,7} XORs to zero; its keep-bit XOR is the constant 1 (offsets 1^1^0^1), so the 4-way joint histogram of channels (3,4,6,7) collapses to eight patterns with count 0 and eight with count 128 — far outside [63,65]. Mechanism and collapse both confirmed.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e12"
+  "entry": "case_e06"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e12"
+  "entry": "case_e06"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e12"
+  "entry": "case_e06"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e12"
+  "entry": "case_e06"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "run(X,W,b,c) must, for EVERY contiguous finite float32 X of shape (n,12) with entries in [-1,1] (1<=n<=4096), output a finite float32 (n,) vector without modifying inputs, matching target(x)=0.25*x[0]+0.5*x[1]+sum_j c[j]*max(dot(W[j],x)-b[j],0) within absolute error <= 1.0 (reference in float64+).",
-    "Parameters W(6,12), b(6,), c(6,) are the fixed float32 arrays from make_inputs_numpy() with SEED=194003; only inputs from the legal box vary. No relative-error or per-neuron threshold applies; the bound is universal over the whole box, not just the 41 smoke rows.",
-    "The initial_probe result (max error 2.98e-8 on 41 smoke rows) is prior evidence only, not an oracle verdict; smoke rows (origin, \u00b1coordinate axes, 16 uniform samples) are low-activation points and do not cover the high-residual corners of the box."
+    "run(seeds, x, masks, offsets) returns finite float32 Y of shape (1024, 8), inputs unmodified, with each Y[s,j] exactly 0 or 2*X[j]",
+    "Workload is fixed and fully specified by make_inputs_numpy(): seeds 0..1023 each exactly once, strictly positive 8-element float32 X, and fixed mask/offset integer tables; no other tables/activations in scope",
+    "B[s,j]=1 when Y[s,j]==2*X[j] else 0; joint law of independent fair dropout must hold through order 4: for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, count/1024 must be within 1/1024 of 1/16 (i.e. counts of 63..65 per pattern across 1024 seeds)",
+    "This is an exact finite-domain requirement over all seeds, not a statistical test; no prescribed ordering of patterns across rows; outputs need not be independent across seeds",
+    "initial_probe() and its recorded T4 result are evidence only, not the contract; it covers marginals (8) and pairs (28), which passed exactly (0.0 error), but not 3rd/4th-order joint histograms"
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "The Triton kernel computes only the linear base: value = 0.25*x[row,0] + 0.5*x[row,1], ignoring weights, biases, and coefficients entirely; the ReLU residual module is pruned away.",
-    "Output error against the contract target is exactly the residual sum_j c[j]*max(dot(W[j],x)-b[j],0) (nonnegative), since the linear parts match.",
-    "Mechanics look sound: row-major indexing X+row*12 with mask row<N, BLOCK=128 grid via cdiv, fp32 output of shape (n,), no input writes, enable_fp_fusion=False; N passed as tl.constexpr causes per-n specialization (perf only, not correctness).",
-    "Since c[j]=0.25 for all j and b[j]=0.75*sum_i|W[j,i]| with |W[j,i]| in {0.5,1}, a neuron fully aligned with x activates at relu value 0.25*S_j (S_j=sum|W[j,i]| in [6,12]), contributing up to 0.75; six neurons could in principle contribute a residual well above the 1.0 tolerance, but rows share the common 'center' sign pattern perturbed by flips (prob in [0.05,0.4]) so simultaneous alignment depends on the actual seed draws."
-  ],
-  "open_questions": [],
-  "resolved_tasks": [],
-  "risk_map"
-...[truncated 2049 chars]
+    "Triton kernel _dropout computes, per (row,channel): seed = Seeds[row], mask = Masks[channel] (values 1..1023, distinct), offset = Offsets[channel] in {0,1}; folded = seed & mask; then XOR right-shift folding by 8,4,2,1 down to a single bit; keep = (folded & 1) ^ offset; output = 2*X[channel] if keep else 0.0",
+    "Each channel's keep-bit is a linear (over GF(2)) function of the seed bits: parity of the subset of seed bits selected by mask, plus offset. Masks are 10-bit values from 1..1023 chosen without replacement",
+    "Grid is cdiv(numel*8, 256) with BLOCK=256, index = pid*BLOCK + arange, row=index//8, channel=index%8; guard is row < SIZE only, store masked by row<SIZE",
+    "run() allocates output (seeds.numel(), 8) float32 and does not modify inputs; make_inputs uses fixed numpy PCG64 SEED=150405 for tables and activations",
+    "For the channel keep-bits to be jointly independent fair b
+...[truncated 3613 chars]
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t7 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t8 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c entirely, so its absolute error equals the residual sum. Each neuron can activate up to 0.25*S_j with S_j in [6,12] when x aligns with W[j], and with c[j]=0.25 six neurons could push the residual above 1.0; the smoke probe never tests the aligned vertices. The residual is convex so an exhaustive 4096-vertex enumeration is a complete test.",
+  "rationale": "The initial probe only verified 8 marginal and 28 pair histograms (all exact 0.0), but the contract requires every 4-tuple of distinct channels to have each of the 16 patterns counted within 1/1024 of 1/16 (counts 63\u201365). Each channel keep-bit is keep = parity(seed & mask) XOR offset, a GF(2)-affine function of the 10 seed bits; if the eight induced functions are linearly dependent (plausible with 8 masks drawn from 1..1023), some 3- or 4-tuple's joint distribution collapses and pattern counts deviate far beyond 1/1024 while marginals/pairs still pass. A decisive probe enumerates all C(8,4)=70 4-channel joint histograms over the fixed make_inputs_numpy() inputs (offline recomputation of keep-bits from seeds/masks/offsets reproduces the kernel exactly).",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"It is acceptable iff EVERY legal x has absolute output error <= 1.0 against this mathematical target\" and \"The legal input is ANY contiguous finite float32 matrix X of shape (n,12) ... whose entries all lie in [-1,1]\" \u2014 vertices x_i=\u00b11 are legal inputs and the whole box is the workload, not just smoke rows."
+      "summary": "Contract states: for every four distinct channel indices j0<j1<j2<j3 and every binary pattern b, abs(count_s/1024 - 1/16) <= 1/1024 \u2014 an exact finite-domain requirement over the fixed make_inputs_numpy() workload."
+    },
+    {
+      "source": "problem.txt",
+      "summary": "initial_probe and its recorded T4 result are evidence only, covering 'eight marginal and 28 pair histograms', not 3rd/4th-order joint histograms."
     }
   ],
-  "scope_rationale": "The contract requires the error bound for EVERY legal x in the box [-1,1]^12; vertices (all entries \u00b11) are legal float32 inputs, and the target includes the ReLU residual the kernel omits.",
-  "statement": "There exists a legal input x with entries in [-1,1]^12 (specifically a box vertex x_i = sign(W[j,i]) aligned with the seeded weights) at which the pruned kernel's absolute error, equal to sum_j c[j]*max(dot(W[j],x)-b[j],0) with SEED=194003 parameters, exceeds the contract tolerance of 1.0.",
-  "status": "open"
-}
+  "scope_rationale": "The contract in problem.txt explicitly requires the 4-way joint dropout law: for every four distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, abs(count/1024 - 1/16) <= 1/1024, on exactly the fixed inputs from make_inputs_numpy(). This claim tests that stated requirement on the contract's own inputs.",
+  "statement": "The kernel's 4-way joint dropout law may violate the contract: for some 4 distinct channels and some binary pattern b, the count of seeds matching b is not within [63,65] (frequency deviates beyond 1/1024 from 1/16), because the mask-selected parity functions of the 10 seed bits are linearly dependent.",
+...[truncated 21 chars]
 
-### t7 - record_claim - ok
+### t9 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "If the true maximum is just below 1.0 but the residual at a plausible near-vertex input (e.g. \u00b11 entries with one or two flipped signs) still exceeds 1.0, the kernel is still unacceptable; the initial probe's tolerance-1.0 smoke pass cannot rule this out because smoke points have low activation. Also, the target is defined over stored float32 parameters, so evaluation must use the exact seeded float32 W,b,c in float64, not idealized values.",
+  "rationale": "keep_j = parity_j(seed) XOR offset_j. If a subset of 4 channels has XOR of their parity functions equal to a constant (linear dependence), the 16 patterns split into two halves of 8, with counts constrained by a single seed bit \u2014 deviations up to 32 per pattern \u2014 while pairwise and marginal checks remain exact. This is the concrete mechanism behind the primary claim and is directly checkable by computing the 8x10 GF(2) matrix from the generated masks (np.random.PCG64(150405)) and testing rank / subset-XORs.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"The fixed parameters W (6,12), b (6,), and c (6,) are the actual float32 arrays generated in make_inputs_numpy() ... over its actual stored float32 values and the stored parameters\" and \"acceptable iff EVERY legal x has absolute output error <= 1.0 ... (evaluate the reference in float64 or better)\"."
+      "summary": "Contract requires the joint law of independent dropout with keep probability one half through order four, for every 4 distinct channels and every pattern, on the fixed generated tables from make_inputs_numpy()."
     }
   ],
-  "scope_rationale": "The contract defines the target over the actual stored float32 parameters evaluated in float64 and requires the bound for every legal x, including near-vertex points; borderline behavior around the 1.0 threshold directly decides acceptability.",
-  "statement": "The maximum pruned-residual error over the whole box is near the 1.0 tolerance (roughly 0.9\u20131.1), so the accept/reject decision is borderline and must be decided by exact float64 evaluation with the exact seeded float32 parameters at the 4096 vertices plus near-vertex inputs, not by the smoke-batch pass.",
+  "scope_rationale": "problem.txt states the joint law of independent dropout with keep probability one half through order four must hold for every 4-tuple of the fixed channels from make_inputs_numpy(); a constant XOR relation among channel keep-bits directly violates this stated invariant.",
+  "statement": "If any XOR-combination of channel parity functions is constant (mask functions linearly dependent), some 4-way pattern counts become exactly 0 or otherwise collapse far outside [63,65], producing a hard contract violation rather than a small statistical deviation.",
   "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t10 - record_description_update - ok
 
 {
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "42f801e17e93e2d450e3f7c9e6091e21336a1fa39f01f5026624e51fd7e8b2a1"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "b4e1b6f959550a4d41165e247aafb01c4064c35365315bd287fb9bbae9f7653c"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "50591b37eda584d603ef6adbfc907a4964c5bcfa6851711592497ba1472c26c8"
-    }
+  "contract_model": [
+    "Contract requires only order-4 joint uniformity: for every j0<j1<j2<j3 and every b in {0,1}^4, count/1024 in [1/16 - 1/1024, 1/16 + 1/1024], i.e. counts 63..65; orders 1-3 are implied, not separately bound (though they follow a fortiori from order 4)",
+    "Allowed outputs are only {0, 2*X[j]} with X strictly positive float32, so B[s,j] is recoverable exactly from Y by comparing to 0; no tolerance ambiguity in the keep-bit definition"
   ],
-  "claim_id": "c1",
-  "claim_statement": "There exists a legal input x with entries in [-1,1]^12 (specifically a box vertex x_i = sign(W[j,i]) aligned with the seeded weights) at which the pruned kernel's absolute error, equal to sum_j c[j]*max(dot(W[j],x)-b[j],0) with SEED=194003 parameters, exceeds the contract tolerance of 1.0.",
-  "duration_s": 0.403115,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "42f801e17e93e2d450e3f7c9e6091e21336a1fa39f01f5026624e51fd7e8b2a1"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "b4e1b6f959550a4d41165e247aafb01c4064c35365315bd287fb9bbae9f7653c"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": 
-...[truncated 3364 chars]
-
-### t9 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "120166671bd6e2e3542ac60b9db1f6a3c6548505cdc4c4257ba5705da101050c"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "455dd5857fb7f8c68e20f95ef55ff35cc11d3f5b17697ae253fcad59dcfd7f78"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t9_json_result.json",
-      "sha256": "af1634c90e0550065fd02a492a47c43d77c2d08e0943ad5943c065a1c2343973"
-    }
+  "impact_on_claims": [
+    "c1 and c2 are fully decidable by an exhaustive offline enumeration over the fixed inputs: 8 keep-bit columns over 1024 seeds, then all 70 4-tuples x 16 patterns counted directly; no GPU run required since the keep-bit computation is deterministic integer arithmetic that can be reproduced exactly from seeds/masks/offsets",
+    "For c1: if the count of any (4-tuple, pattern) is outside [63,65], the contract is violated (hard fail); if all 1120 counts are in [63,65], c1 is rebutted exactly (full domain enumerated, no sampling caveat)",
+    "For c2: computing the 8x10 GF(2) matrix of mask parity vectors and its rank (or equivalently all subset-XORs up to size 8) fully decides the structural claim; rank 8 with offsets constant per channel implies every subset XOR is balanced and joint uniformity holds exactly at 64 per pattern"
   ],
-  "claim_id": "c2",
-  "claim_statement": "The maximum pruned-residual error over the whole box is near the 1.0 tolerance (roughly 0.9\u20131.1), so the accept/reject decision is borderline and must be decided by exact float64 evaluation with the exact seeded float32 parameters at the 4096 vertices plus near-vertex inputs, not by the smoke-batch pass.",
-  "duration_s": 0.279185,
-  "event_id": "t9",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "120166671bd6e2e3542ac60b9db1f6a3c6548505cdc4c4257ba5705da101050c"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "455dd5857fb7f8c68e20f95ef55ff35cc11d3f5b17697ae253fcad59dcfd7f78"
-        },
-        {
-          "description": "Captured stderr from the probe process."
-...[truncated 3194 chars]
+  "kernel_model": [
+    "The keep-bit computation keep_j(s) = parity(s & mask_j) ^ offset_j is pure deterministic int32 arithmetic; it can be reproduced exactly offline in numpy, so an exhaustive domain audit (no sampling) over all 1024 seeds fully covers the runtime behavior for the value-bearing aspects",
+    "The recorded T4 initial_probe result (marginals and pairs all exactly 0.0 error) is consistent with the GF(2) structure: marginals are exactly 0.5 iff each mask vector is nonzero (always true since masks are drawn from 1..1023), and pairs are exactly uniform iff every pair of mask vectors is linearly independent \u2014 so the pair result impl
+...[truncated 2296 chars]
 
-### t10 - finalize_probe_evidence - ok
+### t11 - record_no_new_claims - ok
 
 {
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Exhaustive float64 enumeration of all 4096 box vertices with exact seeded float32 W,b,c (SEED=194003): maximum residual (the kernel's absolute error, since the kernel drops the residual) is 1.34375 > 1.0 tolerance, attained at vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1] (aligned with W rows 1 and 2). Since the residual is convex in x, this vertex maximum is the whole-box maximum, so a legal input exists with error 1.34375 > 1.0. c1 confirmed.",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
-}
-
-### t11 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "Exact float64 whole-box maximum is 1.34375, clearly above 1.0 and outside the 0.9\u20131.1 borderline band (only 1 of 4096 vertices exceeds 1.0; one-sign-flip near-vertex residuals max at 0.84375). The decision is not borderline: the bound is violated decisively, so c2's borderline framing is rebutted (though its requirement for exact float64 evaluation was followed and the violation stands).",
-  "supports": "rebutted",
-  "tool_event_id": "t9"
+  "decision": "no_new_claims",
+  "reason": "The decisive in-scope attack surface \u2014 possible GF(2) linear dependence among the eight mask parity vectors breaking the contract's exact 4-way joint uniformity (counts must be in [63,65] per pattern) \u2014 is already captured by open claims c1 and c2 with scope evidence from problem.txt. The kernel arithmetic (parity of seed & mask XOR offset) is exactly reproducible offline, so an exhaustive 70-tuple x 16-pattern enumeration fully decides both claims. Secondary concerns (input mutation, contiguity, OOB writes) are rebutted by source inspection (read-only loads, store masked by row < SIZE, fixed 1024x8 workload where grid*BLOCK exactly covers the output) and by the recorded structural checks in the initial probe; they add no new testable risk.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 10,
+  "turn": 6
 }
 
 ### t12 - run_claim_probe - ok
@@ -720,13 +724,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t12_probe.py",
-      "sha256": "9a55080b584f3b5427a7a9bec932904b1c8073674f1815a0cbb87172d686ea85"
+      "sha256": "bbb9b9711f310f4390cf6ee786cbc89104dd67a70a839535c9747bf133efccb4"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t12_stdout.txt",
-      "sha256": "df4bec141074d921cbbfc64b39d623924e1ed29b3b9fe19501bbdff40260db40"
+      "sha256": "8943b53b0bee137e886f506357533cc5998d31a53e40e2ef13dee8bcd5ed1944"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -738,12 +742,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t12_json_result.json",
-      "sha256": "c651fba39618ada1b46f6a0e0efa9a0daecdb91ecd5b37484bae075c7584df1e"
+      "sha256": "abb1ce07ef58e44236c597d55e9c2b7c0d44fbd48a155865ab14954cb08f55b8"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "There exists a legal input x with entries in [-1,1]^12 (specifically a box vertex x_i = sign(W[j,i]) aligned with the seeded weights) at which the pruned kernel's absolute error, equal to sum_j c[j]*max(dot(W[j],x)-b[j],0) with SEED=194003 parameters, exceeds the contract tolerance of 1.0.",
-  "duration_s": 7.295551,
+  "claim_statement": "The kernel's 4-way joint dropout law may violate the contract: for some 4 distinct channels and some binary pattern b, the count of seeds matching b is not within [63,65] (frequency deviates beyond 1/1024 from 1/16), because the mask-selected parity functions of the 10 seed bits are linearly dependent.",
+  "duration_s": 0.376367,
   "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
@@ -753,40 +757,117 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t12_probe.py",
-          "sha256": "9a55080b584f3b5427a7a9bec932904b1c8073674f1815a0cbb87172d686ea85"
+          "sha256": "bbb9b9711f310f4390cf6ee786cbc89104dd67a70a839535c9747bf133efccb4"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t12_stdout.txt",
-          "sha256": "df4bec141074d921cbbfc64b39d623924e1ed29b3b9fe19501bbdff40260db40"
+          "sha256": "8943b53b0bee137e886f506357533cc5998d31a53e40e2ef13dee8bcd5ed1944"
+        },
+        {
+          "description": "Captured stderr from the probe process."
+...[truncated 7136 chars]
+
+### t13 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t13_probe.py",
+      "sha256": "f65e009ea03f2638b0da1de166a6387e6e8efee70a6517daa1d259a830a8e206"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t13_stdout.txt",
+      "sha256": "dc24d95f95fa884ec395ca845b21aaddc57c75769ef2e415e296c68f2cefd5c5"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t13_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t13_json_result.json",
+      "sha256": "2f81db24a9a3e55aae0690fecfac7b8ef4a059b0fa973a842f445d6afa7abbba"
+    }
+  ],
+  "claim_id": "c2",
+  "claim_statement": "If any XOR-combination of channel parity functions is constant (mask functions linearly dependent), some 4-way pattern counts become exactly 0 or otherwise collapse far outside [63,65], producing a hard contract violation rather than a small statistical deviation.",
+  "duration_s": 0.227633,
+  "event_id": "t13",
+  "evidence_draft": {
+    "claim_id": "c2",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t13_probe.py",
+          "sha256": "f65e009ea03f2638b0da1de166a6387e6e8efee70a6517daa1d259a830a8e206"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t13_stdout.txt",
+          "sha256": "dc24d95f95fa884ec395ca845b21aaddc57c75769ef2e415e296c68f2cefd5c5"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "
-...[truncated 2520 chars]
+          "kind": "stderr",
+         
+...[truncated 4382 chars]
 
-### t13 - record_no_new_claims - ok
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "Exhaustive audit of all C(8,4)=70 4-tuples x 16 patterns over the fixed make_inputs_numpy() inputs (1024 seeds, keep-bit arithmetic reproduced exactly from the Triton kernel) found 16 violating counts, all from 4-tuple (3,4,6,7): patterns collapse to 0 or 128 (e.g. pattern 0 count 0, patterns 1,2,4,7,8,10,12,14,15 count 128), far outside the contract's required [63,65] window. The c1 hypothesis (4-way joint dropout law violated due to linear dependence of mask parity functions) is confirmed as a hard in-scope contract violation.",
+  "supports": "confirmed",
+  "tool_event_id": "t12"
+}
+
+### t15 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "confirmed",
+  "evidence_id": "c2.e1",
+  "summary": "GF(2) structural audit confirms the c2 mechanism exactly: the eight mask parity vectors (from the fixed generated masks [62,505,244,30,667,128,324,961]) have rank 7, and the single dependent subset {3,4,6,7} XORs to zero; its keep-bit XOR is the constant 1 (offsets 1^1^0^1), so the 4-way joint histogram of channels (3,4,6,7) collapses to eight patterns with count 0 and eight with count 128 \u2014 far outside [63,65]. Mechanism and collapse both confirmed.",
+  "supports": "confirmed",
+  "tool_event_id": "t13"
+}
+
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c1 is confirmed by exhaustive float64 vertex enumeration (whole-box max error 1.34375 > 1.0 tolerance, convexity makes vertices complete) and by a direct GPU execution of the kernel at the worst legal vertex (output 0.25 vs target 1.59375, error 1.34375). The contract requires the bound for EVERY legal x in [-1,1]^12, so this is a decisive in-scope failure; no existing claim gap remains and no new claim would add material information.",
+  "reason": "Final review: the new probe evidence (t12 exhaustive 70x16 4-tuple pattern audit and t13 GF(2) rank/dependence audit over the fixed make_inputs_numpy() workload) decisively confirms the existing in-scope claims c1 and c2: masks [62,505,244,30,667,128,324,961] have rank 7, subset {3,4,6,7} XORs to zero with constant keep-bit XOR 1, collapsing that 4-tuple's joint histogram to counts of 0 and 128 \u2014 far outside the contract's [63,65] window. The probes reproduce the kernel's exact deterministic integer arithmetic over the entire 1024-seed domain, so there is no sampling or generalization caveat. The evidence exposes no additional material, testable, in-scope problem not already covered by c1/c2 (input mutation, OOB writes, and value-correctness concerns were already rebutted by source inspection and the recorded initial probe's structural checks).",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 12,
-  "turn": 6
+  "reviewed_tool_event_count": 15,
+  "turn": 9
 }
 
-### t14 - record_verdict - ok
+### t17 - record_verdict - ok
 
 {
   "confidence": 0.98,
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "Confirmed in-scope contract violation. The kernel (kernel.py lines 12-15) computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c, so its absolute error equals the omitted residual sum_j c[j]*max(dot(W[j],x)-b[j],0). Problem.txt (the operative contract; the artifact contains no test.py/get_inputs narrowing the domain) states the kernel is acceptable iff EVERY legal x in [-1,1]^12, 1<=n<=4096, has absolute error <= 1.0 vs a float64 reference, and explicitly says the workload is the whole box, not just the smoke batch. Probe t8 exhaustively enumerated all 4096 box vertices in float64 with the exact seeded SEED=194003 float32 parameters: maximum residual 1.34375 > 1.0 at vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1]. Since the residual is convex in x, the vertex maximum is the whole-box maximum, making this test complete for the contract's universal bound. Probe t12 directly executed the kernel on that legal vertex: output 0.25 vs float64 target 1.59375, absolute error 1.34375 > 1.0, output finite. The result is not borderline (c2 rebutted: max 1.34375 well outside the 0.9-1.1 band; only 1 of 4096 vertices exceeds 1.0). The contract explicitly requires the universal whole-box bound, so no contract clause excuses this deviation \u2014 the smoke-batch pass (max error 2.98e-8) is weak prior evidence only, as smoke rows are low-activation points. Skeptic reviewed all latest evidence and recorded no new claims; no open claims remain.",
+  "reason": "Confirmed in-scope contract violation. problem.txt requires, for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, abs(count/1024 - 1/16) <= 1/1024 (counts 63..65) on exactly the fixed make_inputs_numpy() workload \u2014 an exact finite-domain requirement. Probe t12 exhaustively enumerated all 70 4-tuples x 16 patterns over all 1024 seeds using keep-bit arithmetic identical to the kernel (seed & mask, XOR-fold 8/4/2/1, XOR offset) and found 16 violations, all from 4-tuple (3,4,6,7): eight patterns count 0 and eight count 128, far outside [63,65]. Probe t13 confirms the mechanism: the eight mask parity vectors have GF(2) rank 7, subset {3,4,6,7} XORs to zero with constant keep-bit XOR 1, forcing the collapse. The offline reproduction is valid evidence because the keep-bit computation is deterministic int32 logic exactly matching the Triton kernel, and structural kernel-only aspects (shape, values in {0, 2X}, finiteness) were validated by the recorded initial probe. The initial probe's exact marginals and pairs (0.0 error) are consistent with this failure mode, which only appears at order 4 \u2014 a case the recorded probe never tested. This is not a tolerance, tie-breaking, or unspecified-contract artifact: it is a direct violation of the contract's explicitly required order-4 joint law. No unresolved claims remain; the Skeptic reviewed the latest evidence and recorded no new claims.",
   "verdict": "reject"
 }
 
@@ -794,10 +875,11 @@ Evidence:
 
 {
   "confidence": 0.98,
-  "created_at": "2026-09-24T06:56:26Z",
+  "created_at": "2026-09-24T06:39:38Z",
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "Confirmed in-scope contract violation. The kernel (kernel.py lines 12-15) computes only 0.25*x[0]+0.5*x[1] and ignores W, b, c, so its absolute error equals the omitted residual sum_j c[j]*max(dot(W[j],x)-b[j],0). Problem.txt (the operative contract; the artifact contains no test.py/get_inputs narrowing the domain) states the kernel is acceptable iff EVERY legal x in [-1,1]^12, 1<=n<=4096, has absolute error <= 1.0 vs a float64 reference, and explicitly says the workload is the whole box, not just the smoke batch. Probe t8 exhaustively enumerated all 4096 box vertices in float64 with the exact seeded SEED=194003 float32 parameters: maximum residual 1.34375 > 1.0 at vertex [-1,1,-1,1,1,-1,1,-1,1,1,1,1]. Since the residual is convex in x, the vertex maximum is the whole-box maximum, making this test complete for the contract's universal bound. Probe t12 directly executed the kernel on that legal vertex: output 0.25 vs float64 target 1.59375, absolute error 1.34375 > 1.0, output finite. The result is not borderline (c2 rebutted: max 1.34375 well outside the 0.9-1.1 band; only 1 of 4096 vertices exceeds 1.0). The contract explicitly requires the universal whole-box bound, so no contract clause excuses this deviation \u2014 the smoke-batch pass (max error 2.98e-8) is weak prior evidence only, as smoke rows are low-activation points. Skeptic reviewed all latest evidence and recorded no new claims; no open claims remain.",
+  "reason": "Confirmed in-scope contract violation. problem.txt requires, for every 4 distinct channels j0<j1<j2<j3 and every pattern b in {0,1}^4, abs(count/1024 - 1/16) <= 1/1024 (counts 63..65) on exactly the fixed make_inputs_numpy() workload \u2014 an exact finite-domain requirement. Probe t12 exhaustively enumerated all 70 4-tuples x 16 patterns over all 1024 seeds using keep-bit arithmetic identical to the kernel (seed & mask, XOR-fold 8/4/2/1, XOR offset) and found 16 violations, all from 4-tuple (3,4,6,7): eight patterns count 0 and eight count 128, far outside [63,65]. Probe t13 confirms the mechanism: the eight mask parity vectors have GF(2) rank 7, subset {3,4,6,7} XORs to zero with constant keep-bit XOR 1, forcing the collapse. The offline reproduction is valid evidence because the keep-bit computation is deterministic int32 logic exactly matching the Triton kernel, and structural kernel-only aspects (shape, values in {0, 2X}, finiteness) were validated by the recorded initial probe. The initial probe's exact marginals and pairs (0.0 error) are consistent with this failure mode, which only appears at order 4 \u2014 a case the recorded probe never tested. This is not a tolerance, tie-breaking, or unspecified-contract artifact: it is a direct violation of the contract's explicitly required order-4 joint law. No unresolved claims remain; the Skeptic reviewed the latest evidence and recorded no new claims.",
   "verdict": "reject"
 }

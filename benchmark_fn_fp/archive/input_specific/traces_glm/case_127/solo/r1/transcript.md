@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_e03`
+- Entry: `case_w`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 45.847s across 5 calls | tokens: in=64261 out=2675 total=66936
+- LLM time: 20.241s across 5 calls | tokens: in=50702 out=1240 total=51942
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 1.0
+- Confidence: 0.97
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_e03"
+    "entry": "case_w"
   }
   Output summary:
   {
-    "entry": "case_e03"
+    "entry": "case_w"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_e03"
+    "entry": "case_w"
   }
   Output summary:
   {
-    "entry": "case_e03"
+    "entry": "case_w"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_e03"
+    "entry": "case_w"
   }
   Output summary:
   {
-    "entry": "case_e03"
+    "entry": "case_w"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_e03",
+    "entry": "case_w",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_e03"
+    "entry": "case_w"
   }
 
-### Turn 2 - `solo` (24.687805751s, in=10154 out=1514)
+### Turn 2 - `solo` (2.5961528580000106s, in=7392 out=206)
 
 Message:
 
 ```text
-The kernel's `_append` indexes Delta by `Order[row]` (physical index) rather than by logical row, which could violate the contract's "Delta always addresses CURRENT LOGICAL rows" for words with an odd number of reorders before an append. The exhaustive 121-word probe is the decisive test. I'll record that claim and run it.
+I'll record a claim that the kernel's Gaussian-elimination logdet matches the float64 reference within the required tolerance, then run it on the exact workload.
 ```
 
 Tool calls:
@@ -73,28 +73,28 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "_append loads Delta from source = Order[row] (the physical index of logical row r) instead of Delta[r], so whenever the order map is non-identity at append time the wrong Delta row is added; the smoke words may accidentally avoid exposing this, so all 121 words must be tested.",
+    "rationale": "Elimination without pivoting in float32 could accumulate error in log(pivot) sums beyond the 1e-4 relative tolerance; the probe compares against numpy float64 slogdet.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences ... Delta always addresses CURRENT LOGICAL rows ... max(abs(output - mathematical_reference)) <= 0.00001."
+        "summary": "error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the fixed matrix from make_inputs()"
       }
     ],
-    "statement": "There exists at least one word among the 121 in-scope operation sequences (length 0-4 over {0,1,2}) for which run_sequence output differs from the mathematical reference by more th
-  ...[truncated 11 chars]
+    "statement": "The kernel's output for the fixed (8,8) workload violates the contract tolerance: relative error of log(det) vs float64 reference exceeds 1e-4 or the output is not finite."
+  }
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (3.6199935940000003s, in=10882 out=270)
+### Turn 3 - `solo` (3.080203857999976s, in=7993 out=274)
 
 Message:
 
 ```text
-I'll re-record the claim with scope_rationale, then run the exhaustive 121-word probe.
+I'll record the claim (previous attempt failed for missing scope_rationale), then run the kernel on the fixed workload and compare against a float64 reference.
 ```
 
 Tool calls:
@@ -102,39 +102,39 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+    "rationale": "Elimination without pivoting in float32 could accumulate error in log(pivot) sums beyond the 1e-4 relative tolerance; the probe compares against numpy float64 slogdet of the exact stored entries.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+        "summary": "error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the fixed matrix from make_inputs(), reference evaluated in float64, output must be finite float32 shape (1,)"
       }
     ],
-    "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
-    "statement": "There 
-  ...[truncated 159 chars]
+    "scope_rationale": "The contract fixes the workload to make_inputs()'s (8,8) float32 matrix and requires relative error <= 1e-4 against a float64 log(det) reference with a finite output; this claim tests exactly that requirement.",
+    "statement": "The kernel's output for the fixed (8
+  ...[truncated 138 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+    "rationale": "Elimination without pivoting in float32 could accumulate error in log(pivot) sums beyond the 1e-4 relative tolerance; the probe compares against numpy float64 slogdet of the exact stored entries.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+        "summary": "error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the fixed matrix from make_inputs(), reference evaluated in float64, output must be finite float32 shape (1,)"
       }
     ],
-    "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
-    "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+    "scope_rationale": "The contract fixes the workload to make_inputs()'s (8,8) float32 matrix and requires relative error <= 1e-4 against a float64 log(det) reference with a finite output; this claim tests exactly that requirement.",
+    "statement": "The kernel's output for the fixed (8,8) workload violates the contract tolerance: relative error of log(det) vs float64 reference exceeds 1e-4 or the output is not finite.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (5.771595364999996s, in=12107 out=352)
+### Turn 4 - `solo` (7.290760443000011s, in=9221 out=244)
 
 Message:
 
 ```text
-I'll run the exhaustive 121-word probe against the mathematical reference.
+I'll run the kernel on the fixed workload and compare against a float64 slogdet reference.
 ```
 
 Tool calls:
@@ -143,8 +143,9 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import itertools, sys, json\nsys.path.insert(0, \"/root/evidence_cases/case_e03\")\nimport numpy as np, torch\nimport kernel as K\n\ncpu = K.make_inputs_numpy()\ngpu = K.make_inputs(\"cuda\")\nC, Delta, P = cpu[0].astype(np.float64), cpu[1].astype(np.float64), cpu[2]\n\nwords = [tuple(w) for L in range(5) for w in itertools.product((0,1,2), repeat=L)]\nassert len(words) == 121\nfails = []\nmaxerr = 0.0\nfor w in words:\n    ref = C.copy()\n    for op in w:\n        if op < 2: ref = ref[P[op]].copy()\n        else: ref = ref + Delta\n    out = K.run_sequence(*gpu, w).detach().cpu().numpy()\n    err = float(np.max(np.abs(out.astype(np.float64) - ref)))\n    ok = out.shape == (8,32) and out.dtype == np.float32 and np.isfinite(out).all() and err <= 1e-5\n    ma
-  ...[truncated 340 chars]
+    "code": "\nimport sys, json\nsys.path.insert(0, \"/root/numerical_cases/case_w\")\nimport numpy as np, torch\nimport kernel\n\n(matrix,) = kernel.make_inputs(device=\"cuda\")\nout = kernel.run(matrix)\ntorch.cuda.synchronize()\n\nref = np.linalg.slogdet(matrix.cpu().numpy().astype(np.float64))[1]\no = float(out.cpu().numpy()[0])\nerr = abs(o - ref) / max(abs(ref), 1.0)\nprint(json.dumps({\n    \"metric\": \"relative error vs float64 slogdet on fixed workload\",\n    \"output\": o, \"reference\": ref, \"rel_err\": err,\n    \"finite\": bool(np.isfinite(o)), \"dtype\": str(out.dtype), \"shape\": list(out.shape),\n    \"tol\": 1e-4, \"pass\": bool(err <= 1e-4 and np.isfinite(o)),\n}))\n",
+    "expected_signal": "rel_err <= 1e-4 and finite output"
+  }
   Output summary:
   {
     "artifacts": [
@@ -152,13 +153,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+        "sha256": "2cbd5d1e062e71f4b7b9dc67dee873c0295c089eb1cf8aef17d3921724b0d332"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+        "sha256": "0a65748501ee44449a3c6a2c40bf8221ac2c0ba5de3c9ac177c0fc1bb76a1a5a"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -170,22 +171,21 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t7_json_result.json",
-        "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
+        "sha256": "29de85fc5556e038a63d14fecc02e912bf9d5418c720c2cb9401c5573dd97101"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
-    "duration_s": 5.392899,
-    "event_id": "t7",
-    
-  ...[truncated 2193 chars]
+    "claim_statement": "The kernel's output for the fixed (8,8) workload violates the contract tolerance: relative error of log(det) vs float64 reference exceeds 1e-4 or the output is not finite.",
+    "duration_s": 5.982471,
+    "event_id":
+  ...[truncated 2923 chars]
 
-### Turn 5 - `solo` (6.159952552000007s, in=14187 out=279)
+### Turn 5 - `solo` (3.524958493000014s, in=11363 out=254)
 
 Message:
 
 ```text
-The exhaustive probe ran cleanly: all 121 in-scope words passed with zero error, so the suspected Delta-indexing defect did not materialize (the reorder composition makes the physical indexing consistent). I'll finalize the evidence, mark c1 rebutted, and record a trust verdict.
+The probe shows the kernel output is within tolerance (rel_err ≈ 2e-7, well under 1e-4). I'll finalize this evidence, which rebuts claim c1, then record the verdict.
 ```
 
 Tool calls:
@@ -194,14 +194,17 @@ Tool calls:
   Args:
   {
     "data": {
-      "first_failures": [],
-      "max_abs_error_over_all": 0.0,
-      "num_failures": 0,
-      "num_words": 121
+      "dtype": "torch.float32",
+      "finite": true,
+      "output": 24.486507415771484,
+      "pass": true,
+      "reference": 24.486502460803194,
+      "rel_err": 2.0235508512601344e-07,
+      "tol": 0.0001
     },
     "event_id": "t7",
     "status": "rebutted",
-    "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+    "summary": "Kernel output 24.486507 vs float64 slogdet reference 24.486502 on the exact fixed workload: relative error 2.02e-7, far below the 1e-4 tolerance; output is finite, float32, shape (1,). Claim that tolerance is violated is rebutted.",
     "supports": "rebutted"
   }
   Output summary:
@@ -209,17 +212,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+    "summary": "Kernel output 24.486507 vs float64 slogdet reference 24.486502 on the exact fixed workload: relative error 2.02e-7, far below the 1e-4 tolerance; output is finite, float32, shape (1,). Claim that tolerance is violated is rebutted.",
     "supports": "rebutted",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (5.607946427000002s, in=16931 out=260)
+### Turn 6 - `solo` (3.749158972999993s, in=14733 out=262)
 
 Message:
 
 ```text
-The exhaustive 121-word probe covered the entire finite contract domain with zero error, so nothing further is needed — I'll record the verdict.
+The single in-scope claim is resolved: the kernel's output on the exact fixed workload matches the float64 reference with relative error ~2e-7, far below the 1e-4 tolerance, and is finite float32 shape (1,). No other contract requirements are at risk. Recording the verdict.
 ```
 
 Tool calls:
@@ -227,20 +230,20 @@ Tool calls:
 - `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 1,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
-    
-  ...[truncated 20 chars]
+    "reason": "Ran the kernel on the exact contract workload (make_inputs' fixed 8x8 float32 Gram-plus-regularizer matrix) via probe event t7 and compared against numpy float64 slogdet of the exact stored entries. Output 24.486507 vs reference 24.486502, relative error 2.02e-7 (tolerance 1e-4), finite, float32, shape (1,). The only tolerance/finiteness claim (c1, in_scope) is rebutted; no other contract requirement is violated by the source (elimination without pivoting, RN division, fusion disabled, matching the stated implementation).",
+    "verdict": "trust"
+  }
   Output summary:
   {
-    "confidence": 1.0,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+    "reason": "Ran the kernel on the exact contract workload (make_inputs' fixed 8x8 float32 Gram-plus-regularizer matrix) via probe event t7 and compared against numpy float64 slogdet of the exact stored entries. Output 24.486507 vs reference 24.486502, relative error 2.02e-7 (tolerance 1e-4), finite, float32, shape (1,). The only tolerance/finiteness claim (c1, in_scope) is rebutted; no other contract requirement is violated by the source (elimination without pivoting, RN division, fusion disabled, matching the stated implementation).",
     "verdict": "trust"
   }
 
@@ -252,44 +255,44 @@ No description model recorded.
 
 ### c1 - `rebutted`
 
-Statement: There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.
+Statement: The kernel's output for the fixed (8,8) workload violates the contract tolerance: relative error of log(det) vs float64 reference exceeds 1e-4 or the output is not finite.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.
+Scope rationale: The contract fixes the workload to make_inputs()'s (8,8) float32 matrix and requires relative error <= 1e-4 against a float64 log(det) reference with a finite output; this claim tests exactly that requirement.
 
 Scope evidence:
-- `problem.txt`: Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001.
+- `problem.txt`: error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the fixed matrix from make_inputs(), reference evaluated in float64, output must be finite float32 shape (1,)
 
-Rationale: _append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.
+Rationale: Elimination without pivoting in float32 could accumulate error in log(pivot) sums beyond the 1e-4 relative tolerance; the probe compares against numpy float64 slogdet of the exact stored entries.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t7: Kernel output 24.486507 vs float64 slogdet reference 24.486502 on the exact fixed workload: relative error 2.02e-7, far below the 1e-4 tolerance; output is finite, float32, shape (1,). Claim that tolerance is violated is rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_e03"
+  "entry": "case_w"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_e03"
+  "entry": "case_w"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_e03"
+  "entry": "case_w"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_e03"
+  "entry": "case_w"
 }
 
 ### t5 - record_claim - error
@@ -303,16 +306,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "_append loads Delta from source = Order[row] (physical index) instead of Delta[r] (logical row), so when order is non-identity at append time the wrong Delta rows are added; smoke words may accidentally avoid exposing this. Testing all 121 words decides it.",
+  "rationale": "Elimination without pivoting in float32 could accumulate error in log(pivot) sums beyond the 1e-4 relative tolerance; the probe compares against numpy float64 slogdet of the exact stored entries.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Allowed operation words are ALL words of length 0 through 4 over {0,1,2}: 121 sequences; Delta always addresses CURRENT LOGICAL rows; max(abs(output - mathematical_reference)) <= 0.00001."
+      "summary": "error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the fixed matrix from make_inputs(), reference evaluated in float64, output must be finite float32 shape (1,)"
     }
   ],
-  "scope_rationale": "The contract requires all 121 words (length 0-4 over {0,1,2}) to match the mathematical reference, where operation 2 adds Delta addressed to CURRENT LOGICAL rows, within 1e-5.",
-  "statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
+  "scope_rationale": "The contract fixes the workload to make_inputs()'s (8,8) float32 matrix and requires relative error <= 1e-4 against a float64 log(det) reference with a finite output; this claim tests exactly that requirement.",
+  "statement": "The kernel's output for the fixed (8,8) workload violates the contract tolerance: relative error of log(det) vs float64 reference exceeds 1e-4 or the output is not finite.",
   "status": "open"
 }
 
@@ -324,13 +327,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+      "sha256": "2cbd5d1e062e71f4b7b9dc67dee873c0295c089eb1cf8aef17d3921724b0d332"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+      "sha256": "0a65748501ee44449a3c6a2c40bf8221ac2c0ba5de3c9ac177c0fc1bb76a1a5a"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -342,12 +345,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t7_json_result.json",
-      "sha256": "29a6a7fb62b2a9a999c17dbf021030072f9a2fab4903ec322b185bcbdaa81657"
+      "sha256": "29de85fc5556e038a63d14fecc02e912bf9d5418c720c2cb9401c5573dd97101"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "There exists at least one word among the 121 in-scope operation sequences for which run_sequence output differs from the mathematical reference by more than 1e-5.",
-  "duration_s": 5.392899,
+  "claim_statement": "The kernel's output for the fixed (8,8) workload violates the contract tolerance: relative error of log(det) vs float64 reference exceeds 1e-4 or the output is not finite.",
+  "duration_s": 5.982471,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -357,20 +360,20 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "cb44bb630e0b8737a7b3726ae5dbe21bbffaa77bbc9215e862fba0e127d27402"
+          "sha256": "2cbd5d1e062e71f4b7b9dc67dee873c0295c089eb1cf8aef17d3921724b0d332"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "f6cc07573ae4b734bac2091b4bad4294759e1ce4c42698bb287e31fd4ad94f82"
+          "sha256": "0a65748501ee44449a3c6a2c40bf8221ac2c0ba5de3c9ac177c0fc1bb76a1a5a"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991
-...[truncated 1393 chars]
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b93
+...[truncated 2123 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
@@ -378,7 +381,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Exhaustive sweep of all 121 contract words (length 0-4 over {0,1,2}), each from fresh state on the real GPU with make_inputs(): 0 failures, max abs error 0.0 across every word, all outputs shape (8,32), float32, finite. The suspected wrong-row Delta addressing never produces a mismatch; the kernel satisfies the full finite contract.",
+  "summary": "Kernel output 24.486507 vs float64 slogdet reference 24.486502 on the exact fixed workload: relative error 2.02e-7, far below the 1e-4 tolerance; output is finite, float32, shape (1,). Claim that tolerance is violated is rebutted.",
   "supports": "rebutted",
   "tool_event_id": "t7"
 }
@@ -386,22 +389,22 @@ Evidence:
 ### t9 - record_verdict - ok
 
 {
-  "confidence": 1.0,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+  "reason": "Ran the kernel on the exact contract workload (make_inputs' fixed 8x8 float32 Gram-plus-regularizer matrix) via probe event t7 and compared against numpy float64 slogdet of the exact stored entries. Output 24.486507 vs reference 24.486502, relative error 2.02e-7 (tolerance 1e-4), finite, float32, shape (1,). The only tolerance/finiteness claim (c1, in_scope) is rebutted; no other contract requirement is violated by the source (elimination without pivoting, RN division, fusion disabled, matching the stated implementation).",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 1.0,
-  "created_at": "2026-09-24T06:11:44Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-24T01:01:29Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract is a finite domain: all 121 operation words of length 0-4 over {0,1,2}, each from fresh C with make_inputs(). The decisive probe (tool event t7) exhaustively evaluated every one of those words on the real GPU via run_sequence(*make_inputs(), word), comparing to the float64 mathematical reference (operation 0/1 = C[P[op]], operation 2 = C + Delta on current logical rows). Result: 0 failures, max absolute error 0.0 across all 121 words, all outputs shape (8,32), float32, finite. The only open hypothesis (c1, that _append's physical-indexed Delta load would break some word) was tested by this sweep and rebutted \u2014 the lazy-reorder semantics are internally consistent. No untested in-scope cases remain.",
+  "reason": "Ran the kernel on the exact contract workload (make_inputs' fixed 8x8 float32 Gram-plus-regularizer matrix) via probe event t7 and compared against numpy float64 slogdet of the exact stored entries. Output 24.486507 vs reference 24.486502, relative error 2.02e-7 (tolerance 1e-4), finite, float32, shape (1,). The only tolerance/finiteness claim (c1, in_scope) is rebutted; no other contract requirement is violated by the source (elimination without pivoting, RN division, fusion disabled, matching the stated implementation).",
   "verdict": "trust"
 }

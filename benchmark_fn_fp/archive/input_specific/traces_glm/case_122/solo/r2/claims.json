@@ -1,23 +1,23 @@
 [
   {
-    "created_at": "2026-09-24T01:09:49Z",
+    "created_at": "2026-09-24T01:06:24Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-24T01:10:03Z",
+        "created_at": "2026-09-24T01:06:38Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t7_probe.py",
-              "sha256": "f48b706b017b60c9d822a9c0acf795312e88327e6187c5e6846475e513983392"
+              "sha256": "96b158c120f63b15f294b5c35d1d072077b4912ee02a6d02d4d28788d1ad6384"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t7_stdout.txt",
-              "sha256": "9bfb0a77967df467ad267f3b2cc9c9c75e4203b85e3b3690e87d65c0292ab175"
+              "sha256": "15406c661752b29e61144487cd46aa4b1848cb4368b4df626d82fb07e70e3fe7"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -29,51 +29,63 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t7_json_result.json",
-              "sha256": "5bbda32bd7bd0f5caf8b66044a2168bc621e5723db5af10035ad56e5a8bb3ff3"
+              "sha256": "6c0e1d9902571e730d0d05871cf028bd6c728679b1736b7dcc62a71237bdbf01"
             }
           ],
-          "duration_s": 5.127086,
+          "duration_s": 5.072508,
           "exit_code": 0,
-          "expected_signal": "rel_l2_err relative to 1e-4 bound",
+          "expected_signal": null,
           "json_parse_error": null,
           "json_result": {
             "finite": true,
-            "output": [
-              25.792875289916992
-            ],
+            "kernel_idx": 7,
+            "kernel_idx_sim": 7,
             "pass": false,
-            "reference": 25.811250835476812,
-            "rel_l2_err": 0.0007119199947707914
+            "quant_dist_sorted_head": [
+              0.875,
+              0.921875,
+              0.921875,
+              0.96875
+            ],
+            "ref_dist_min": 0.9967549356501691,
+            "ref_dist_sorted_head": [
+              0.9967549356501691,
+              0.997261676148518,
+              0.9979134740458183,
+              0.9979150024728574
+            ],
+            "ref_idx": 9,
+            "rel_l2": 1.3401839962824444
           },
-          "output": 25.792875289916992,
+          "kernel_idx": 7,
           "pass": false,
-          "reference": 25.811250835476812,
-          "rel_l2_err": 0.0007119199947707914,
+          "ref_idx": 9,
+          "rel_l2": 1.3401839962824444,
           "stderr": "",
-          "stdout": "{\"output\": [25.792875289916992], \"reference\": 25.811250835476812, \"rel_l2_err\": 0.0007119199947707914, \"pass\": false, \"finite\": true}\n",
+          "stdout": "{\"ref_idx\": 9, \"kernel_idx\": 7, \"kernel_idx_sim\": 7, \"rel_l2\": 1.3401839962824444, \"pass\": false, \"ref_dist_min\": 0.9967549356501691, \"ref_dist_sorted_head\": [0.9967549356501691, 0.997261676148518, 0.9979134740458183, 0.9979150024728574], \"quant_dist_sorted_head\": [0.875, 0.921875, 0.921875, 0.96875], \"finite\": true}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "Kernel output 25.792875 vs float64 reference 25.811251 on the exact fixed workload from make_inputs(); relative L2 error 7.12e-4, exceeding the contract bound of 1e-4 by ~7x. Output is finite and float32 shape (1,), so the failure is purely the error bound.",
+        "summary": "On the fixed make_inputs() workload, the kernel gathered embeddings[7] while the float64 reference selects embeddings[9]; relative L2 error 1.3402 > 0.1 tolerance. Output is finite and shape (8,), but the contract bound is violated.",
         "supports": "confirmed",
         "tool_event_id": "t7"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "Gaussian elimination in fp32 with a log-sum over 8 pivots could plausibly exceed the 1e-4 relative error bound; this is the core contract requirement.",
+    "rationale": "The kernel routes on quantized (1/8-grid) float32 distances while the reference uses exact float64 distances; if the winner index differs, the gathered embedding could differ far more than the 0.1 relative tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The error ||output-reference||_2 / max(||reference||_2,1) must be <= 0.0001 for the workload returned by make_inputs(), with reference = log(det(A)) in float64 of the stored float32 entries."
+        "summary": "Contract: reference selects smallest float64 distance index, tie-break smallest index; kernel satisfies contract iff ||output-reference||_2 / max(||ref||,1e-12) <= 0.1 on the fixed make_inputs() workload."
       }
     ],
-    "scope_rationale": "The contract requires the returned float32 log-det value to be within relative L2 error <= 1e-4 of the float64 reference for the exact fixed matrix from make_inputs(); any larger error is a contract violation.",
-    "statement": "The kernel's float32 log-det output fails the contract error bound (relative L2 error <= 1e-4 vs float64 reference) on the fixed workload from make_inputs().",
+    "scope_rationale": "The contract requires the output embedding's relative L2 error vs the float64-reference winner's embedding to be <= 0.1 on the fixed make_inputs() workload.",
+    "statement": "On the fixed make_inputs() workload, the kernel's quantized routing picks a winner whose embedding differs from the float64 reference embedding by more than the 0.1 relative L2 tolerance.",
     "status": "confirmed",
-    "updated_at": "2026-09-24T01:10:03Z"
+    "updated_at": "2026-09-24T01:06:38Z"
   }
 ]

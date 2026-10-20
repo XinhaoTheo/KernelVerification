@@ -1,36 +1,49 @@
-import numpy as np, json, sys
-sys.path.insert(0, "/root/numerical_cases/case_s")
-from kernel import make_inputs_numpy, run
+import json, numpy as np, torch, sys
+sys.path.insert(0, "/root/numerical_cases/case_m")
+import kernel as K
 
-a, w, p = make_inputs_numpy()  # float32 seeded arrays
-a64, w64, p64 = a.astype(np.float64), w.astype(np.float64), p.astype(np.float64)
+coeffs, pts = K.make_inputs(device="cuda")
+out = K.run(coeffs, pts)
+torch.cuda.synchronize()
 
-# fp64 closed-form reference
-ref = 1.0 + (a64 * (np.cos(p64) - np.cos(p64 + w64)) / w64).sum(axis=1)
+c64 = coeffs.cpu().numpy().astype(np.float64)
+p64 = pts.cpu().numpy().astype(np.float64)
+ref = np.zeros(8, dtype=np.float64)
+for i in range(8):
+    acc = c64[i, 48]
+    for k in range(47, -1, -1):
+        acc = acc * p64[i] + c64[i, k]
+    ref[i] = acc
 
-# fp64 32-point midpoint rule (isolates discretization error)
-t = (np.arange(32, dtype=np.float64) + 0.5) / 32.0
-val = np.ones((4, 32), dtype=np.float64)
-for k in range(8):
-    val += a64[:, k, None] * np.sin(w64[:, k, None] * t[None, :] + p64[:, k, None])
-mid64 = val.mean(axis=1)
+o = out.cpu().numpy().astype(np.float64)
+diff = o - ref
+rel_l2 = np.linalg.norm(diff) / max(np.linalg.norm(ref), 0.001*np.sqrt(8))
+finite = bool(np.all(np.isfinite(o)))
 
-rel_mid = np.linalg.norm(mid64 - ref) / max(np.linalg.norm(ref), 1e-12)
-
-# actual kernel output
-import torch
-out = run(*make_inputs("cuda")).cpu().numpy().astype(np.float64)
-rel_kernel = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 1e-12)
+c32 = coeffs.cpu().numpy(); p32 = pts.cpu().numpy()
+emu = np.zeros(8, dtype=np.float32)
+max_inter = 0.0
+for i in range(8):
+    acc = np.float32(c32[i,48])
+    mi = abs(float(acc))
+    for k in range(47,-1,-1):
+        prod = np.float32(np.float32(acc) * np.float32(p32[i]))
+        acc = np.float32(prod + c32[i,k])
+        mi = max(mi, abs(float(acc)))
+    emu[i] = acc
+    max_inter = max(max_inter, mi)
 
 print(json.dumps({
-    "metric": "relative L2 vs fp64 closed-form reference (seed 711165)",
-    "ref_norm": float(np.linalg.norm(ref)),
-    "rel_err_fp64_midpoint": float(rel_mid),
-    "rel_err_kernel_fp32": float(rel_kernel),
-    "tolerance": 0.035,
-    "kernel_output": [float(x) for x in out],
+    "kernel_output": [float(x) for x in o],
     "reference": [float(x) for x in ref],
-    "max_freq": float(w64.max()),
-    "kernel_passes_contract": bool(rel_kernel <= 0.035),
-    "midpoint_fp64_passes": bool(rel_mid <= 0.035),
+    "abs_err": [float(x) for x in diff],
+    "rel_l2": float(rel_l2),
+    "tolerance": 0.0002,
+    "passes_contract": bool(rel_l2 <= 0.0002 and finite),
+    "finite": finite,
+    "ref_norm": float(np.linalg.norm(ref)),
+    "floor": 0.001*8**0.5,
+    "c0_magnitudes": [float(x) for x in np.abs(c32[:,0])],
+    "max_intermediate_abs": float(max_inter),
+    "emu_rel_l2": float(np.linalg.norm(emu.astype(np.float64)-ref)/max(np.linalg.norm(ref),0.001*np.sqrt(8)))
 }))

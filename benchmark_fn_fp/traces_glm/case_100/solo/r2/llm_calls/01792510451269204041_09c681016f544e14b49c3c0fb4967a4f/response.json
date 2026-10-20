@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-be630400",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the exhaustive FP16 sweep to test the 1e-6 tolerance claim.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a339b2fee40f7357",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, numpy as np, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_100\\\")\\nimport kernel\\n\\n# all finite FP16 bit patterns\\nbits = np.arange(65536, dtype=np.uint16)\\nvals = torch.from_numpy(bits.view(np.float16)).float()\\nx16 = torch.from_numpy(bits.view(np.float16))\\nfinite = torch.isfinite(x16)\\nx_finite = x16[finite].cuda()\\nxf = x_finite.to(torch.float64)\\nref = torch.asinh(xf)\\n\\nout = kernel.run(x_finite)\\nerr = (out.to(torch.float64) - ref).abs()\\nmax_err = err.max().item()\\nimax = int(err.argmax().item())\\ndata = {\\n    \\\"num_inputs\\\": int(x_finite.numel()),\\n    \\\"max_abs_err\\\": max_err,\\n    \\\"worst_input\\\": float(x_finite[imax].item()),\\n    \\\"worst_ref\\\": float(ref[imax].item()),\\n    \\\"worst_actual\\\": float(out[imax].item()),\\n    \\\"num_violations_gt_1e-6\\\": int((err > 1e-6).sum().item()),\\n}\\n# top offenders\\nk = torch.topk(err, 5).indices\\ndata[\\\"top5\\\"] = [[float(x_finite[i].item()), float(err[i].item())] for i in k.tolist()]\\nprint(json.dumps(data))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run exhaustive probe over all finite FP16 values (65536 entries minus NaN/inf → ~30k each side; just test all finite values)."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510452,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 364,
+    "prompt_tokens": 10340,
+    "total_tokens": 10704,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 31,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

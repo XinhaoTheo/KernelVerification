@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-4e684a89",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes: a full finite-FP16-domain sweep for c1, an exact-pipeline mantissa-grid error measurement for c2, and a subnormal-focused sweep for c3.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9b8409c67c445032",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, os, json, struct\\nsys.path.insert(0, \\\"/root/cases/case_101\\\")\\nimport torch, numpy as np\\n\\ndef kernel_run(x):\\n    # direct kernel launch on candidate tensor (bypass run() validation limits not needed; N fits)\\n    import kernel as K\\n    return K.run(x)\\n\\ndef ref(x):\\n    v = x.to(torch.float64)\\n    return torch.sign(v) * torch.pow(torch.abs(v), 1.0/3.0)\\n\\n# all finite FP16 bit patterns: skip exponent 0x1F (Inf/NaN) => 15*1024*2 = 30720 values\\nbits = []\\nfor e in range(31):\\n    for m in range(1024):\\n        for s in (0,1):\\n            if e == 31 and m > 0: continue\\n            if e == 31 and m == 0: continue  # Inf\\n            bits.append((s<<15)|(e<<10)|m)\\nbits = np.array(bits, dtype=np.uint16)\\nxf = torch.from_numpy(bits.view(np.float16)).to(\\\"cuda\\\")\\n\\nout = kernel_run(xf)\\nr = ref(xf)\\nnz = xf != 0\\nrel = (out[nz].to(torch.float64) - r[nz]).abs() / r[nz].abs()\\nmaxrel = rel.max().item()\\nviol = (rel > 1e-6).sum().item()\\nargmax = rel.argmax().item()\\nworst_x = xf[nz][argmax].item()\\nres = {\\n  \\\"metric\\\": \\\"max relative error vs FP64 cbrt over all finite FP16 values (30864 positive+negative, zeros excluded)\\\",\\n  \\\"n_values\\\": int(xf.numel()),\\n  \\\"max_rel_err\\\": maxrel,\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"n_violations\\\": int(viol),\\n  \\\"worst_input\\\": float(worst_x),\\n  \\\"kernel_output_at_worst\\\": float(out[nz][argmax].item()),\\n  \\\"ref_at_worst\\\": float(r[nz][argmax].item()),\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"max relative error over the whole finite FP16 domain, compared against 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b3ef7a54f50ab3bb",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json\\nimport numpy as np\\n\\n# Exact emulation of the kernel's FP32 pipeline over a dense mantissa grid m in [1,2)\\n# no FMA (enable_fp_fusion=False), FP32 round-to-nearest ops, div_rn division.\\ndef f32(x):\\n    return np.float32(x)\\n\\nm = np.linspace(1.0, 2.0, 200001, dtype=np.float64).astype(np.float32)\\ntrue = np.cbrt(m.astype(np.float64))\\n\\ndef pipeline(mant, coeff):\\n    a, b, c = map(f32, coeff)\\n    est = f32(f32(a * mant) + b)\\n    est = f32(f32(est * mant) + c)\\n    est = f32(f32(f32(f32(2.0*est) + f32(mant/est)) ) * f32(1.0/3.0)) if False else est\\n    # Newton: (2*est + mant/(est*est)) * (1/3)  all fp32\\n    e2 = f32(est * est)\\n    div = f32(mant / e2)\\n    est = f32(f32(f32(2.0*est) + div) * f32(1.0/3.0))\\n    return est\\n\\ndef relerr(est):\\n    return np.max(np.abs(est.astype(np.float64) - true) / true)\\n\\ntrunc = (-0.0603, 0.4394, 0.6215)\\nest_trunc = pipeline(m, trunc)\\nrel_trunc = relerr(est_trunc)\\n\\n# best-fit quadratic (numpy polyfit in double) as comparison\\nz = m.astype(np.float64)\\np = np.polyfit(z, true, 2)\\nbest = (p[0], p[1], p[2])\\nest_best = pipeline(m, best)\\nrel_best = relerr(est_best)\\n\\n# seed-only error with truncated coefficients\\nseed = f32(f32(f32(f32(-0.0603*m) + f32(0.4394)) * m) + f32(0.6215))\\nseed_err = np.max(np.abs(seed.astype(np.float64) - true) / true)\\n\\nres = {\\n  \\\"metric\\\": \\\"max post-Newton relative error, exact FP32 pipeline emulation, dense grid m in [1,2), vs FP64 cbrt\\\",\\n  \\\"grid_points\\\": int(m.size),\\n  \\\"max_rel_err_truncated_coeffs\\\": float(rel_trunc),\\n  \\\"max_rel_err_bestfit_coeffs\\\": float(rel_best),\\n  \\\"best_fit_coeffs\\\": [float(v) for v in best],\\n  \\\"seed_only_max_rel_err_truncated\\\": float(seed_err),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"note\\\": \\\"post-Newton error with truncated 4-decimal coefficients vs a double-precision best-fit quadratic\\\",\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"post-Newton max relative error with truncated coefficients vs 1e-6, compared to best-fit coefficients\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-8b8b2c05d87b4073",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_101\\\")\\nimport torch, numpy as np\\nimport kernel as K\\n\\n# All FP16 subnormals: exponent field 0, mantissa 1..1023, both signs\\nbits = []\\nfor m in range(1, 1024):\\n    for s in (0,1):\\n        bits.append((s<<15)|m)\\nbits = np.array(bits, dtype=np.uint16)\\nx = torch.from_numpy(bits.view(np.float16)).to(\\\"cuda\\\")\\nout = K.run(x)\\nv = x.to(torch.float64)\\nr = torch.sign(v) * torch.pow(torch.abs(v), 1.0/3.0)\\nrel = (out.to(torch.float64) - r).abs() / r.abs()\\nres = {\\n  \\\"metric\\\": \\\"max relative error vs FP64 cbrt over all 2046 signed FP16 subnormals\\\",\\n  \\\"n_subnormals\\\": int(x.numel()),\\n  \\\"max_rel_err\\\": float(rel.max().item()),\\n  \\\"n_violations\\\": int((rel > 1e-6).sum().item()),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"min_subnormal_output_sample\\\": float(out[0].item()),\\n  \\\"smallest_subnormal_ref\\\": float(r.min().item()),\\n  \\\"largest_subnormal_output_sample\\\": float(out[-1].item()) if x[-1].item() > 0 else float(out[1022].item()),\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"max relative error over all FP16 subnormal inputs vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 full-domain sweep (all finite FP16 values as bits — 65536 values minus NaN/Inf, fits in one tensor, N=65534 > 131072? No, 65534 ≤ 131072, fine — but validate_inputs limits N to 131072, fine). Actually do full domain in chunks of 131072 — whole domain fits.\n\nc3 subnormals sweep. c2 can be covered by the c1 probe data too, but need separate claim probe; can do a CPU simulation of the exact FP32 pipeline vs FP64 cbrt for m grid. Actually simplest: one probe covers c1 and c2 if I include all finite values; for c2 I can run the same sweep and report; claims are close. Let me run a domain sweep for c1 (all finite FP16 bits) and a subnormal-focused probe for c3, and for c2 I can derive from the same sweep — but each claim needs its own probe. Actually the c1 sweep fully answers c2 (post-Newton error over the domain). I could run three probes: c1 full sweep, c2 mantissa grid via CPU emulation of exact kernel pipeline vs also computing ideal-fit coefficient variant? For c2, the statement: truncated coefficients push error above 1e-6. Evidence: measure post-Newton error from exact pipeline (FP32 emulation on CPU) over dense m grid in [1,2). If max rel err ≤ 1e-6, rebutted.\n\nActually all three probes can be launched independently. c3 subnormal probe: run kernel on all FP16 subnormals (positive and negative), compute rel error vs FP64.\n\nLet me write the probes."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792510341,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1946,
+    "prompt_tokens": 20885,
+    "total_tokens": 22831,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 364,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

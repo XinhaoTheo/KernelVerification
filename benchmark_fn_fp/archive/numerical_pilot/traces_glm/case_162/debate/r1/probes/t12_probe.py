@@ -1,25 +1,23 @@
-import numpy as np, torch
-rng = np.random.Generator(np.random.PCG64(812))
-n, d = 64, 32
-q = rng.standard_normal(d)
-k = rng.standard_normal((n, d)) * 0.7
-v = rng.standard_normal((n, d))
-q32, k32 = q.astype(np.float32), k.astype(np.float32)
-z = k32.astype(np.float64) @ q32.astype(np.float64) / np.sqrt(d)
-p = np.exp(z - z.max()); p /= p.sum()
-v -= 0.5 * (p @ v)[None, :]
-# float32-rounded inputs exactly as returned by make_inputs
-q_f = q32.astype(np.float64); k_f = k32.astype(np.float64); v_f = v.astype(np.float32).astype(np.float64)
-# float64 reference on the rounded inputs
-z_r = k_f @ q_f / np.sqrt(d)
-p_r = np.exp(z_r - z_r.max()); p_r /= p_r.sum()
-y_ref = p_r @ v_f
-ref_norm = np.linalg.norm(y_ref)
-floor = 0.001 * np.sqrt(d)
-import json
+import sys, json, numpy as np, torch
+sys.path.insert(0, "/root/pilot_cases/case_93")
+import kernel as K
+
+x, w = K.make_inputs("cuda")
+out = K.run(x, w)
+torch.cuda.synchronize()
+out64 = out.double().cpu().numpy()
+w64 = w.double().cpu().numpy()
+x64 = x.double().cpu().numpy()
+ref = w64 @ x64
+den = max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))
+E = np.linalg.norm(out64 - ref) / den
 print(json.dumps({
-  "ref_norm": float(ref_norm),
-  "floor": float(floor),
-  "dominant": "floor" if floor > ref_norm else "ref_norm",
-  "ratio_ref_to_floor": float(ref_norm / floor)
+    "metric": "relative_error_E",
+    "E": float(E),
+    "budget": 0.12,
+    "all_finite": bool(np.isfinite(out64).all()),
+    "ref_norm": float(np.linalg.norm(ref)),
+    "err_norm": float(np.linalg.norm(out64 - ref)),
+    "per_row_abs_err_max": float(np.abs(out64-ref).max()),
+    "passes": bool(E <= 0.12 and np.isfinite(out64).all())
 }))

@@ -1,28 +1,11 @@
-
-import sys, json, math
-sys.path.insert(0, "/root/pilot_cases/case_102")
-import numpy as np, torch
-import kernel as K
-
-q, k, v = K.make_inputs("cuda")
-out = K.run(q, k, v)
-
-# float64 reference on the SAME float32 input values
-q64 = q.double().cpu().numpy(); k64 = k.double().cpu().numpy(); v64 = v.double().cpu().numpy()
-z = k64 @ q64 / math.sqrt(32)
-z = z - z.max(); p = np.exp(z); p /= p.sum()
+import json, torch, numpy as np, importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/pilot_cases/case_96/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+q, k, v = m.make_inputs()
+out = m.run(q, k, v).cpu().numpy().astype(np.float64)
+q64, k64, v64 = q.cpu().numpy().astype(np.float64), k.cpu().numpy().astype(np.float64), v.cpu().numpy().astype(np.float64)
+z = k64 @ q64 / np.sqrt(k64.shape[1])
+p = np.exp(z - z.max()); p /= p.sum()
 ref = p @ v64
-
-o = out.double().cpu().numpy()
-numel = o.size
-E = np.linalg.norm(o.ravel() - ref.ravel()) / max(np.linalg.norm(ref.ravel()), 0.001*math.sqrt(numel))
-print(json.dumps({
-  "metric": "E per contract definition",
-  "E": float(E),
-  "finite": bool(np.isfinite(o).all()),
-  "ref_norm": float(np.linalg.norm(ref)),
-  "out_norm": float(np.linalg.norm(o)),
-  "max_abs_err": float(np.abs(o-ref).max()),
-  "shapes": [list(q.shape), list(k.shape), list(v.shape), list(out.shape)],
-  "verdict_budget": "pass" if (E <= 0.001 and np.isfinite(o).all()) else "fail"
-}))
+E = np.linalg.norm(out - ref) / max(np.linalg.norm(ref), 0.001*np.sqrt(ref.size))
+print(json.dumps({"E": float(E), "finite": bool(np.all(np.isfinite(out))), "ref_norm": float(np.linalg.norm(ref)), "out_norm": float(np.linalg.norm(out)), "max_abs_err": float(np.max(np.abs(out-ref)))}))

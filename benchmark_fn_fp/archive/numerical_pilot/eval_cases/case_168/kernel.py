@@ -3,23 +3,26 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _kernel(X, W, O, K: tl.constexpr):
-    row = tl.program_id(0)
-    j = tl.arange(0, K)
-    x = tl.load(X + j)
-    w = tl.load(W + row * K + j)
-    scale = tl.max(tl.abs(w), 0) / 7.0
-    qi = tl.minimum(7.0, tl.maximum(-7.0, tl.floor(w / scale + 0.5)))
-    y = tl.sum(x * (qi * scale), 0)
-    tl.store(O + row, y)
+def _kernel(Q, K, V, O, N: tl.constexpr, D: tl.constexpr):
+    n = tl.arange(0, N)
+    d = tl.arange(0, D)
+    q = tl.load(Q + d)
+    k = tl.load(K + n[:, None] * D + d[None, :])
+    v = tl.load(V + n[:, None] * D + d[None, :])
+    scores = tl.sum(k * q[None, :], 1) * (D ** -0.5)
+    p = tl.exp(scores - tl.max(scores, 0))
+    p = p / tl.sum(p, 0)
+    p = p.to(tl.float16).to(tl.float32)
+    y = tl.sum(p[:, None] * v, 0)
+    tl.store(O + d, y)
 
-def run(x, w):
-    m, k = w.shape
-    out = torch.empty(m, dtype=torch.float32, device=x.device)
-    _kernel[(m,)](x, w, out, k, enable_fp_fusion=False)
+def run(q, k, v):
+    n, d = k.shape
+    out = torch.empty(d, dtype=torch.float32, device=q.device)
+    _kernel[(1,)](q, k, v, out, n, d, enable_fp_fusion=False)
     return out
 
-CONFIG = {'family': 'quantization', 'seed': 1221, 'm': 32, 'k': 128, 'mix': 0.9, 'residual': 0.5}
+CONFIG = {'family': 'attention', 'seed': 812, 'n': 64, 'd': 32, 'scale': 0.7, 'center': 0.5}
 
 def make_inputs(device="cuda"):
     import numpy as np

@@ -1,26 +1,34 @@
-import numpy as np, torch, json
-import importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/numerical_cases/case_p/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-u, b = k.make_inputs()
-out = k.run(u, b)
-u64 = u.double().cpu().numpy(); b64 = b.double().cpu().numpy()
-alpha = (u64*b64).sum()/(u64*u64).sum()
-res = b64 - alpha*u64
-ref = res/np.linalg.norm(res)
-u32=u.float().cpu().numpy(); b32=b.float().cpu().numpy()
-# residual with EXACT (fp64) alpha but fp32 product/subtract rounding
-res_exactalpha = np.array([np.float32(np.float32(u32[j]*np.float32(alpha)) and 0) for j in range(32)])
-res_exactalpha = np.array([np.float32(b32[j]-np.float32(u32[j]*np.float32(alpha))) for j in range(32)])
-nrm = np.linalg.norm(res_exactalpha.astype(np.float64))
-out_exactalpha = (res_exactalpha.astype(np.float64)/nrm)
-o = out.double().cpu().numpy()
-rel_kernel = np.linalg.norm(o-ref)/np.linalg.norm(ref)
-rel_exactalpha = np.linalg.norm(out_exactalpha-ref)/np.linalg.norm(ref)
+
+import numpy as np, json
+rng = np.random.Generator(np.random.PCG64(782406))
+x = (64.0 + rng.normal(0.0, 0.125, 128)).astype(np.float32)
+x64 = x.astype(np.float64)
+mean64 = x64.sum()/128
+var64 = ((x64-mean64)**2).sum()/128
+ref = (x64-mean64)/np.sqrt(var64+1e-5)
+
+# kernel fp32 sequential mean
+total = np.float32(0.0); squares = np.float32(0.0)
+for v in x:
+    v = np.float32(v)
+    total = np.float32(total + v)
+    squares = np.float32(squares + np.float32(v*v))
+mean32 = np.float32(total/np.float32(128))
+
+mean_abs_err = abs(float(mean32) - float(mean64))
+var32 = np.float32(max(np.float32(np.float32(squares/np.float32(128)) - np.float32(mean32*mean32)), np.float32(0.0)))
+denom32 = np.float32(np.sqrt(np.float32(var32+np.float32(1e-5))))
+ref_denom = np.sqrt(var64+1e-5)
+# output offset contribution from mean bias alone (using exact denominator)
+offset_per_elem = mean_abs_err/ref_denom
+out_mean_only = (x64-mean32)/ref_denom
+err_mean_only = np.linalg.norm(out_mean_only-ref)/max(np.linalg.norm(ref),0.001*np.sqrt(128))
 print(json.dumps({
- "rel_l2_kernel": float(rel_kernel),
- "rel_l2_exact_alpha_fp32_res": float(rel_exactalpha),
- "tolerance": 0.01,
- "residual_fp64_rms": float(np.linalg.norm(res)/np.sqrt(32)),
- "res_exactalpha_rms": float(nrm/np.sqrt(32)),
- "max_elem_ratio_err_to_res": float(np.max(np.abs(res_exactalpha.astype(np.float64)-res)/np.maximum(np.abs(res),1e-30)))}))
+  "mean_fp32": float(mean32), "mean_f64": float(mean64),
+  "mean_abs_err": mean_abs_err,
+  "mean_rel_err_vs_denom": float(mean_abs_err/ref_denom),
+  "output_offset_fraction_per_element": float(offset_per_elem),
+  "rel_l2_from_mean_bias_alone": float(err_mean_only),
+  "denominator": float(ref_denom),
+  "tolerance": 0.02
+}))
