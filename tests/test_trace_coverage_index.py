@@ -114,6 +114,43 @@ def test_each_archive_has_its_own_counts_and_case_links(index, tmp_path, monkeyp
     assert "1 recorded GLM trials" in trace_text
 
 
+def test_case_index_ranges_exclude_archive_gap_when_new_cases_are_added(index, tmp_path, monkeypatch):
+    import json
+    import index_cases
+
+    benchmark = tmp_path / "benchmark_fn_fp"
+    details = {}
+    for number in range(1, 169):
+        case = f"case_{number:02}"
+        archived = 91 <= number <= 162
+        prefix = "archive/input_specific/" if archived else ""
+        detail = {
+            "dataset": "benchmark_fn_fp" if number <= 32 else "real_kernel_challenges",
+            "public_dir": f"{prefix}triton_eval_cases/{case}",
+        }
+        if archived:
+            detail.update(status="archived", archive_root="archive/input_specific")
+        details[case] = detail
+        public = benchmark / detail["public_dir"]
+        public.mkdir(parents=True)
+        (public / "kernel.py").write_text("# frozen")
+    registry = benchmark / "case_map.json"
+    registry.write_text(json.dumps({"case_details": details, "next_case_number": 169}))
+    before = registry.read_bytes()
+    monkeypatch.setattr(index_cases, "ROOT", benchmark)
+
+    index_cases.main()
+
+    text = (benchmark / "CASE_INDEX.md").read_text()
+    assert "当前 96 题；另有 72 题已归档" in text
+    assert "当前编号：`case_01`–`case_90`、`case_163`–`case_168`。" in text
+    assert "| `case_01`–`case_32` | 32 |" in text
+    assert "| `case_33`–`case_90`、`case_163`–`case_168` | 64 |" in text
+    assert "`case_33`–`case_168`" not in text
+    assert "当前题连续编号" not in text
+    assert registry.read_bytes() == before
+
+
 def test_selects_first_valid_attempt_even_if_wrong_and_later_one_correct(index):
     wrong = row(trial="earlier", outcome="wrong_verdict")
     correct = row(trial="later")

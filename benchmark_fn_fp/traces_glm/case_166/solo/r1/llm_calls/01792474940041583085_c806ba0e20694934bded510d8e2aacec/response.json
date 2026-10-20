@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-8ef87d8e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive sweep of all finite FP16 values > -1 through the kernel and compare against FP64 log1p.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-97d2c3b7f5eb1d93",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, math, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_166\\\")\\nimport kernel\\n\\nbits = torch.arange(65536, dtype=torch.int32)\\nallvals = bits.to(torch.uint16).view(torch.float16).float()\\n# legal: finite and > -1 (in exact fp16 sense)\\nlegal = torch.isfinite(allvals)\\nv16 = torch.arange(65536, dtype=torch.int32).to(torch.uint16).view(torch.float16)\\nleg = torch.isfinite(v16) & (v16.float() > -1.0)\\nx = v16[leg]\\nprint(\\\"legal count\\\", x.numel())\\nouts = []\\nrefs = []\\nxs = []\\nCH = 131072\\nfor i in range(0, x.numel(), CH):\\n    chunk = x[i:i+CH].contiguous()\\n    out = kernel.run(chunk)\\n    ref = torch.log1p(chunk.to(torch.float64))\\n    outs.append(out.cpu())\\n    refs.append(ref.cpu())\\n    xs.append(chunk.cpu())\\nout = torch.cat(outs)\\nref = torch.cat(refs)\\nxall = torch.cat(xs)\\nerr = (out.to(torch.float64) - ref).abs()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max abs error over exhaustive legal FP16 domain\\\",\\n  \\\"n\\\": xall.numel(),\\n  \\\"max_abs_err\\\": float(err.max()),\\n  \\\"violations_gt_1e-6\\\": int((err > 1e-6).sum()),\\n  \\\"worst_x\\\": float(xall[err.argmax()]),\\n  \\\"worst_out\\\": float(out[err.argmax()]),\\n  \\\"worst_ref\\\": float(ref[err.argmax()]),\\n}))\\n# show a few worst cases\\nk = err.topk(5)\\nprint(\\\"top5 err\\\", [float(v) for v in k.values], \\\"x\\\", [float(xall[j]) for j in k.indices])\\n\", \"expected_signal\": \"max_abs_err > 1e-6 means confirmed violation; <= 1e-6 rebutted\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run exhaustive sweep of all finite FP16 > -1 through kernel.run, compare with FP64 log1p. ~30k values, chunk into <=131072... actually 30k fits in one call."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474941,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 521,
+    "prompt_tokens": 10576,
+    "total_tokens": 11097,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 44,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4644,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

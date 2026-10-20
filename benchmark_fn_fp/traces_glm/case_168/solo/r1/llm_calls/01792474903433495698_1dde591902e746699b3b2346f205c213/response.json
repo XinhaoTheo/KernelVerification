@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-c5eaf908",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe failed on a device mismatch in my own comparison code (ref tensor was on CPU). Fixing and re-running the same exhaustive checks.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8edabeb07adfe1a9",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, '/root/cases/case_168')\\nfrom kernel import run, reference\\n\\ndef gt_sbox():\\n    exp=[0]*512; log=[0]*256\\n    x=1\\n    for i in range(255):\\n        exp[i]=x; log[x]=i\\n        x ^= (x<<1) ^ (0x11b if x & 0x80 else 0)\\n        x &= 0xff\\n    for i in range(255,512): exp[i]=exp[i-255]\\n    sb=[0]*256\\n    for b in range(256):\\n        inv = exp[255-log[b]] if b else 0\\n        y = inv ^ 0x63\\n        r = y\\n        for _ in range(4):\\n            y = ((y<<1)|(y>>7))&0xff; r ^= y\\n        sb[b]=r\\n    return sb\\n\\nSB = gt_sbox()\\nref = torch.tensor(SB, dtype=torch.uint8, device='cuda')\\nassert SB[0]==0x63 and SB[0x53]==0xed\\n\\nfails = []\\nx = torch.arange(256, dtype=torch.uint8, device='cuda')\\ny = run(x)\\nif not torch.equal(y, ref):\\n    bad = (y != ref).nonzero().flatten().tolist()\\n    fails.append(('all_values', bad[:10], y[bad[:3]].tolist(), [SB[b] for b in bad[:3]]))\\n\\nlens = [1,2,255,256,257,511,1027,4096,131071,131072]\\nfor L in lens:\\n    t = torch.randint(0,256,(L,),dtype=torch.uint8,device='cuda')\\n    y = run(t)\\n    e = torch.tensor([SB[b] for b in t.tolist()],dtype=torch.uint8,device='cuda')\\n    if not torch.equal(y,e):\\n        idx = (y!=e).nonzero().flatten().tolist()\\n        fails.append((L, idx[:5], y[idx[:3]].tolist(), [SB[t[i].item()] for i in idx[:3]]))\\n    if not y.is_contiguous() or y.shape != t.shape or y.dtype != torch.uint8 or y.device != t.device:\\n        fails.append((L,'meta'))\\n\\nstorage = torch.randint(0,256,(600,),dtype=torch.uint8,device='cuda')\\nbefore = storage.clone()\\nview = storage[137:137+259]\\ny = run(view)\\ne = torch.tensor([SB[b] for b in view.tolist()],dtype=torch.uint8,device='cuda')\\nif not torch.equal(y,e): fails.append(('offset_view', (y!=e).nonzero().flatten()[:5].tolist()))\\nif not torch.equal(storage, before): fails.append(('offset_view','input mutated'))\\n\\nt = torch.randint(0,256,(100,),dtype=torch.uint8,device='cuda')\\nsnap = t.clone()\\ny = run(t)\\ny[0] ^= 0xff\\nif not torch.equal(t, snap): fails.append(('alias','output aliases input'))\\n\\nr = reference(x)\\nif not torch.equal(r, ref): fails.append(('reference_disagrees', (r!=ref).nonzero().flatten()[:5].tolist()))\\n\\nprint(json.dumps({'metric':'exact torch.equal vs independent ground-truth S-box; all 256 values, lengths '+str(lens)+', offset view, input-preservation, no-alias','SB[0]':hex(SB[0]),'SB[0x53]':hex(SB[0x53]),'fails':fails}))\\n\", \"expected_signal\": \"fails == []\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Fix the device bug and re-run."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474905,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 841,
+    "prompt_tokens": 13454,
+    "total_tokens": 14295,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 8,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7345,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

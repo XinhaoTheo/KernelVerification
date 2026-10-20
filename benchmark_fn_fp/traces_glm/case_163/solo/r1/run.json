@@ -1,0 +1,760 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_163",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise base-two exponential with integer range reduction.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _exp2_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    integer = tl.floor(x + 0.5).to(tl.int32)\n    fraction = x - integer.to(tl.float32)\n    polynomial = 0.0013391\n    polynomial = polynomial * fraction + 0.009676\n    polynomial = polynomial * fraction + 0.055504\n    polynomial = polynomial * fraction + 0.24022\n    polynomial = polynomial * fraction + 0.69315\n    polynomial = polynomial * fraction + 1.0\n    scale = ((integer + 127) << 23).to(tl.float32, bitcast=True)\n    value = scale * polynomial\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.bfloat16, \"BF16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    require(bool((x.abs() <= 10).all().item()), \"all input values must be in [-10,10]\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating 2**x for every stored input.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _exp2_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical exp2 independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.exp2(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (20.0 * torch.rand((size,), generator=generator) - 10.0).to(torch.bfloat16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the base-two exponential elementwise on stored BF16 inputs, returning FP32 output.\nThe mathematical target is target[i] = 2 ** x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional BF16 tensor [N], with 1<=N<=131072.\n- EVERY finite BF16 value in the closed interval [-10,10] is legal, including both signed zeros and positive and negative subnormal values. NaN, infinity and values outside this interval are outside the input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - 2 ** x[i]) <= 1e-6 * (2 ** x[i]).\n\nThe absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library exp2 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic implementation of a standard scalar operation, not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_163",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-20T05:40:46Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:41:53Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "4bbc386feaec43413d7d0df0c84e6af122572b942abc76a0e5097bb343528ec5"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "5489418030a53d3a418d92e70111d28973e4cef60abe06c7b4e4687df88f2cea"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "06f5065dd134eac5df00f0a88a671a7c9659e440f960be5c86e3b1d40f9702a3"
+              }
+            ],
+            "duration_s": 5.76132,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "max_relative_error": 2.6302188787795883e-06,
+              "num_legal_values": 33346,
+              "num_violations_1e-4": 0,
+              "num_violations_1e-5": 0,
+              "num_violations_1e-6": 455,
+              "worst_out": 2.8284196853637695,
+              "worst_ref": 2.8284271247461903,
+              "worst_x": 1.5
+            },
+            "max_relative_error": 2.63e-06,
+            "num_legal_values": 33346,
+            "num_violations_1e-6": 455,
+            "stderr": "",
+            "stdout": "{\"num_legal_values\": 33346, \"max_relative_error\": 2.6302188787795883e-06, \"worst_x\": 1.5, \"worst_out\": 2.8284196853637695, \"worst_ref\": 2.8284271247461903, \"num_violations_1e-6\": 455, \"num_violations_1e-5\": 0, \"num_violations_1e-4\": 0}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_x": 1.5
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 33346 legal BF16 values in [-10,10] shows 455 values exceed the 1e-6 relative tolerance; max relative error is 2.63e-6 at x=1.5 (kernel 2.8284197 vs exact 2.8284271).",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The coefficient 0.69315 is a truncation of ln2=0.69314718, and 0.24022/0.0013391 similarly look like truncated series coefficients; truncation of that magnitude (~2.8e-6 absolute in the dominant term) can produce relative error above 1e-6 for |fraction| up to 0.5, violating the fixed tolerance.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - 2**x[i]) <= 1e-6 * (2**x[i]) for EVERY finite BF16 value in [-10,10]."
+        }
+      ],
+      "scope_rationale": "Contract requires fixed 1e-6 relative tolerance across every finite BF16 value in [-10,10]; a full-domain sweep is exactly the declared input domain.",
+      "statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10].",
+      "status": "confirmed",
+      "updated_at": "2026-10-20T05:41:53Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_163",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_163"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_163"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_163"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_163",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 9.048175244,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll test exhaustively: the polynomial coefficients look truncated (0.69315 vs ln2=0.693147...), which may exceed the 1e-6 relative tolerance. Since input is BF16, I can sweep every legal stored value.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "",
+            "rationale": "The coefficient 0.69315 is a truncation of ln2=0.69314718, and 0.24022/0.0013391 similarly look like truncated series coefficients; truncation of that magnitude (~2.8e-6 absolute in the dominant term) can produce relative error above 1e-6 for |fraction| up to 0.5, violating the fixed tolerance throughout the domain.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - 2**x[i]) <= 1e-6 * (2**x[i]) for EVERY finite BF16 value in [-10,10]."
+              }
+            ],
+            "scope_rationale": "Contract requires fixed 1e-6 relative tolerance across every finite BF16 value in [-10,10], so a full-domain sweep is exactly the declared input domain.",
+            "statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10]."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.048,
+        "input_tokens": 8743,
+        "output_tokens": 596
+      }
+    },
+    {
+      "duration_s": 4.006568966,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll record the claim, then sweep every legal BF16 value to test the tolerance.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The coefficient 0.69315 is a truncation of ln2=0.69314718, and 0.24022/0.0013391 similarly look like truncated series coefficients; truncation of that magnitude (~2.8e-6 absolute in the dominant term) can produce relative error above 1e-6 for |fraction| up to 0.5, violating the fixed tolerance.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - 2**x[i]) <= 1e-6 * (2**x[i]) for EVERY finite BF16 value in [-10,10]."
+              }
+            ],
+            "scope_rationale": "Contract requires fixed 1e-6 relative tolerance across every finite BF16 value in [-10,10]; a full-domain sweep is exactly the declared input domain.",
+            "statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10]."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.007,
+        "input_tokens": 9499,
+        "output_tokens": 301
+      }
+    },
+    {
+      "duration_s": 5.222890217,
+      "role": "solo",
+      "round": 4,
+      "text": "Run the exhaustive sweep over all legal BF16 values in [-10,10] (~2765 values... actually BF16 has 256 mantissa per exponent; total ~ (exponent range) * 256, manageable ~ a few thousand). Run kernel, compare to FP64 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_163/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n# every finite bf16 value in [-10,10]\nbits = torch.arange(0, 65536, dtype=torch.int32)\nvals = bits.to(torch.uint16).view(torch.bfloat16)\nvals = vals[torch.isfinite(vals) & (vals.abs() <= 10)]\nx = vals.to(\"cuda\")\nout = k.run(x)\nref = torch.exp2(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nrel = err / ref\ni = int(rel.argmax())\nprint(json.dumps({\n \"num_legal_values\": int(x.numel()),\n \"max_relative_error\": float(rel[i]),\n \"worst_x\": float(x[i]),\n \"worst_out\": float(out[i]),\n \"worst_ref\": float(ref[i]),\n \"num_violations_1e-6\": int((rel > 1e-6).sum()),\n \"num_violations_1e-5\": int((rel > 1e-5).sum()),\n \"num_violations_1e-4\": int((rel > 1e-4).sum()),\n}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.223,
+        "input_tokens": 10766,
+        "output_tokens": 358
+      }
+    },
+    {
+      "duration_s": 55.209326576,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive sweep confirms the claim: 455 of 33,346 legal BF16 values violate the 1e-6 relative tolerance, with worst-case relative error 2.63e-6 (at x=1.5). I'll finalize this evidence and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_relative_error": 2.63e-06,
+              "num_legal_values": 33346,
+              "num_violations_1e-6": 455,
+              "worst_x": 1.5
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "Exhaustive sweep of all 33346 legal BF16 values in [-10,10] shows 455 values exceed the 1e-6 relative tolerance; max relative error is 2.63e-6 at x=1.5 (kernel 2.8284197 vs exact 2.8284271).",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 55.209,
+        "input_tokens": 13156,
+        "output_tokens": 249
+      }
+    },
+    {
+      "duration_s": 3.302050452000003,
+      "role": "solo",
+      "round": 6,
+      "text": "The exhaustive sweep over all 33,346 legal BF16 values confirmed 455 tolerance violations (max relative error 2.63e-6 > 1e-6). The claim is in-scope and confirmed; I'll record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The contract requires abs(actual - 2**x) <= 1e-6 * 2**x for EVERY finite BF16 value in [-10,10] with zero absolute tolerance. Probe t7 exhaustively swept all 33,346 legal BF16 values in the domain on the real GPU: 455 values violate the 1e-6 relative tolerance, with max relative error 2.63e-6 (e.g. x=1.5: kernel 2.8284197 vs exact 2.8284271). The truncated polynomial coefficients (0.69315 vs ln2=0.69314718, etc.) cause this systematic error. Since the tolerance is contractually fixed and these are exact stored input values squarely in the declared domain, this is an in-scope correctness failure of the approximation accuracy requirement.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.302,
+        "input_tokens": 16527,
+        "output_tokens": 290
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_163"
+      },
+      "created_at": "2026-10-20T05:40:32Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_163",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise base-two exponential with integer range reduction.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _exp2_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    integer = tl.floor(x + 0.5).to(tl.int32)\n    fraction = x - integer.to(tl.float32)\n    polynomial = 0.0013391\n    polynomial = polynomial * fraction + 0.009676\n    polynomial = polynomial * fraction + 0.055504\n    polynomial = polynomial * fraction + 0.24022\n    polynomial = polynomial * fraction + 0.69315\n    polynomial = polynomial * fraction + 1.0\n    scale = ((integer + 127) << 23).to(tl.float32, bitcast=True)\n    value = scale * polynomial\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.bfloat16, \"BF16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    require(bool((x.abs() <= 10).all().item()), \"all input values must be in [-10,10]\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating 2**x for every stored input.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _exp2_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical exp2 independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.exp2(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (20.0 * torch.rand((size,), generator=generator) - 10.0).to(torch.bfloat16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the base-two exponential elementwise on stored BF16 inputs, returning FP32 output.\nThe mathematical target is target[i] = 2 ** x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional BF16 tensor [N], with 1<=N<=131072.\n- EVERY finite BF16 value in the closed interval [-10,10] is legal, including both signed zeros and positive and negative subnormal values. NaN, infinity and values outside this interval are outside the input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - 2 ** x[i]) <= 1e-6 * (2 ** x[i]).\n\nThe absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library exp2 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic implementation of a standard scalar operation, not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_163",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_163"
+      },
+      "created_at": "2026-10-20T05:40:32Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the base-two exponential elementwise on stored BF16 inputs, returning FP32 output.\nThe mathematical target is target[i] = 2 ** x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional BF16 tensor [N], with 1<=N<=131072.\n- EVERY finite BF16 value in the closed interval [-10,10] is legal, including both signed zeros and positive and negative subnormal values. NaN, infinity and values outside this interval are outside the input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - 2 ** x[i]) <= 1e-6 * (2 ** x[i]).\n\nThe absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library exp2 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic implementation of a standard scalar operation, not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_163",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_163"
+      },
+      "created_at": "2026-10-20T05:40:32Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_163",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2904
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1847
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_163",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-20T05:40:32Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_163",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "claim_id": "",
+        "rationale": "The coefficient 0.69315 is a truncation of ln2=0.69314718, and 0.24022/0.0013391 similarly look like truncated series coefficients; truncation of that magnitude (~2.8e-6 absolute in the dominant term) can produce relative error above 1e-6 for |fraction| up to 0.5, violating the fixed tolerance throughout the domain.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - 2**x[i]) <= 1e-6 * (2**x[i]) for EVERY finite BF16 value in [-10,10]."
+          }
+        ],
+        "scope_rationale": "Contract requires fixed 1e-6 relative tolerance across every finite BF16 value in [-10,10], so a full-domain sweep is exactly the declared input domain.",
+        "statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10]."
+      },
+      "created_at": "2026-10-20T05:40:42Z",
+      "id": "t5",
+      "output": {
+        "error": {
+          "message": "tool record_claim got unexpected args: claim_id",
+          "recoverable": true,
+          "type": "ToolRegistryError"
+        },
+        "error_type": "ToolRegistryError",
+        "event_id": "t5",
+        "message": "tool record_claim got unexpected args: claim_id",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The coefficient 0.69315 is a truncation of ln2=0.69314718, and 0.24022/0.0013391 similarly look like truncated series coefficients; truncation of that magnitude (~2.8e-6 absolute in the dominant term) can produce relative error above 1e-6 for |fraction| up to 0.5, violating the fixed tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - 2**x[i]) <= 1e-6 * (2**x[i]) for EVERY finite BF16 value in [-10,10]."
+          }
+        ],
+        "scope_rationale": "Contract requires fixed 1e-6 relative tolerance across every finite BF16 value in [-10,10]; a full-domain sweep is exactly the declared input domain.",
+        "statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10]."
+      },
+      "created_at": "2026-10-20T05:40:46Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-20T05:40:46Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The coefficient 0.69315 is a truncation of ln2=0.69314718, and 0.24022/0.0013391 similarly look like truncated series coefficients; truncation of that magnitude (~2.8e-6 absolute in the dominant term) can produce relative error above 1e-6 for |fraction| up to 0.5, violating the fixed tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - 2**x[i]) <= 1e-6 * (2**x[i]) for EVERY finite BF16 value in [-10,10]."
+          }
+        ],
+        "scope_rationale": "Contract requires fixed 1e-6 relative tolerance across every finite BF16 value in [-10,10]; a full-domain sweep is exactly the declared input domain.",
+        "statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10].",
+        "status": "open",
+        "updated_at": "2026-10-20T05:40:46Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_163/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n# every finite bf16 value in [-10,10]\nbits = torch.arange(0, 65536, dtype=torch.int32)\nvals = bits.to(torch.uint16).view(torch.bfloat16)\nvals = vals[torch.isfinite(vals) & (vals.abs() <= 10)]\nx = vals.to(\"cuda\")\nout = k.run(x)\nref = torch.exp2(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nrel = err / ref\ni = int(rel.argmax())\nprint(json.dumps({\n \"num_legal_values\": int(x.numel()),\n \"max_relative_error\": float(rel[i]),\n \"worst_x\": float(x[i]),\n \"worst_out\": float(out[i]),\n \"worst_ref\": float(ref[i]),\n \"num_violations_1e-6\": int((rel > 1e-6).sum()),\n \"num_violations_1e-5\": int((rel > 1e-5).sum()),\n \"num_violations_1e-4\": int((rel > 1e-4).sum()),\n}))\n"
+      },
+      "created_at": "2026-10-20T05:40:57Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "4bbc386feaec43413d7d0df0c84e6af122572b942abc76a0e5097bb343528ec5"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "5489418030a53d3a418d92e70111d28973e4cef60abe06c7b4e4687df88f2cea"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "06f5065dd134eac5df00f0a88a671a7c9659e440f960be5c86e3b1d40f9702a3"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10].",
+        "cwd": "/root/cases/case_163",
+        "duration_s": 5.76132,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "4bbc386feaec43413d7d0df0c84e6af122572b942abc76a0e5097bb343528ec5"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "5489418030a53d3a418d92e70111d28973e4cef60abe06c7b4e4687df88f2cea"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "06f5065dd134eac5df00f0a88a671a7c9659e440f960be5c86e3b1d40f9702a3"
+              }
+            ],
+            "duration_s": 5.76132,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "max_relative_error": 2.6302188787795883e-06,
+              "num_legal_values": 33346,
+              "num_violations_1e-4": 0,
+              "num_violations_1e-5": 0,
+              "num_violations_1e-6": 455,
+              "worst_out": 2.8284196853637695,
+              "worst_ref": 2.8284271247461903,
+              "worst_x": 1.5
+            },
+            "stderr": "",
+            "stdout": "{\"num_legal_values\": 33346, \"max_relative_error\": 2.6302188787795883e-06, \"worst_x\": 1.5, \"worst_out\": 2.8284196853637695, \"worst_ref\": 2.8284271247461903, \"num_violations_1e-6\": 455, \"num_violations_1e-5\": 0, \"num_violations_1e-4\": 0}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "max_relative_error": 2.6302188787795883e-06,
+          "num_legal_values": 33346,
+          "num_violations_1e-4": 0,
+          "num_violations_1e-5": 0,
+          "num_violations_1e-6": 455,
+          "worst_out": 2.8284196853637695,
+          "worst_ref": 2.8284271247461903,
+          "worst_x": 1.5
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"num_legal_values\": 33346, \"max_relative_error\": 2.6302188787795883e-06, \"worst_x\": 1.5, \"worst_out\": 2.8284196853637695, \"worst_ref\": 2.8284271247461903, \"num_violations_1e-6\": 455, \"num_violations_1e-5\": 0, \"num_violations_1e-4\": 0}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_relative_error": 2.63e-06,
+          "num_legal_values": 33346,
+          "num_violations_1e-6": 455,
+          "worst_x": 1.5
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "Exhaustive sweep of all 33346 legal BF16 values in [-10,10] shows 455 values exceed the 1e-6 relative tolerance; max relative error is 2.63e-6 at x=1.5 (kernel 2.8284197 vs exact 2.8284271).",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-20T05:41:53Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T05:40:46Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T05:41:53Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "4bbc386feaec43413d7d0df0c84e6af122572b942abc76a0e5097bb343528ec5"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "5489418030a53d3a418d92e70111d28973e4cef60abe06c7b4e4687df88f2cea"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "06f5065dd134eac5df00f0a88a671a7c9659e440f960be5c86e3b1d40f9702a3"
+                  }
+                ],
+                "duration_s": 5.76132,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "max_relative_error": 2.6302188787795883e-06,
+                  "num_legal_values": 33346,
+                  "num_violations_1e-4": 0,
+                  "num_violations_1e-5": 0,
+                  "num_violations_1e-6": 455,
+                  "worst_out": 2.8284196853637695,
+                  "worst_ref": 2.8284271247461903,
+                  "worst_x": 1.5
+                },
+                "max_relative_error": 2.63e-06,
+                "num_legal_values": 33346,
+                "num_violations_1e-6": 455,
+                "stderr": "",
+                "stdout": "{\"num_legal_values\": 33346, \"max_relative_error\": 2.6302188787795883e-06, \"worst_x\": 1.5, \"worst_out\": 2.8284196853637695, \"worst_ref\": 2.8284271247461903, \"num_violations_1e-6\": 455, \"num_violations_1e-5\": 0, \"num_violations_1e-4\": 0}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "worst_x": 1.5
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 33346 legal BF16 values in [-10,10] shows 455 values exceed the 1e-6 relative tolerance; max relative error is 2.63e-6 at x=1.5 (kernel 2.8284197 vs exact 2.8284271).",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The coefficient 0.69315 is a truncation of ln2=0.69314718, and 0.24022/0.0013391 similarly look like truncated series coefficients; truncation of that magnitude (~2.8e-6 absolute in the dominant term) can produce relative error above 1e-6 for |fraction| up to 0.5, violating the fixed tolerance.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - 2**x[i]) <= 1e-6 * (2**x[i]) for EVERY finite BF16 value in [-10,10]."
+            }
+          ],
+          "scope_rationale": "Contract requires fixed 1e-6 relative tolerance across every finite BF16 value in [-10,10]; a full-domain sweep is exactly the declared input domain.",
+          "statement": "The polynomial approximation in _exp2_kernel does not meet the 1e-6 relative tolerance for all legal BF16 inputs in [-10,10].",
+          "status": "confirmed",
+          "updated_at": "2026-10-20T05:41:53Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:41:53Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "4bbc386feaec43413d7d0df0c84e6af122572b942abc76a0e5097bb343528ec5"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "5489418030a53d3a418d92e70111d28973e4cef60abe06c7b4e4687df88f2cea"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "06f5065dd134eac5df00f0a88a671a7c9659e440f960be5c86e3b1d40f9702a3"
+              }
+            ],
+            "duration_s": 5.76132,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "max_relative_error": 2.6302188787795883e-06,
+              "num_legal_values": 33346,
+              "num_violations_1e-4": 0,
+              "num_violations_1e-5": 0,
+              "num_violations_1e-6": 455,
+              "worst_out": 2.8284196853637695,
+              "worst_ref": 2.8284271247461903,
+              "worst_x": 1.5
+            },
+            "max_relative_error": 2.63e-06,
+            "num_legal_values": 33346,
+            "num_violations_1e-6": 455,
+            "stderr": "",
+            "stdout": "{\"num_legal_values\": 33346, \"max_relative_error\": 2.6302188787795883e-06, \"worst_x\": 1.5, \"worst_out\": 2.8284196853637695, \"worst_ref\": 2.8284271247461903, \"num_violations_1e-6\": 455, \"num_violations_1e-5\": 0, \"num_violations_1e-4\": 0}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_x": 1.5
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 33346 legal BF16 values in [-10,10] shows 455 values exceed the 1e-6 relative tolerance; max relative error is 2.63e-6 at x=1.5 (kernel 2.8284197 vs exact 2.8284271).",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract requires abs(actual - 2**x) <= 1e-6 * 2**x for EVERY finite BF16 value in [-10,10] with zero absolute tolerance. Probe t7 exhaustively swept all 33,346 legal BF16 values in the domain on the real GPU: 455 values violate the 1e-6 relative tolerance, with max relative error 2.63e-6 (e.g. x=1.5: kernel 2.8284197 vs exact 2.8284271). The truncated polynomial coefficients (0.69315 vs ln2=0.69314718, etc.) cause this systematic error. Since the tolerance is contractually fixed and these are exact stored input values squarely in the declared domain, this is an in-scope correctness failure of the approximation accuracy requirement.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-20T05:41:56Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-10-20T05:41:56Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The contract requires abs(actual - 2**x) <= 1e-6 * 2**x for EVERY finite BF16 value in [-10,10] with zero absolute tolerance. Probe t7 exhaustively swept all 33,346 legal BF16 values in the domain on the real GPU: 455 values violate the 1e-6 relative tolerance, with max relative error 2.63e-6 (e.g. x=1.5: kernel 2.8284197 vs exact 2.8284271). The truncated polynomial coefficients (0.69315 vs ln2=0.69314718, etc.) cause this systematic error. Since the tolerance is contractually fixed and these are exact stored input values squarely in the declared domain, this is an in-scope correctness failure of the approximation accuracy requirement.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-10-20T05:41:56Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The contract requires abs(actual - 2**x) <= 1e-6 * 2**x for EVERY finite BF16 value in [-10,10] with zero absolute tolerance. Probe t7 exhaustively swept all 33,346 legal BF16 values in the domain on the real GPU: 455 values violate the 1e-6 relative tolerance, with max relative error 2.63e-6 (e.g. x=1.5: kernel 2.8284197 vs exact 2.8284271). The truncated polynomial coefficients (0.69315 vs ln2=0.69314718, etc.) cause this systematic error. Since the tolerance is contractually fixed and these are exact stored input values squarely in the declared domain, this is an in-scope correctness failure of the approximation accuracy requirement.",
+    "verdict": "reject"
+  }
+}

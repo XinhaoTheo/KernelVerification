@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-0f3012bc",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent probes: c1 tests the pure degree-6 polynomial error (FP64 evaluation over all representable fractions from legal BF16 inputs), and c2 tests the actual kernel output against FP64 exp2 exhaustively over every legal BF16 value in [-10,10].",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b2053522ca490f93",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\n\\ndev = 'cuda'\\n# All finite BF16 values in [-10,10]\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nall_bf16 = torch.tensor(bits.to(torch.uint16).numpy().tobytes(), dtype=torch.uint8).view(torch.bfloat16) if False else None\\n# build BF16 from raw uint16\\nu16 = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16)\\nb = torch.tensor(u16.numpy().view('uint16').copy(), dtype=torch.uint16)\\nbf = b.numpy().view(torch.dtype('torch.bfloat16')) if False else None\\n# simpler: use torch view trick\\nt = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16)\\nvals = t.view(torch.bfloat16)  # not supported directly; use frombuffer\\nimport numpy as np\\nraw = np.arange(0, 65536, dtype=np.uint16)\\nx_all = torch.from_numpy(raw.view(np.int16)).view(torch.bfloat16)\\nfinite = torch.isfinite(x_all)\\ninrange = (x_all.abs() <= 10) & finite\\nx = x_all[inrange].to(dev)\\nprint(\\\"num legal values:\\\", x.numel())\\n\\n# fraction per kernel scheme\\nx32 = x.to(torch.float32)\\ninteg = torch.floor(x32 + 0.5).to(torch.int32)\\nfrac = x32 - integ.to(torch.float32)\\n\\n# pure polynomial in FP64 (isolates approximation error from FP32 rounding)\\nf = frac.to(torch.float64)\\np = torch.full_like(f, 0.0013391)\\np = p * f + 0.009676\\np = p * f + 0.055504\\np = p * f + 0.24022\\np = p * f + 0.69315\\np = p * f + 1.0\\nscale = torch.exp2(integ.to(torch.float64))\\nexact = torch.exp2(f)\\n\\nrel = ((p * scale) - exact).abs() / exact\\ni = rel.argmax()\\nprint(\\\"poly-only max rel err:\\\", rel[i].item(), \\\"at x =\\\", x[i].item(), \\\"frac =\\\", f[i].item())\\nprint(json.dumps({\\\"probe\\\": \\\"c1_poly_only_fp64\\\", \\\"num_legal_bf16\\\": int(x.numel()),\\n                 \\\"max_rel_err_poly_fp64\\\": float(rel[i].item()),\\n                 \\\"worst_x\\\": float(x[i].item()),\\n                 \\\"count_exceed_1e-6\\\": int((rel > 1e-6).sum().item())}))\\n\", \"expected_signal\": \"max relative error of the FP64 polynomial vs exp2 over all legal BF16 inputs, with whether it exceeds 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a2132c7970a73fc6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, numpy as np, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\\n\\ndev = 'cuda'\\nraw = np.arange(0, 65536, dtype=np.uint16)\\nx_all = torch.from_numpy(raw.view(np.int16)).view(torch.bfloat16)\\ninrange = (x_all.abs() <= 10) & torch.isfinite(x_all)\\nlegal = x_all[inrange].to(dev)\\nprint(\\\"num legal:\\\", legal.numel())\\n\\nchunks = []\\nfor s in range(0, legal.numel(), 131072):\\n    c = legal[s:s+131072].contiguous()\\n    out = kernel.run(c)\\n    ref = torch.exp2(c.to(torch.float64))\\n    rel = (out.to(torch.float64) - ref).abs() / ref\\n    bad = rel > 1e-6\\n    j = rel.argmax()\\n    chunks.append((rel[j].item(), c[j].item(), out[j].item(), ref[j].item(), int(bad.sum())))\\nmx = max(ch[0] for c in chunks)\\nprint(json.dumps({\\\"probe\\\": \\\"c2_kernel_full_domain\\\", \\\"num_legal_bf16\\\": int(legal.numel()),\\n                  \\\"max_rel_err_kernel\\\": float(mx),\\n                  \\\"count_exceed_1e-6\\\": int(sum(c[4] for c in chunks)),\\n                  \\\"worst_chunks\\\": chunks[:2]}))\\n\", \"expected_signal\": \"max relative error of actual kernel output vs FP64 exp2 over all legal BF16 values in [-10,10]\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Two claims. Both concern worst-case relative error. Best approach: exhaustive test over ALL BF16 values in [-10,10] — that's every representable BF16 value in that range (each BF16 value has a unique fraction in [-0.5,0.5)... actually for x in [-10,10], fraction = x - floor(x+0.5) can be many values, but only ~2048 * 21? All BF16 values in [-10,10] ≈ 2*(10/2^-126...) — actually magnitudes from subnormals up to 10: ~ (10 - 0)*256 mantissa steps per binade... total ~ 5*256 + subnormals ~ 1280 ≈ few thousand. Exhaustive is feasible on GPU.\n\nI can compute reference exactly in FP64 and compare to kernel output. That single probe decides both c1 (polynomial error) and c2 (combined). Also compute the pure polynomial error in FP64 separately to distinguish.\n\nOne probe can serve both claims. But rules say one claim per probe; I can run two probes: probe for c1 = FP64 evaluation of the polynomial vs exact 2^f (isolation of polynomial error); probe for c2 = actual GPU run over all legal BF16 values. Launch both together."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474874,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1334,
+    "prompt_tokens": 20252,
+    "total_tokens": 21586,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 275,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

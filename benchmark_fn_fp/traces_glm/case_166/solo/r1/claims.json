@@ -1,0 +1,119 @@
+[
+  {
+    "created_at": "2026-10-20T05:42:20Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-20T05:42:34Z",
+        "data": {},
+        "id": "c1.e1",
+        "kind": "tool_error",
+        "summary": "Probe t6 failed before testing anything: the FP16 sweep tensor was kept on CPU, so validate_inputs raised 'CUDA input required by run'. No correctness evidence obtained.",
+        "supports": "inconclusive",
+        "tool_event_id": null
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-10-20T05:42:54Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "8490ab97b52a8fa7c763d0787dfb72a99ea4f322b12702038e21c94f7b6fb22f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "c4a5fcd8c39bcad2d6546ed859f8694deb1badf336b8d84612c3042173cc114d"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "3452e6202c5943f53ada336beece99631e34e291323e0ceff1a7be198adbcd66"
+            }
+          ],
+          "duration_s": 5.77943,
+          "exit_code": 0,
+          "expected_signal": "max_abs_err > 1e-6 confirms violation; <= 1e-6 rebuts",
+          "json_parse_error": null,
+          "json_result": {
+            "max_abs_err": 1.3007035484235985e-06,
+            "metric": "max abs error over exhaustive legal FP16 domain (> -1), vs FP64 log1p",
+            "n": 47104,
+            "top5_err": [
+              1.3007035484235985e-06,
+              1.2807968641226353e-06,
+              1.2436994385467415e-06,
+              1.236186040642906e-06,
+              1.231679771507288e-06
+            ],
+            "top5_x": [
+              3378.0,
+              3374.0,
+              27008.0,
+              13496.0,
+              27024.0
+            ],
+            "violations_gt_1e-6": 55,
+            "worst_out": 8.125333786010742,
+            "worst_ref": 8.12533508671429,
+            "worst_x": 3378.0
+          },
+          "max_abs_err": 1.3007035484235985e-06,
+          "n": 47104,
+          "stderr": "",
+          "stdout": "legal count 47104\n{\"metric\": \"max abs error over exhaustive legal FP16 domain (> -1), vs FP64 log1p\", \"n\": 47104, \"max_abs_err\": 1.3007035484235985e-06, \"violations_gt_1e-6\": 55, \"worst_x\": 3378.0, \"worst_out\": 8.125333786010742, \"worst_ref\": 8.12533508671429, \"top5_err\": [1.3007035484235985e-06, 1.2807968641226353e-06, 1.2436994385467415e-06, 1.236186040642906e-06, 1.231679771507288e-06], \"top5_x\": [3378.0, 3374.0, 27008.0, 13496.0, 27024.0]}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "top5_err": [
+            1.3007035484235985e-06,
+            1.2807968641226353e-06,
+            1.2436994385467415e-06,
+            1.236186040642906e-06,
+            1.231679771507288e-06
+          ],
+          "top5_x": [
+            3378.0,
+            3374.0,
+            27008.0,
+            13496.0,
+            27024.0
+          ],
+          "violations_gt_1e-6": 55,
+          "worst_out": 8.125333786010742,
+          "worst_ref": 8.12533508671429,
+          "worst_x": 3378.0
+        },
+        "id": "c1.e2",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive sweep of all 47,104 legal FP16 values (> -1, finite) through the kernel on CUDA vs FP64 log1p: 55 values violate the 1e-6 absolute tolerance; max abs error 1.3007e-6 at x=3378 (kernel 8.125333786, reference 8.125335087). Errors cluster in the large-x region (x in thousands), consistent with truncated polynomial coefficients (0.142857/0.2/0.33333) and split ln2 constants. These inputs are explicitly legal per the contract.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The atanh-series polynomial truncates after z^5/5 terms; residual term is ~z^7/7 with z up to ~0.245 (mantissa up to 1.65 after halving), giving truncation error possibly above 1e-6, and the ln2 constants (0.69313812256 + 9.058e-6) may not sum to ln2 exactly enough for large exponents. Exhaustive FP16 sweep can decide.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Every finite FP16 value strictly greater than -1 is legal ... Every output element must satisfy: abs(actual[i] - log(1 + x[i])) <= 1e-6. Correctness is one verdict for the implementation ... throughout the entire legal domain."
+      }
+    ],
+    "scope_rationale": "Contract requires abs error <= 1e-6 for every finite FP16 value > -1; any legal input exceeding tolerance is a contract violation.",
+    "statement": "There exist legal FP16 input values > -1 for which the kernel's output deviates from log(1+x) by more than 1e-6 absolute.",
+    "status": "confirmed",
+    "updated_at": "2026-10-20T05:42:54Z"
+  }
+]

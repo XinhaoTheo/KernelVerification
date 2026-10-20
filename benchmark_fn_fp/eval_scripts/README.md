@@ -52,7 +52,7 @@ paths; repeats and the historical case_93/case_94 cohorts are not pooled silentl
 
 ## Filling missing arms
 
-The [GLM index](../traces_glm/INDEX.md) starts with coverage for all 90 active
+The [GLM index](../traces_glm/INDEX.md) starts with coverage for all 96 active
 cases, including cases with no traces. It counts valid wrong answers and
 `needs_more_evidence` as completed; errors, truncated answers and running jobs
 remain separate. The [2026-09-30 completion report](../traces_glm/COMPLETION_20260930.md)
@@ -63,7 +63,7 @@ pilot cases. Current reports exclude the archive.
 modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset benchmark_fn_fp --arm both --all --provider fireworks --only-missing --total-output-tokens 32768
 ```
 
-The command above selects the original 32 cases. Use `--dataset real_kernel_challenges` for cases 33–90.
+The command above selects the original 32 cases. Use `--dataset real_kernel_challenges` for cases 33–90 and 163–168.
 
 `--only-missing` skips case/arm slots with an existing valid judgment anywhere
 in the selected model-family trace tree, including historical GLM providers.
@@ -72,7 +72,7 @@ preserved; use a new `rN` for a retry and do not submit a second batch
 while the same slots are still running. The source-only Fireworks runner has
 no such flag: pass an audited missing-case list with `--cases`.
 
-Current selections are the original suite (`benchmark_fn_fp`, cases 01–32) and `real_kernel_challenges` (cases 33–90). The input-specific challenge groups (cases 91–138) are archived and excluded from new experiments.
+Current selections are the original suite (`benchmark_fn_fp`, cases 01–32) and `real_kernel_challenges` (cases 33–90 and 163–168). The input-specific challenge groups (cases 91–138) are archived and excluded from new experiments.
 The [early pilot](../archive/numerical_pilot/README.md) is archived and closed
 to expansion or reruns. Coverage completion combines historical and new
 records, so it does not establish identical model/settings across arms.
@@ -103,4 +103,4 @@ reasoned their way to the same wrong one. The adversarial structure did not
 improve false-positive suppression, which is the property it was meant to
 provide.
 
-These figures describe the historical Opus experiment. Current GLM single-call, Solo and Debate results are listed in the [current benchmark summary](../README.md#current-accuracy). No saved allclose baseline result is available for the current 90-case set. Its existing runner covers the original suite only, so allclose accuracy remains N/A until an explicit baseline protocol is run and its results are saved.
+These figures describe the historical Opus experiment. Current GLM single-call, Solo and Debate results are listed in the [current benchmark summary](../README.md#current-accuracy). The saved allclose r2 baseline covers the October 19 set of 90 cases. It scores 49/90 under the two documented protocols. The six October 20 cases have reviewed numerical comparison rules but do not yet have allclose results; see the [saved baseline protocol](../traces_allclose/README.md).

@@ -3,12 +3,12 @@
 所有题库和 traces 共用 `case_数字` 编号。本次重排后的编号、旧编号与来源记录在 case_map.json，部分题库共用统一公开目录。
 本页是说明与答案侧索引，不作为模型输入。编号描述实验来源，不保证某种方法一定获胜。
 
-当前 90 题；另有 72 题已归档。当前题连续编号；归档题排在其后，不进入默认实验。
+当前 96 题；另有 72 题已归档。当前编号：`case_01`–`case_90`、`case_163`–`case_168`。归档题不进入默认实验，新增题使用后续未用编号。
 
 | 编号范围 | 数量 | 测什么 | 说明与题目 |
 |---|---:|---|---|
 | `case_01`–`case_32` | 32 | 原始 FN/FP benchmark | [说明](README.md) · [题目](triton_eval_cases/) |
-| `case_33`–`case_90` | 58 | 专门构造的真实 kernel 验证挑战（单独统计） | [说明](real_kernel_challenges/README.md) · [题目](triton_eval_cases/) |
+| `case_33`–`case_90`、`case_163`–`case_168` | 64 | 专门构造的真实 kernel 验证挑战（单独统计） | [说明](real_kernel_challenges/README.md) · [题目](triton_eval_cases/) |
 
 | 归档 | 数量 | 保留内容 |
 |---|---:|---|
@@ -21,11 +21,11 @@
 
 | 分组 | Case / traces |
 |---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | [case_36](traces_glm/case_36/)、[case_41](traces_glm/case_41/)、[case_54](traces_glm/case_54/)、[case_55](traces_glm/case_55/)、[case_62](traces_glm/case_62/)、[case_68](traces_glm/case_68/)、[case_74](traces_glm/case_74/)、[case_76](traces_glm/case_76/)、[case_78](traces_glm/case_78/)、[case_81](traces_glm/case_81/)、[case_86](traces_glm/case_86/)、[case_90](traces_glm/case_90/) |
-| 未体现增益，保留待归普通集合 | [case_33](traces_glm/case_33/)、[case_34](traces_glm/case_34/)、[case_35](traces_glm/case_35/)、[case_37](traces_glm/case_37/)、[case_38](traces_glm/case_38/)、[case_39](traces_glm/case_39/)、[case_40](traces_glm/case_40/)、[case_42](traces_glm/case_42/)、[case_43](traces_glm/case_43/)、[case_44](traces_glm/case_44/)、[case_45](traces_glm/case_45/)、[case_46](traces_glm/case_46/)、[case_47](traces_glm/case_47/)、[case_48](traces_glm/case_48/)、[case_49](traces_glm/case_49/)、[case_50](traces_glm/case_50/)、[case_51](traces_glm/case_51/)、[case_52](traces_glm/case_52/)、[case_53](traces_glm/case_53/)、[case_56](traces_glm/case_56/)、[case_57](traces_glm/case_57/)、[case_58](traces_glm/case_58/)、[case_59](traces_glm/case_59/)、[case_60](traces_glm/case_60/)、[case_61](traces_glm/case_61/)、[case_63](traces_glm/case_63/)、[case_64](traces_glm/case_64/)、[case_65](traces_glm/case_65/)、[case_66](traces_glm/case_66/)、[case_67](traces_glm/case_67/)、[case_69](traces_glm/case_69/)、[case_70](traces_glm/case_70/)、[case_71](traces_glm/case_71/)、[case_72](traces_glm/case_72/)、[case_73](traces_glm/case_73/)、[case_75](traces_glm/case_75/)、[case_77](traces_glm/case_77/)、[case_79](traces_glm/case_79/)、[case_80](traces_glm/case_80/)、[case_82](traces_glm/case_82/)、[case_83](traces_glm/case_83/)、[case_84](traces_glm/case_84/)、[case_85](traces_glm/case_85/)、[case_87](traces_glm/case_87/)、[case_88](traces_glm/case_88/)、[case_89](traces_glm/case_89/) |
+| 成功案例：已观察到工具流程增益，单独保留 | [case_36](traces_glm/case_36/)、[case_41](traces_glm/case_41/)、[case_54](traces_glm/case_54/)、[case_55](traces_glm/case_55/)、[case_62](traces_glm/case_62/)、[case_68](traces_glm/case_68/)、[case_74](traces_glm/case_74/)、[case_76](traces_glm/case_76/)、[case_78](traces_glm/case_78/)、[case_81](traces_glm/case_81/)、[case_86](traces_glm/case_86/)、[case_90](traces_glm/case_90/)、[case_166](traces_glm/case_166/) |
+| 未体现增益，保留待归普通集合 | [case_33](traces_glm/case_33/)、[case_34](traces_glm/case_34/)、[case_35](traces_glm/case_35/)、[case_37](traces_glm/case_37/)、[case_38](traces_glm/case_38/)、[case_39](traces_glm/case_39/)、[case_40](traces_glm/case_40/)、[case_42](traces_glm/case_42/)、[case_43](traces_glm/case_43/)、[case_44](traces_glm/case_44/)、[case_45](traces_glm/case_45/)、[case_46](traces_glm/case_46/)、[case_47](traces_glm/case_47/)、[case_48](traces_glm/case_48/)、[case_49](traces_glm/case_49/)、[case_50](traces_glm/case_50/)、[case_51](traces_glm/case_51/)、[case_52](traces_glm/case_52/)、[case_53](traces_glm/case_53/)、[case_56](traces_glm/case_56/)、[case_57](traces_glm/case_57/)、[case_58](traces_glm/case_58/)、[case_59](traces_glm/case_59/)、[case_60](traces_glm/case_60/)、[case_61](traces_glm/case_61/)、[case_63](traces_glm/case_63/)、[case_64](traces_glm/case_64/)、[case_65](traces_glm/case_65/)、[case_66](traces_glm/case_66/)、[case_67](traces_glm/case_67/)、[case_69](traces_glm/case_69/)、[case_70](traces_glm/case_70/)、[case_71](traces_glm/case_71/)、[case_72](traces_glm/case_72/)、[case_73](traces_glm/case_73/)、[case_75](traces_glm/case_75/)、[case_77](traces_glm/case_77/)、[case_79](traces_glm/case_79/)、[case_80](traces_glm/case_80/)、[case_82](traces_glm/case_82/)、[case_83](traces_glm/case_83/)、[case_84](traces_glm/case_84/)、[case_85](traces_glm/case_85/)、[case_87](traces_glm/case_87/)、[case_88](traces_glm/case_88/)、[case_89](traces_glm/case_89/)、[case_163](traces_glm/case_163/)、[case_164](traces_glm/case_164/)、[case_165](traces_glm/case_165/)、[case_167](traces_glm/case_167/)、[case_168](traces_glm/case_168/) |
 
 
-当前编号体系的退休编号：无。下一可用编号从 163 开始。
+当前编号体系的退休编号：无。下一可用编号从 169 开始。
 `real_kernel_challenges/` 保存真实源码衍生的专门构造挑战；标签针对固定实现与合同，结果单独统计。
 
 2026-10-19 重排：当前题 case_01–case_90；归档题 case_91–case_162。旧 case_03 的退休记录留在注册表迁移历史中。
@@ -196,6 +196,12 @@
 | `case_160` | 已归档 | `case_103` | numerical_pilot / 早期数值 pilot： | [kernel](archive/numerical_pilot/eval_cases/case_160/kernel.py) · [合同](archive/numerical_pilot/eval_cases/case_160/problem.txt) | [记录](archive/numerical_pilot/traces_glm/case_160/) |
 | `case_161` | 已归档 | `case_104` | numerical_pilot / 早期数值 pilot： | [kernel](archive/numerical_pilot/eval_cases/case_161/kernel.py) · [合同](archive/numerical_pilot/eval_cases/case_161/problem.txt) | [记录](archive/numerical_pilot/traces_glm/case_161/) |
 | `case_162` | 已归档 | `case_105` | numerical_pilot / 早期数值 pilot： | [kernel](archive/numerical_pilot/eval_cases/case_162/kernel.py) · [合同](archive/numerical_pilot/eval_cases/case_162/problem.txt) | [记录](archive/numerical_pilot/traces_glm/case_162/) |
+| `case_163` | 当前 · 未体现增益，保留待归普通集合 | `case_163` | real_kernel_challenges / BF16 exp2：区间缩减后的系数精度 | [kernel](triton_eval_cases/case_163/kernel.py) · [合同](triton_eval_cases/case_163/problem.txt) | [记录](traces_glm/case_163/) |
+| `case_164` | 当前 · 未体现增益，保留待归普通集合 | `case_164` | real_kernel_challenges / BF16 exp2：区间缩减后的系数精度 | [kernel](triton_eval_cases/case_164/kernel.py) · [合同](triton_eval_cases/case_164/problem.txt) | [记录](traces_glm/case_164/) |
+| `case_165` | 当前 · 未体现增益，保留待归普通集合 | `case_165` | real_kernel_challenges / FP16 log1p：区间缩减与补偿重构 | [kernel](triton_eval_cases/case_165/kernel.py) · [合同](triton_eval_cases/case_165/problem.txt) | [记录](traces_glm/case_165/) |
+| `case_166` | 当前 · 成功案例：已观察到工具流程增益，单独保留 | `case_166` | real_kernel_challenges / FP16 log1p：区间缩减与补偿重构 | [kernel](triton_eval_cases/case_166/kernel.py) · [合同](triton_eval_cases/case_166/problem.txt) | [记录](traces_glm/case_166/) |
+| `case_167` | 当前 · 未体现增益，保留待归普通集合 | `case_167` | real_kernel_challenges / AES 字节替换：复合有限域的基转换 | [kernel](triton_eval_cases/case_167/kernel.py) · [合同](triton_eval_cases/case_167/problem.txt) | [记录](traces_glm/case_167/) |
+| `case_168` | 当前 · 未体现增益，保留待归普通集合 | `case_168` | real_kernel_challenges / AES 字节替换：复合有限域的基转换 | [kernel](triton_eval_cases/case_168/kernel.py) · [合同](triton_eval_cases/case_168/problem.txt) | [记录](traces_glm/case_168/) |
 
 ## 如何读 traces
 

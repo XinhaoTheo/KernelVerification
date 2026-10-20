@@ -16,19 +16,19 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 
 | 分组 | Case / traces |
 |---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | [case_36](case_36/)、[case_41](case_41/)、[case_54](case_54/)、[case_55](case_55/)、[case_62](case_62/)、[case_68](case_68/)、[case_74](case_74/)、[case_76](case_76/)、[case_78](case_78/)、[case_81](case_81/)、[case_86](case_86/)、[case_90](case_90/) |
-| 未体现增益，保留待归普通集合 | [case_33](case_33/)、[case_34](case_34/)、[case_35](case_35/)、[case_37](case_37/)、[case_38](case_38/)、[case_39](case_39/)、[case_40](case_40/)、[case_42](case_42/)、[case_43](case_43/)、[case_44](case_44/)、[case_45](case_45/)、[case_46](case_46/)、[case_47](case_47/)、[case_48](case_48/)、[case_49](case_49/)、[case_50](case_50/)、[case_51](case_51/)、[case_52](case_52/)、[case_53](case_53/)、[case_56](case_56/)、[case_57](case_57/)、[case_58](case_58/)、[case_59](case_59/)、[case_60](case_60/)、[case_61](case_61/)、[case_63](case_63/)、[case_64](case_64/)、[case_65](case_65/)、[case_66](case_66/)、[case_67](case_67/)、[case_69](case_69/)、[case_70](case_70/)、[case_71](case_71/)、[case_72](case_72/)、[case_73](case_73/)、[case_75](case_75/)、[case_77](case_77/)、[case_79](case_79/)、[case_80](case_80/)、[case_82](case_82/)、[case_83](case_83/)、[case_84](case_84/)、[case_85](case_85/)、[case_87](case_87/)、[case_88](case_88/)、[case_89](case_89/) |
+| 成功案例：已观察到工具流程增益，单独保留 | [case_36](case_36/)、[case_41](case_41/)、[case_54](case_54/)、[case_55](case_55/)、[case_62](case_62/)、[case_68](case_68/)、[case_74](case_74/)、[case_76](case_76/)、[case_78](case_78/)、[case_81](case_81/)、[case_86](case_86/)、[case_90](case_90/)、[case_166](case_166/) |
+| 未体现增益，保留待归普通集合 | [case_33](case_33/)、[case_34](case_34/)、[case_35](case_35/)、[case_37](case_37/)、[case_38](case_38/)、[case_39](case_39/)、[case_40](case_40/)、[case_42](case_42/)、[case_43](case_43/)、[case_44](case_44/)、[case_45](case_45/)、[case_46](case_46/)、[case_47](case_47/)、[case_48](case_48/)、[case_49](case_49/)、[case_50](case_50/)、[case_51](case_51/)、[case_52](case_52/)、[case_53](case_53/)、[case_56](case_56/)、[case_57](case_57/)、[case_58](case_58/)、[case_59](case_59/)、[case_60](case_60/)、[case_61](case_61/)、[case_63](case_63/)、[case_64](case_64/)、[case_65](case_65/)、[case_66](case_66/)、[case_67](case_67/)、[case_69](case_69/)、[case_70](case_70/)、[case_71](case_71/)、[case_72](case_72/)、[case_73](case_73/)、[case_75](case_75/)、[case_77](case_77/)、[case_79](case_79/)、[case_80](case_80/)、[case_82](case_82/)、[case_83](case_83/)、[case_84](case_84/)、[case_85](case_85/)、[case_87](case_87/)、[case_88](case_88/)、[case_89](case_89/)、[case_163](case_163/)、[case_164](case_164/)、[case_165](case_165/)、[case_167](case_167/)、[case_168](case_168/) |
 
 ## 全题库三组覆盖
 
-范围：case_map.json 中全部 90 个活跃案例，共 270 个 case-arm 槽位。
+范围：case_map.json 中全部 96 个活跃案例，共 288 个 case-arm 槽位。
 完成包含正确、错误和 needs_more_evidence（弃答）；截断、无最终判断、运行错误和运行中均不算完成。错误答案和有效弃答保留，不因结果不理想而补跑。
 
 | 实验组 | 已完成 | 从未运行 | 失败/未完成 | 运行中 | 未完成合计 |
 |---|---:|---:|---:|---:|---:|
-| single_call | 89 | 0 | 1 | 0 | 1 |
-| solo | 90 | 0 | 0 | 0 | 0 |
-| debate | 88 | 0 | 2 | 0 | 2 |
+| single_call | 95 | 0 | 1 | 0 | 1 |
+| solo | 96 | 0 | 0 | 0 | 0 |
+| debate | 94 | 0 | 2 | 0 | 2 |
 
 完成记录按最早的 created_at 选取；缺少日期的旧记录优先，并以迁移前路径稳定排序。不按正确性或置信度筛选；下方索引保留当前题库的全部尝试。
 本页是覆盖清单，不是统一协议的准确率对照：历史记录包含 OpenRouter 的 `z-ai/glm-5.3-flash` 与 Fireworks 的 `accounts/fireworks/models/glm-5p3`，模型、推理配置、预算和运行器版本可能不同。
@@ -126,6 +126,12 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | case_88 | real_kernel_challenges | [r1](case_88/single_call/r1/transcript.md) · reject / 正确 | [r1](case_88/solo/r1/transcript.md) · reject / 正确 | [r1](case_88/debate/r1/transcript.md) · reject / 正确 |
 | case_89 | real_kernel_challenges | [r1](case_89/single_call/r1/transcript.md) · trust / 正确 | [r1](case_89/solo/r1/transcript.md) · trust / 正确 | [r1](case_89/debate/r1/transcript.md) · trust / 正确 |
 | case_90 | real_kernel_challenges | [r1](case_90/single_call/r1/transcript.md) · trust / 错误 | [r1](case_90/solo/r1/transcript.md) · reject / 正确 | [r1](case_90/debate/r1/transcript.md) · reject / 正确 |
+| case_163 | real_kernel_challenges | [r1](case_163/single_call/r1/transcript.md) · reject / 正确 | [r1](case_163/solo/r1/transcript.md) · reject / 正确 | [r1](case_163/debate/r1/transcript.md) · reject / 正确 |
+| case_164 | real_kernel_challenges | [r1](case_164/single_call/r1/transcript.md) · trust / 正确 | [r1](case_164/solo/r1/transcript.md) · trust / 正确 | [r1](case_164/debate/r1/transcript.md) · trust / 正确 |
+| case_165 | real_kernel_challenges | [r1](case_165/single_call/r1/transcript.md) · trust / 正确 | [r1](case_165/solo/r1/transcript.md) · trust / 正确 | [r1](case_165/debate/r1/transcript.md) · trust / 正确 |
+| case_166 | real_kernel_challenges | [r1](case_166/single_call/r1/transcript.md) · trust / 错误 | [r1](case_166/solo/r1/transcript.md) · reject / 正确 | [r1](case_166/debate/r1/transcript.md) · reject / 正确 |
+| case_167 | real_kernel_challenges | [r1](case_167/single_call/r1/transcript.md) · trust / 正确 | [r1](case_167/solo/r1/transcript.md) · trust / 正确 | [r1](case_167/debate/r1/transcript.md) · trust / 正确 |
+| case_168 | real_kernel_challenges | [r1](case_168/single_call/r1/transcript.md) · reject / 正确 | [r1](case_168/solo/r1/transcript.md) · reject / 正确 | [r1](case_168/debate/r1/transcript.md) · reject / 正确 |
 
 ## 全部历史 trials
 
@@ -531,5 +537,29 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | real_kernel_challenges | case_90 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_90/solo/r4/transcript.md) |
 | real_kernel_challenges | case_90 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_90/solo/r5/transcript.md) |
 | real_kernel_challenges | case_90 | solo | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_90/solo/r6/transcript.md) |
+| real_kernel_challenges | case_163 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/debate/r1/transcript.md) |
+| real_kernel_challenges | case_163 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_163 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/solo/r1/transcript.md) |
+| real_kernel_challenges | case_164 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_164/debate/r1/transcript.md) |
+| real_kernel_challenges | case_164 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_164/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_164 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_164/solo/r1/transcript.md) |
+| real_kernel_challenges | case_165 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_165/debate/r1/transcript.md) |
+| real_kernel_challenges | case_165 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_165/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_165 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_165/solo/r1/transcript.md) |
+| real_kernel_challenges | case_166 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_166/debate/r1/transcript.md) |
+| real_kernel_challenges | case_166 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_166/debate/r2/transcript.md) |
+| real_kernel_challenges | case_166 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_166/debate/r3/transcript.md) |
+| real_kernel_challenges | case_166 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_166/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_166 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_166/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_166 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_166/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_166 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_166/solo/r1/transcript.md) |
+| real_kernel_challenges | case_166 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_166/solo/r2/transcript.md) |
+| real_kernel_challenges | case_166 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_166/solo/r3/transcript.md) |
+| real_kernel_challenges | case_167 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_167/debate/r1/transcript.md) |
+| real_kernel_challenges | case_167 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_167/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_167 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_167/solo/r1/transcript.md) |
+| real_kernel_challenges | case_168 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_168/debate/r1/transcript.md) |
+| real_kernel_challenges | case_168 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_168/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_168 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_168/solo/r1/transcript.md) |
 
-392 recorded GLM trials. See [trace format](../TRACES.md) for provenance and capture limits.
+416 recorded GLM trials. See [trace format](../TRACES.md) for provenance and capture limits.

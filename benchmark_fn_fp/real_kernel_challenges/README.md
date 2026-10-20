@@ -1,6 +1,6 @@
 # 专门构造的真实 kernel 验证挑战
 
-Case labels use the October 19, 2026 numbering: current cases 33–90 were previously 106–163. Private JSON and raw traces retain the earlier IDs. See [case_map.json](../case_map.json).
+Case labels use the October 19, 2026 numbering: cases 33–90 were previously 106–163. Cases 163–168 are new October 20 cases; they do not reuse the earlier labels. Private JSON and raw traces retain the earlier IDs. See [case_map.json](../case_map.json).
 
 2026-10-09。该组是**针对验证机制专门准备的研究挑战集**，不是从生产
 kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷机制或历史修复，
@@ -8,7 +8,7 @@ kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷�
 
 [Tools vs No Tools: case explanations, code snippets and evidence](../SUCCESS_CASES.md).
 
-[Replication of cases 36, 41, 54 and 55](REPLICATION_RESULTS.md). New cases 61–90 and their three-arm results are documented at the end of this page.
+[Replication of cases 36, 41, 54 and 55](REPLICATION_RESULTS.md). Cases 61–90 and the new October 20 cases 163–168 have their three-arm results below.
 
 ## 实验后的保留分组
 
@@ -16,8 +16,8 @@ kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷�
 
 | 分组 | Case | 后续用途 |
 |---|---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | **case_36、case_41、case_54、case_55、case_62、case_68、case_74、case_76、case_78、case_81、case_86、case_90** | 历史入选：36 的 solo、41/54 的 solo/debate 正确拒绝，无工具错误接受；55 的 solo/debate 正确接受，无工具错误拒绝。62 首轮的 solo/debate 找到数值反例，无工具错误接受，但其 r2 三组均正确，区分度未复现；68 首两轮有差距，但新增 r3–r5 中无工具正确 2/3，solo/debate 均正确 3/3；区分度不稳定；74/76 的新增五轮也有波动，78 的新增五轮均复现工具差距；81 仅首轮有差距，新增五轮无工具均正确，未复现；86/90 的首轮差距与固定五轮复测分别报告，详见本页末尾 |
-| 未体现增益，保留待归普通集合 | case_33、34、35、37、38、39、40、42、43–53、56–61、63–67、69–73、75、77、79–80、82–85、87–89 | 保留正确/错误 kernel、来源和全部 traces，后续整理进普通集合 |
+| 成功案例：已观察到工具流程增益，单独保留 | **case_36、case_41、case_54、case_55、case_62、case_68、case_74、case_76、case_78、case_81、case_86、case_90、case_166** | 历史入选：36 的 solo、41/54 的 solo/debate 正确拒绝，无工具错误接受；55 的 solo/debate 正确接受，无工具错误拒绝。62 首轮的 solo/debate 找到数值反例，无工具错误接受，但其 r2 三组均正确，区分度未复现；68 首两轮有差距，但新增 r3–r5 中无工具正确 2/3，solo/debate 均正确 3/3；区分度不稳定；74/76 的新增五轮也有波动，78 的新增五轮均复现工具差距；81 仅首轮有差距，新增五轮无工具均正确，未复现；86/90 的首轮差距与固定五轮复测分别报告；166 在首轮体现工具收益，但无工具已在一轮复测答对，仍是有波动的候选，详见本页末尾 |
+| 未体现增益，保留待归普通集合 | case_33、34、35、37、38、39、40、42、43–53、56–61、63–67、69–73、75、77、79–80、82–85、87–89、163–165、167–168 | 保留正确/错误 kernel、来源和全部 traces，后续整理进普通集合 |
 
 整理状态登记在 `case_map.json` 的 `curation_status`，并显示于案例和 GLM 索引。当前仅分组保留，未正式迁移普通集合；编号、公开题目路径、固定标签和 traces 均保留。下方 33–38 六例、39–42 四例、43–46 四例、47–48 两例、49–50 两例、51–52 两例、53–54 两例、三轮探索 55–60 六例、61–66 六例、67–72 六例、73–78 六例、79–84 六例及 85–90 六例分别完整统计，不能仅用筛出的成功案例重算成功率。
 
@@ -1758,3 +1758,125 @@ Trace review separates correct verdicts from correct explanations. Some models o
 Two concurrent no-tool batches, r2 and r3, received the same timestamp batch ID. Their separate trial directories and different API response IDs confirm independent calls. The index now separates these collisions by the canonical trial number and preserves the original metadata. Future batch IDs also include a random suffix. These reporting and storage changes were made after all model trials finished.
 
 Total: **48 workflow trials**, including 18 first-pass trials and 30 selected repetitions. The conservative model API estimate is **$9.275751**: first pass **$3.548831**, repetitions **$5.726920**. This estimate uses captured token usage and the recorded price schedule. It is not an invoice and excludes Modal GPU charges. All trials are listed in the [GLM trace index](../traces_glm/INDEX.md).
+
+## October 20: exp2, log1p and AES
+
+These six cases test whether tools help a model make the correct decision. They do not establish an advantage of Debate over Solo. Each pair has the same problem description and one fixed label per implementation. Test inputs provide evidence for that label. They do not change the label.
+
+All cases take a one-dimensional contiguous CUDA tensor with any length from 1 through 131072. Nonzero storage offsets are legal. Each result must use fresh storage, preserve the input and have the same shape and device as the input. Numerical results below use NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0. Cases 163–166 require ordinary tensors with no gradient, inference, negative or conjugate flags, in ordinary execution mode without concurrent input writes. The AES pair also supports lazy-negative views.
+
+### 163–164: exp2 coefficients
+
+**What it should do.** For every finite BF16 value in `[-10, 10]`, compute `2 ** x` and return FP32. The allowed relative error is `1e-6`; the absolute tolerance is zero. Both signed zeros and subnormal values are legal.
+
+**What changes.** Both kernels write `x = integer + fraction`, approximate `2 ** fraction` with the same degree-five polynomial structure, then multiply by `2 ** integer`. Case 163 stores more rounded polynomial coefficients. Case 164 retains more digits. For example, one coefficient changes from `0.69315` to `0.693147`. The target and tolerance stay the same.
+
+**What the check found.** Case 163 is **Reject**. At `x = 0.5`, its output is `1.4142098426818848`, while the target is approximately `1.4142135623730951`. The relative error is about `2.63e-6`, above the limit. Across all 33,346 legal BF16 encodings, 455 fail. Case 164 is **Accept**: its maximum relative error bound is `2.257e-7`, below the same limit.
+
+**Why tools may help.** Both implementations have the correct range reduction and polynomial structure. Coefficient rounding, polynomial evaluation and FP32 rounding together determine the final error. The number of coefficient digits alone does not establish whether the implementation meets the limit. Tools can check every legal scalar value against an independent mathematical reference.
+
+### 165–166: log1p range reduction
+
+**What it should do.** For every finite FP16 value greater than `-1`, compute `log(1 + x)` and return FP32. The allowed absolute error is `1e-6`; the relative tolerance is zero. The domain includes subnormal values, the FP16 value immediately above `-1`, and `65504`.
+
+**What changes.** Both kernels form `u = 1 + x`, split `u` into a power of two and a mantissa, evaluate a short polynomial, then restore the exponent contribution. A correction term accounts for rounding when forming `u`. Case 165 halves the mantissa when it exceeds `1.5`. Case 166 changes this threshold to `1.65`, while keeping the polynomial and all other steps unchanged.
+
+```python
+upper = mantissa > threshold
+mantissa = where(upper, mantissa * 0.5, mantissa)
+exponent = exponent + upper
+z = (mantissa - 1.0) / (mantissa + 1.0)
+```
+
+**What the check found.** Case 165 is **Accept**. Across all 47,104 legal FP16 encodings, its maximum absolute error bound is `6.675e-7`. Case 166 is **Reject**: 55 encodings exceed the limit. At `x = 3378`, the output is `8.125333786010742`, while the target is approximately `8.12533508671429`. The absolute error is about `1.301e-6`.
+
+**Why tools may help.** Changing the threshold preserves the exact mathematical decomposition, but changes the interval on which the polynomial must work. The reconstruction and its FP32 rounding also affect the result. A familiar formula does not establish that the final error remains below `1e-6`. An exhaustive scalar check can determine that boundary.
+
+### 167–168: AES field conversion
+
+**What it should do.** Apply the AES SubBytes transformation to every uint8 value, with exact uint8 output. Every byte from 0 to 255 is legal in every arrangement. The target uses the AES polynomial `0x11b`, multiplicative inversion with zero mapped to zero, and the standard affine transformation with constant `0x63`. For example, input `0x53` must produce `0xed`.
+
+**What changes.** The implementation converts each byte into two four-bit components, computes the inverse in that representation, then converts back and applies the affine transformation. Case 167 uses the extension equation `u² + u + 8 = 0`, which matches its conversion matrices. Case 168 uses `u² + u + 9 = 0` with the same matrices. That change defines a different multiplication rule. The conversion matrices remain invertible, but they no longer preserve AES multiplication.
+
+**What the check found.** The complete scalar audit gives **Accept** for case 167 and **Reject** for case 168. Case 168 differs from AES on 240 of the 256 byte values. Input `2` produces `46`; the required output is `119`. Both implementations still produce 256 distinct outputs. Checking that the output is a permutation would therefore miss the defect. T4 qualification after the repair confirms these fixed labels; see [r31](private_data/qualification/r31.json).
+
+**Why tools may help.** The inversion formula and the conversion matrices can each look valid in isolation. Correctness also requires them to use the same field representation. Tools can compare all 256 outputs with an independent AES definition and check all 65,536 multiplication pairs. The checks identify a representation mismatch without relying on an assumption that valid-looking components compose correctly.
+
+**Pre-evaluation repair.** An independent review found that the original shared wrapper read physical storage bytes from lazy-negative tensor views. Both wrappers now call `resolve_neg()` before launching Triton. The problem description did not change. The original qualification is retained, and the repaired versions passed new GPU checks that include the full byte domain, lazy-negative views, offsets and backing-storage preservation. No model result was used to select this repair.
+
+These are synthetic implementations of established operations, not reproductions of historical upstream bugs. Complete scalar checks and separate storage checks support the labels within the stated environment. They do not exhaust every possible tensor execution or GPU platform. The three model workflows use the protocol in [the experiment record](private_data/experiment_20261020.json). The results and trace analysis are recorded below.
+
+<!-- BEGIN REAL KERNEL OCTOBER20 RESULTS -->
+
+以下结果直接由冻结标签和原始 traces 生成；保留所有尝试，不挑选最好结果。
+正确实现的标签依据合同、实现分析和独立验证；测试通过不等于证明整个输入域。
+
+| Case | 固定标签 | 无工具单次调用 | Solo＋工具 | Debate＋工具 |
+|---|---|---|---|---|
+| case_163 | reject | [r1](../traces_glm/case_163/single_call/r1/transcript.md)：reject / 正确；probe 0；$0.0252 | [r1](../traces_glm/case_163/solo/r1/transcript.md)：reject / 正确；probe 1；$0.0901 | [r1](../traces_glm/case_163/debate/r1/transcript.md)：reject / 正确；probe 4；$0.2675 |
+| case_164 | trust | [r1](../traces_glm/case_164/single_call/r1/transcript.md)：trust / 正确；probe 0；$0.0098 | [r1](../traces_glm/case_164/solo/r1/transcript.md)：trust / 正确；probe 1；$0.0744 | [r1](../traces_glm/case_164/debate/r1/transcript.md)：trust / 正确；probe 4；$0.2397 |
+| case_165 | trust | [r1](../traces_glm/case_165/single_call/r1/transcript.md)：trust / 正确；probe 0；$0.0117 | [r1](../traces_glm/case_165/solo/r1/transcript.md)：trust / 正确；probe 2；$0.1012 | [r1](../traces_glm/case_165/debate/r1/transcript.md)：trust / 正确；probe 2；$0.1881 |
+| case_166 | reject | [r1](../traces_glm/case_166/single_call/r1/transcript.md)：trust / 错误；probe 0；$0.0084<br>[r2](../traces_glm/case_166/single_call/r2/transcript.md)：trust / 错误；probe 0；$0.0097<br>[r3](../traces_glm/case_166/single_call/r3/transcript.md)：reject / 正确；probe 0；$0.0463 | [r1](../traces_glm/case_166/solo/r1/transcript.md)：reject / 正确；probe 2；$0.1305<br>[r2](../traces_glm/case_166/solo/r2/transcript.md)：reject / 正确；probe 1；$0.0784<br>[r3](../traces_glm/case_166/solo/r3/transcript.md)：reject / 正确；probe 1；$0.1085 | [r1](../traces_glm/case_166/debate/r1/transcript.md)：reject / 正确；probe 3；$0.2650<br>[r2](../traces_glm/case_166/debate/r2/transcript.md)：reject / 正确；probe 4；$0.5787<br>[r3](../traces_glm/case_166/debate/r3/transcript.md)：reject / 正确；probe 3；$0.2675 |
+| case_167 | trust | [r1](../traces_glm/case_167/single_call/r1/transcript.md)：trust / 正确；probe 0；$0.0449 | [r1](../traces_glm/case_167/solo/r1/transcript.md)：trust / 正确；probe 1；$0.0814 | [r1](../traces_glm/case_167/debate/r1/transcript.md)：trust / 正确；probe 3；$0.2025 |
+| case_168 | reject | [r1](../traces_glm/case_168/single_call/r1/transcript.md)：reject / 正确；probe 0；$0.0896 | [r1](../traces_glm/case_168/solo/r1/transcript.md)：reject / 正确；probe 4；$0.4095 | [r1](../traces_glm/case_168/debate/r1/transcript.md)：reject / 正确；probe 5；$0.3469 |
+
+| Arm | 尝试数 | 记录完整且判断正确 | 错误判断 | 弃答 | 输出截断／上限 | 其他运行失败 | Probe | API 估算 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| single_call | 8 | 6 | 2 | 0 | 0 | 0 | 0 | $0.2456 |
+| solo | 8 | 8 | 0 | 0 | 0 | 0 | 13 | $1.0738 |
+| debate | 8 | 8 | 0 | 0 | 0 | 0 | 28 | $2.3559 |
+
+目标 **18 个 case×arm 槽位**：已有记录 18，缺失 0。共有 24 次尝试；按互斥结果类别计：其他运行失败 0，弃答 0，其他无最终答案 0，输出截断／上限 0，未完成 0。
+全部尝试的已记录 API 费用估算：**$3.6753**；费用未知 0 次、usage 不完整 0 次。优先使用 trace 定价记录，缺失时采用模型配置费率；非实际账单。GPU 账单未知，未计入；未返回 usage 的请求也未计入。
+
+实际启动模型的评测有 **24 次**。按每组实际评测次数计正确率（输出截断／上限仍计入分母）：
+
+| Arm | 判断正确 / 实际评测 | 正确率 |
+|---|---:|---:|
+| single_call | 6 / 8 | 75.0% |
+| solo | 8 / 8 | 100.0% |
+| debate | 8 / 8 | 100.0% |
+
+原始提交批次：`run_20261020T053935_586754Z_482b93ce9db749fd8fa61ee152e02673`、`run_20261020T054000_734977Z_a2eb78b5d1b14ef694bb3c6437055ff8`、`run_20261020T054105_239974Z_9ac24e2506f34a7a9c805b6d55207815`、`run_20261020T054111_920422Z_8bc916ae9f4c401288974e4fbd153a05`、`run_20261020T054516_484475Z_e0dbe200acb44da8ab2ce337ed0750b5`、`run_20261020T054524_008209Z_1a32dcc96eb74c90bce708ca2582b196`、`run_20261020T054528_362467Z_048eeda23d2b4cdab2c747bcdaeaff63`、`run_20261020T054532_798690Z_4ee6e66e05d146f5abd013111da957c1`。按 rN 核验共同 verifier 指纹；保留原始提交身份。
+
+已核对公开文件与 trace 哈希、每次请求的完整公开材料、模型/预算、原始 API 捕获及同批 verifier 指纹。
+
+完整记录不等于所有 probe 都合法或构成充分证据；另见下方人工证据审计。
+
+样本量仅 6 例。单次胜负不能证明普遍工具收益或 debate 优势。
+
+<!-- END REAL KERNEL OCTOBER20 RESULTS -->
+
+### Trace review
+
+The first trial gives no tools 5/6 correct, Solo 6/6 and Debate 6/6. Only case 166 has a wrong no-tool decision with correct results from both tool workflows. The other five cases stay in the set as ordinary cases. Model and numerical parameters were not changed after these results.
+
+**Case 166: a missed error term and final rounding.** The no-tool model uses `z^9 / 9` to estimate a remainder whose leading term is `2 * z^9 / 9`. It then asserts that FP32 rounding stays within the remaining tolerance. At `x = 3378`, the series and decimal coefficient errors total about `8.49e-7` before FP32 evaluation. The actual output error is `1.30e-6`. Solo [t8](../traces_glm/case_166/solo/r1/probes/t8_probe.py) and Debate [t9](../traces_glm/case_166/debate/r1/probes/t9_probe.py) both execute the actual kernel and find the same legal failure. Their causal explanations are less precise than this numerical evidence. Debate r2 later reproduces all 55 failures, but also overstates a seven-value large-input check as general coverage. Debate does not cover every legal value, despite its summary; one valid failure is sufficient for Reject.
+
+**The exp2 pair does not separate the methods.** No tools evaluates the polynomial at `x = 0.5` and correctly rejects case 163. All three methods accept case 164. Tool runs reproduce the independent scalar results. Both Debate runs also contain an earlier probe with a missing scale factor or a wrong reference comparison. They discard those results before using actual-kernel checks.
+
+**The correct log1p control does not separate the methods.** All three methods accept case 165. The no-tool explanation understates the maximum reduced argument. Debate initially claims to test a wide interval with a generator that produces only seven distinct values. Its final probe correctly checks all 47,104 legal scalar encodings. These errors do not change the final correct verdict, but they limit the claimed quality of the reasoning and coverage.
+
+**The AES pair does not separate the methods.** No tools correctly checks the field representation in case 167. For case 168, it identifies the inconsistent extension constant and computes the valid counterexample `S(0x53) = 0x17`, while AES requires `0xed`. A more complex algebraic implementation was still solvable by reasoning alone.
+
+**Some AES tool evidence is flawed.** Case 168 Solo repairs three failed probes before its valid final comparison finds 240/256 mismatches. Debate's main probe instead evaluates the candidate on S-box outputs and compares them to those same outputs. That comparison would reject a correct AES implementation too; its claimed 255/256 mismatch count is invalid. Separate probes t10 and t11 compare the candidate and reference on the same legal inputs and support Reject. Case 167 Solo's input-preservation assertion includes `or True`, so it cannot establish preservation. The independent qualification checks preservation correctly. These probe failures remain in the traces.
+
+Full scalar enumeration is useful evidence, but it does not by itself prove all lengths, offsets, storage properties or GPU environments. The author qualification and the model's own evidence are reported separately. The results compare complete workflows and do not isolate tool access from extra model turns. They do not show that Debate is better than Solo.
+
+### Fixed repeat check for case 166
+
+The repeat rule was saved before any model call: at most the first two cases with an explicit no-tool error and valid correct tool results receive two fresh trials per method. Only case 166 qualified. The source, public requirements, model and budgets stayed unchanged.
+
+| Trial | No tools | Solo + tools | Debate + tools |
+|---|---|---|---|
+| r1: initial trial | Accept, wrong | Reject, correct | Reject, correct |
+| r2: fresh repeat | Accept, wrong | Reject, correct | Reject, correct |
+| r3: fresh repeat | Reject, correct | Reject, correct | Reject, correct |
+
+The no-tool result is correct in 1/3 trials overall, or 1/2 fresh repeats. The initial trial selected this case, so it must be shown separately from the fresh repeats. The r3 no-tool answer uses a rough combined-error estimate and does not produce a precise legal counterexample. It still counts as a correct verdict. This is an intermittent workflow difference, not a stable separation.
+
+Both tool workflows are correct in 3/3 trials, or 2/2 fresh repeats, with legal executed counterexamples. Debate r2 includes one intermediate response that reached its 8,192-token turn cap; the same trial continued within its 32,768-token total cap and returned a valid verdict. The trace retains that response. No model trial was discarded or replaced.
+
+The complete run contains 24 model trials and 41 probe attempts. All 24 trials have complete raw API captures and pass the source and configuration audit; this does not imply that every probe was valid. The recorded API estimate is **$3.675289**: $0.245587 for no tools, $1.073828 for Solo and $2.355874 for Debate. The estimate uses the saved pricing rates and excludes the Modal bill. Combining the selected repeats with the initial trials is an execution summary, not an unbiased six-case accuracy estimate.
+
+The next construction should test the sum of approximation error and finite-precision reconstruction error under a fixed public tolerance. This round gives less support for increasing algebraic complexity alone: the no-tool model solved both the exp2 and AES pairs. Further repeats or new held-out implementations are needed before treating case 166 as stable. All sources, the pre-model protocol, qualification records and traces are retained.

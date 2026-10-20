@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-dd4c2761",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll batch two probes: an exhaustive sweep of all legal FP16 values (covers c1 worst-case near the 1.65 mantissa cutoff) and a large-x probe near 65504 for c2. Both are independent.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b58da2696c410402",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_166\\\")\\nimport kernel as K\\n\\n# all legal FP16 values > -1\\nvals = []\\nfor bits in range(0x0000, 0x10000):\\n    v = torch.tensor(bits, dtype=torch.int32).to(torch.uint16).view(torch.float16).item()\\n    import struct\\n    v = struct.unpack('<e', struct.pack('<H', bits))[0]\\n    if v == v and abs(v) != float('inf') and v > -1:\\n        vals.append(bits)\\nx = torch.tensor([struct.unpack('<e', struct.pack('<H', b))[0] for b in vals], dtype=torch.float16)\\nx = x.to(\\\"cuda\\\")\\nout = K.run(x)\\nref = torch.log1p(x.to(torch.float64)).to(\\\"cuda\\\")\\nerr = (out.to(torch.float64) - ref).abs()\\nmaxerr = err.max().item()\\ni = err.argmax().item()\\n# also focus region x in (0.6,0.66) and (2.2,2.35)\\nmask1 = (x > 0.6) & (x < 0.66)\\nmask2 = (x > 2.2) & (x < 2.35)\\nres = {\\n \\\"metric\\\": \\\"max abs error vs FP64 log1p over all 15359 legal FP16 values\\\",\\n \\\"n\\\": x.numel(),\\n \\\"max_abs_err\\\": maxerr,\\n \\\"worst_x\\\": x[i].item(),\\n \\\"tolerance\\\": 1e-6,\\n \\\"n_violations\\\": int((err > 1e-6).sum().item()),\\n \\\"max_err_region_0.6_0.66\\\": err[mask1].max().item() if mask1.any() else None,\\n \\\"max_err_region_2.2_2.35\\\": err[mask2].max().item() if mask2.any() else None,\\n \\\"top5_err\\\": sorted(err.tolist())[-5:],\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"max abs error exceeding or under 1e-6 on inputs with reduced mantissa near 1.65\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a46dd2e7eaab55f6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_166\\\")\\nimport kernel as K\\n\\nxs = [65504.0, 32768.0, 16384.0, 8192.0, 60000.0, 40000.0, 65504.0*0.999]\\nx = torch.tensor(xs, dtype=torch.float16).to(\\\"cuda\\\")\\nout = K.run(x)\\nref = torch.log1p(x.to(torch.float64)).to(\\\"cuda\\\")\\nerr = (out.to(torch.float64) - ref).abs()\\nres = {\\n \\\"metric\\\": \\\"per-value abs error vs FP64 log1p for large FP16 inputs (exponent 13-16)\\\",\\n \\\"inputs\\\": xs,\\n \\\"errors\\\": err.tolist(),\\n \\\"max_abs_err\\\": err.max().item(),\\n \\\"tolerance\\\": 1e-6,\\n \\\"all_within_tol\\\": bool((err <= 1e-6).all().item()),\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"large-x accumulated FP32 rounding error vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Run two probes: c1 exhaustive sweep of all legal FP16 values (decisive), c2 large-x. Actually an exhaustive sweep covers both; but claims are separate. I'll run two probes batched."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792475337,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 833,
+    "prompt_tokens": 35711,
+    "total_tokens": 36544,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 44,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5683,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

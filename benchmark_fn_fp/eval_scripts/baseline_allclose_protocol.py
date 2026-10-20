@@ -44,11 +44,12 @@ def comparison_profile(detail: dict) -> dict:
         "gelu": (1e-6, 0), "silu": (1e-6, 0), "sine": (1e-6, 0),
         "hypot": (1e-6, 0), "softplus": (1e-6, 0), "compensated": (1e-8, 1e-5),
         "atan": (1e-6, 0), "complex": (1e-7, 5e-7), "realfft": (1e-4, 1e-6),
+        "exp2": (0, 1e-6), "log1p": (1e-6, 0),
     }
     if cohort in numeric:
         atol, rtol = numeric[cohort]
         return {"operation": cohort, "kind": "allclose", "atol": atol, "rtol": rtol}
-    if cohort in {"fastdiv", "butterfly", "packed_argmax", "ntt", "crc", "requant_compose", "affine_scan", "winograd"}:
+    if cohort in {"fastdiv", "butterfly", "packed_argmax", "ntt", "crc", "requant_compose", "affine_scan", "winograd", "aes"}:
         return {"operation": cohort, "kind": "exact", "atol": 0, "rtol": 0}
     if cohort == "rounding":
         return {"operation": cohort, "kind": "bits"}

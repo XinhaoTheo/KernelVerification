@@ -1,0 +1,2044 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_166",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise log1p with exponent reduction and a short odd polynomial.\n\nOriginal synthetic Triton implementation, not an upstream bug reproduction.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _log1p_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    u = 1.0 + x\n    correction = tl.div_rn(x - (u - 1.0), u)\n    encoding = u.to(tl.uint32, bitcast=True)\n    exponent = ((encoding >> 23) & 255).to(tl.int32) - 127\n    mantissa = ((encoding & 0x007fffff) | 0x3f800000).to(tl.float32, bitcast=True)\n    upper = mantissa > 1.65\n    mantissa = tl.where(upper, mantissa * 0.5, mantissa)\n    exponent = exponent + upper.to(tl.int32)\n    z = tl.div_rn(mantissa - 1.0, mantissa + 1.0)\n    square = z * z\n    polynomial = 0.142857\n    polynomial = polynomial * square + 0.2\n    polynomial = polynomial * square + 0.33333\n    polynomial = 1.0 + square * polynomial\n    local_log = (2.0 * z) * polynomial\n    high = exponent.to(tl.float32) * 0.69313812256\n    low = exponent.to(tl.float32) * 0.0000090580006145\n    value = high + (local_log + (low + correction))\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool((torch.isfinite(x) & (x > -1.0)).all().item()),\n            \"all input values must be finite and greater than -1\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating log(1+x).\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _log1p_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical target with the FP64 library log1p.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.log1p(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples only; all finite FP16 values greater than -1 are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (4.0 * torch.rand((size,), generator=generator) - 0.75).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute log1p elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = log(1 + x[i]), where log is the natural logarithm.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value strictly greater than -1 is legal. This includes both signed zeros, positive and negative subnormals, the representable value immediately above -1, and the largest finite FP16 value 65504. NaN, infinity and values at or below -1 are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - log(1 + x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the FP64 library log1p and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_166",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-20T05:46:18Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "0d21c363f26aeb8e777caa23a2501e135c00bdf403455dff034da3f438ec7e10"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "c7522643f4333eeffc476208cc3d78028ad9aae3066002b3acc8f9fef6d7962f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "5053f49ba85fc8e314f564bda4af2020fe30acec80c958afb18b3966cddaa46b"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "a9324f95e7c876001f94e1269181e0ca478ac325e8c5115f1b0d5c0a3e6a2e0e"
+              }
+            ],
+            "duration_s": 5.878084,
+            "exceeds_1e-6": true,
+            "exit_code": 0,
+            "expected_signal": "max abs error over all legal FP16 values vs FP64 log1p, compare to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": true,
+              "max_abs_err": 1.3007035484235985e-06,
+              "metric": "max abs error over exhaustive legal FP16 domain vs FP64 log1p",
+              "n_legal": 47104,
+              "tolerance": 1e-06,
+              "top5_err": [
+                1.3007035484235985e-06,
+                1.2807968641226353e-06,
+                1.2436994385467415e-06,
+                1.236186040642906e-06,
+                1.231679771507288e-06
+              ],
+              "top5_x": [
+                3378.0,
+                3374.0,
+                27008.0,
+                13496.0,
+                27024.0
+              ],
+              "worst_ref": 8.12533508671429,
+              "worst_x": 3378.0
+            },
+            "max_abs_err": 1.3007035484235985e-06,
+            "n_legal": 47104,
+            "stderr": "legal count: 47104\n",
+            "stdout": "{\"metric\": \"max abs error over exhaustive legal FP16 domain vs FP64 log1p\", \"n_legal\": 47104, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_ref\": 8.12533508671429, \"top5_err\": [1.3007035484235985e-06, 1.2807968641226353e-06, 1.2436994385467415e-06, 1.236186040642906e-06, 1.231679771507288e-06], \"top5_x\": [3378.0, 3374.0, 27008.0, 13496.0, 27024.0]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "top5_err": [
+              1.3007035484235985e-06,
+              1.2807968641226353e-06,
+              1.2436994385467415e-06,
+              1.236186040642906e-06,
+              1.231679771507288e-06
+            ],
+            "top5_x": [
+              3378.0,
+              3374.0,
+              27008.0,
+              13496.0,
+              27024.0
+            ],
+            "worst_ref": 8.12533508671429,
+            "worst_x": 3378.0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 47104 legal finite FP16 values > -1 vs FP64 log1p: max absolute error 1.3007e-06, exceeding the 1e-6 tolerance. Worst offenders at large x (3378, 27008, 13496, ...), consistent with polynomial/summation error at high exponents rather than near x=0. Confirms c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "The series truncates at 1/7 and uses decimal-rounded coefficients (0.33333 instead of 1/3, 0.142857 instead of 1/7). The 0.33333 vs 1/3 deficit (~3.3e-6) multiplied through 2z (~0.4-0.5) gives ~1.6e-7, but combined with truncation error (order z^9/9 with z up to ~0.245, ~7e-10... plus 0.142857 rounding ~1.4e-6 * z^2) the total could approach or exceed the 1e-6 absolute tolerance in the worst region (max |z|, i.e. largest normalized mantissa before halving, u near 2^k*1.65). Needs an exhaustive FP16 sweep versus FP64 log1p.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - log(1 + x[i])) <= 1e-6, and 'Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain', with 'every finite FP16 value strictly greater than -1' legal."
+        }
+      ],
+      "scope_rationale": "The contract demands <= 1e-6 absolute error for every legal finite FP16 value > -1, as a single global verdict, so any single failing element (e.g. where the truncated/rounded polynomial is least accurate) is a contract violation.",
+      "statement": "The truncated atanh-series polynomial with rounded coefficients (0.33333, 0.2, 0.142857) produces worst-case absolute error exceeding 1e-6 for some legal FP16 input, most likely where |z| is largest (mantissa just below the 1.65 halving threshold, i.e. u near 1.65 or near 3.3, etc.).",
+      "status": "confirmed",
+      "updated_at": "2026-10-20T05:46:55Z"
+    },
+    {
+      "created_at": "2026-10-20T05:46:18Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "ff4e1ba01ac051721bf75e7cd3e955af01e2174c070f57df3161f680a5371e03"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "9bfd9017801c5619dcbb76de9b7137f44df66ad1f8880a403071d8c044dbb11d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "fc8bbeb168aebf0ab9d1d0e225a2114de31e7a33300c163fe5631a29238b0135"
+              }
+            ],
+            "duration_s": 3.879685,
+            "exit_code": 0,
+            "expected_signal": "max abs error near the 1.65 reduction boundary and at extremes vs 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": true,
+              "max_abs_err": 1.3007035484235985e-06,
+              "metric": "max abs error near mantissa=1.65 split boundary and extreme exponents",
+              "n_tested": 8905,
+              "tolerance": 1e-06,
+              "worst_err_at_65504": 1.4238488610374134e-07,
+              "worst_x": 3378.0
+            },
+            "max_abs_err": 1.3007035484235985e-06,
+            "n_tested": 8905,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error near mantissa=1.65 split boundary and extreme exponents\", \"n_tested\": 8905, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_err_at_65504\": 1.4238488610374134e-07}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_err_at_65504": 1.4238488610374134e-07,
+            "worst_x": 3378.0
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Boundary/extreme probe (8905 values around mantissa=1.65*2^k for k in [-11,15], x=65504, and near-\u00b11 regions): max error 1.3007e-06 at x=3378, above tolerance. Error at x=65504 itself is only 1.42e-07, so the failure is in the large-exponent regime generally (worst at x=3378, u\u22483379) rather than at the extreme end, but it confirms absolute error above 1e-6 occurs in the tested boundary/large-value region, matching c2's stated failure mode (FP32 summation at large values).",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "When mantissa > 1.65 the kernel uses m/2 with exponent+1, giving log(m) = (exponent+1)*ln2 + log(m/2). This is mathematically exact, but the threshold creates a discontinuity in z, and the FP32 evaluation `value = high + (local_log + (low + correction))` can lose precision when high (up to ~10.4) is added to a small local_log, potentially exceeding 1e-6 near the threshold and at extreme exponents. Also the ln2 high/low split residual (~1e-10 * exponent ~ 15 = 1.5e-9) is small, but the summation order's FP32 rounding at large values needs checking.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "abs(actual[i] - log(1 + x[i])) <= 1e-6 must hold for every legal input including 'the largest finite FP16 value 65504' and values near the reduction boundary; single verdict over entire legal domain."
+        }
+      ],
+      "scope_rationale": "The contract explicitly includes the largest FP16 value 65504 and every intermediate value on both sides of any internal reduction threshold; the 1e-6 absolute bound must hold there too.",
+      "statement": "Accuracy degrades at the mantissa=1.65 reduction split boundary and/or at the largest exponent (x near 65504, u near 65505), where the high+low ln2 split and the final summation high + (local_log + (low + correction)) suffer cancellation/rounding that pushes error above 1e-6.",
+      "status": "confirmed",
+      "updated_at": "2026-10-20T05:46:55Z"
+    },
+    {
+      "created_at": "2026-10-20T05:46:18Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "817f4c5c1e6b5cc8102af7d140bdba9134d46394406b33d9b2dea2ae596d8983"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "86285af24912a576d97741ada51c2f88a02b3aa9c77116c7dbcdacc1a11d5e95"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "1784dacd0864b88fc1128d7f2c50d0e0dae2eb9e44b8c790bfb62411998fb473"
+              }
+            ],
+            "duration_s": 3.745008,
+            "exit_code": 0,
+            "expected_signal": "max abs error near x=-1 and subnormals vs 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": false,
+              "max_abs_err": 8.583981494503234e-07,
+              "metric": "max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p",
+              "n_near_minus1": 204,
+              "n_subnormal_or_tiny": 10288,
+              "n_tested": 10495,
+              "tolerance": 1e-06,
+              "worst_ref": -2.970658636001875,
+              "worst_x": -0.94873046875
+            },
+            "max_abs_err": 8.583981494503234e-07,
+            "n_near_minus1": 204,
+            "n_subnormal_or_tiny": 10288,
+            "n_tested": 10495,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p\", \"n_tested\": 10495, \"n_near_minus1\": 204, \"n_subnormal_or_tiny\": 10288, \"max_abs_err\": 8.583981494503234e-07, \"tolerance\": 1e-06, \"exceeds_1e-6\": false, \"worst_x\": -0.94873046875, \"worst_ref\": -2.970658636001875}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_ref": -2.970658636001875,
+            "worst_x": -0.94873046875
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe over all 204 legal FP16 values in (-1,-0.9) (including the value immediately above -1), all subnormal magnitudes, and small normalized magnitudes: max absolute error 8.58e-07, below the 1e-6 tolerance. The Cody-Waite correction remains accurate near x=-1 and for subnormals, so c3's asserted residual error above 1e-6 is not observed (the worst error in this region is at x=-0.9487, still under tolerance).",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c3",
+      "raised_by": "skeptic",
+      "rationale": "For x near -1 (e.g. -0.9995, u \u2248 4.88e-4), u-1 in FP32 is not exact (u outside [0.5,2]), so the numerator x-(u-1) relies on the error being small relative to u; if FP32 rounding of u-1 leaves a residue larger than expected relative to u (which is tiny, amplifying the division), the correction term may be wrong by more than 1e-6. log1p(-0.9995) \u2248 -7.52, so absolute tolerance 1e-6 there is relatively tight (~1.3e-7 relative).",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'the representable value immediately above -1' is explicitly part of the legal domain, and the 1e-6 absolute tolerance applies to every legal element."
+        }
+      ],
+      "scope_rationale": "The contract explicitly lists the representable value immediately above -1 as legal, and the fixed 1e-6 absolute tolerance applies there, where log1p \u2248 -7.5 and the correction term divides by the tiny u.",
+      "statement": "The Cody-Waite correction term div_rn(x - (u - 1.0), u) is inaccurate for x near -1 (smallest legal u \u2248 4.88e-4) or for subnormal FP16 x, because u-1 is computed in FP32 with rounding that the correction fails to fully compensate, leaving residual error above 1e-6.",
+      "status": "rebutted",
+      "updated_at": "2026-10-20T05:46:55Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Target[i] = log(1 + x[i]) on the exact stored FP16 value, computed in real arithmetic; output is fresh FP32 tensor [N] on x.device.",
+      "Absolute tolerance 1e-6 per element, zero relative tolerance, signed zeros equivalent; single verdict over the entire legal domain, not per-distribution.",
+      "Domain: 1D contiguous FP16 [N], 1<=N<=131072, CUDA, ordinary tensor flags; every finite FP16 value strictly > -1 is legal, including signed zeros, subnormals, the smallest value above -1 (-0.99951171875... actually nextabove -1 in FP16 is -0.99951), and 65504.",
+      "validate_inputs() must enforce the domain and run() must call it; reference() uses FP64 library log1p; make_inputs() examples only.",
+      "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Loads FP16 x, casts to FP32, computes u=1+x and an FP32 correction term div_rn(x-(u-1),u) to compensate rounding in u (log1p-style Cody-Waite compensation).",
+      "Bitcasts u to uint32 to extract exponent and mantissa, normalizes mantissa to [1,2) then halves it when >1.65 so the atanh-series argument z=(m-1)/(m+1) stays small; z in roughly [0, ~0.245].",
+      "Computes log(u) = exponent*ln2 (split into high/low parts 0.69313812256 and 0.0000090580006145) + 2z*P(z^2), a short odd rational polynomial (coeffs 1/3, 1/5, 1/7 truncated to 0.33333, 0.2, 0.142857).",
+      "Final value = high + (local_log + (low + correction)); stores FP32 with mask; BLOCK=256, num_warps=4, enable_fp_fusion=False (to control rounding), N as constexpr.",
+      "validate_inputs mirrors the stated domain: finite, x > -1, FP16, 1D contiguous, size bounds, ordinary flags; run() calls it and allocates output on x.device."
+    ],
+    "open_questions": [
+      "Does the truncated polynomial with rounded coefficients (esp. 0.33333, 0.2, 0.142857) keep worst-case absolute error <= 1e-6 across the full u range? Needs runtime sweep, e.g. exhaustive FP16 > -1 (~32K values) compared to FP64 log1p.",
+      "Is accuracy preserved at the mantissa=1.65 split boundary and for u near the extremes (smallest u from x next above -1; u=65505)"
+    ],
+    "risk_map": [
+      "Polynomial accuracy: the series 2z*(1+z^2*(1/3+z^2*(1/5+z^2*(1/7)))) truncated at 1/7 with rounded coefficients (0.33333, 0.2, 0.142857 not 0.142857142857) may exceed 1e-6 absolute error, since |z| can reach ~0.245 after the 1.65 halving rule; truncation error of order z^9/9 is tiny but coefficient rounding of 0.142857 (~1.4e-6 relative) times z^2 ~ 0.06 contributes ~4e-8... but 0.33333 vs 1/3 error ~3.3e-6 absolute times 2z ~ 0.49 gives ~1.6e-7 \u2014 needs numeric check; boundary near u=1.65 where z jumps between reduction regimes.",
+      "log2(ln2) split: high=0.69313812256, low=0.0000090580006145 sums to 0.69314718056... vs true ln2=0.693147180559945; residual ~1e-10*exponent, fine up to exponent ~15 (x up to 65504 gives u up to 65505, exponent ~15) \u2014 small.",
+      "Cancellation for x near -1: u = 1+x is exact in FP32 for FP16 x near -1 (Sterbenz), so u can be as small as the next FP16 above -0.0? Actually x>-1 means u>0; smallest u ~ 4.88e-4 (FP16 -0.9995 -> u ~ 4.8828e-4) \u2014 exponent ~-11; z from mantissa in [1,2) fine. But if u subnormal in FP32? No, u>=~4.8e-4 is normal. However for x values like -0.9995, correction = (x - (u-1))/u: u-1 is computed in FP32 and is inexact for u near 1 only; near u=4.8e-4 rounding pattern differs \u2014 needs probe.",
+      "Coefficient 0.2 is not a rounded power (1/5=0.2 exact in decimal but 0.2 is not exact in binary); tiny.",
+      "The mantissa normalization uses |u| bits: u>0 always here, but for u in (0.5,1) exponent extraction handles it; for u subnormal in FP32 (impossible here since x FP16 >-1 gives u >= ~2^-11) fine. Edge: u exactly 1.0 (x=0): exponent 0, mantissa 1.0, z=0, correction 0 \u2014 output 0, correct for signed zeros.",
+      "Rounding of x - (u - 1.0): for |x| < 2^-11 subnormal FP16, 1+x rounds and correction compensates; check correction formula's own rounding for subnormal x (e.g. x=5.96e-8, log1p ~ 5.96e-8; correction = (x-(u-1))/u where u-1 may be 0 or 2^-24 steps \u2014 possible loss below tolerance? absolute tolerance 1e-6 makes tiny x trivially pass).",
+      "Potential Triton fp32 constant folding/fusion issues mitigated by enable_fp_fusion=False; verify it applies.",
+      "Threshold 1.65 mantissa split changes which path z takes; verify continuity/accuracy on both sides."
+    ],
+    "scope_notes": [
+      "The 1e-6 is ABSOLUTE tolerance; since |log1p| grows to ~11.1 at x=65504, absolute tolerance is generous at large x and tight near x=0 (target ~x for tiny x, error must stay < 1e-6 \u2014 easy since values are tiny).",
+      "Exhaustive verification over all legal FP16 values > -1 is feasible (~32k values), giving a complete-domain correctness experiment.",
+      "Correctness is one global verdict; a single failing element suffices to reject; passing benign random inputs is weak evidence."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Target[i] = log(1 + x[i]) on the exact stored FP16 value, computed in real arithmetic; output is fresh FP32 tensor [N] on x.device.",
+        "Absolute tolerance 1e-6 per element, zero relative tolerance, signed zeros equivalent; single verdict over the entire legal domain, not per-distribution.",
+        "Domain: 1D contiguous FP16 [N], 1<=N<=131072, CUDA, ordinary tensor flags; every finite FP16 value strictly > -1 is legal, including signed zeros, subnormals, the smallest value above -1 (-0.99951171875... actually nextabove -1 in FP16 is -0.99951), and 65504.",
+        "validate_inputs() must enforce the domain and run() must call it; reference() uses FP64 library log1p; make_inputs() examples only.",
+        "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-20T05:46:01Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Loads FP16 x, casts to FP32, computes u=1+x and an FP32 correction term div_rn(x-(u-1),u) to compensate rounding in u (log1p-style Cody-Waite compensation).",
+        "Bitcasts u to uint32 to extract exponent and mantissa, normalizes mantissa to [1,2) then halves it when >1.65 so the atanh-series argument z=(m-1)/(m+1) stays small; z in roughly [0, ~0.245].",
+        "Computes log(u) = exponent*ln2 (split into high/low parts 0.69313812256 and 0.0000090580006145) + 2z*P(z^2), a short odd rational polynomial (coeffs 1/3, 1/5, 1/7 truncated to 0.33333, 0.2, 0.142857).",
+        "Final value = high + (local_log + (low + correction)); stores FP32 with mask; BLOCK=256, num_warps=4, enable_fp_fusion=False (to control rounding), N as constexpr.",
+        "validate_inputs mirrors the stated domain: finite, x > -1, FP16, 1D contiguous, size bounds, ordinary flags; run() calls it and allocates output on x.device."
+      ],
+      "open_questions": [
+        "Does the truncated polynomial with rounded coefficients (esp. 0.33333, 0.2, 0.142857) keep worst-case absolute error <= 1e-6 across the full u range? Needs runtime sweep, e.g. exhaustive FP16 > -1 (~32K values) compared to FP64 log1p.",
+        "Is accuracy preserved at the mantissa=1.65 split boundary and for u near the extremes (smallest u from x next above -1; u=65505)"
+      ],
+      "risk_map": [
+        "Polynomial accuracy: the series 2z*(1+z^2*(1/3+z^2*(1/5+z^2*(1/7)))) truncated at 1/7 with rounded coefficients (0.33333, 0.2, 0.142857 not 0.142857142857) may exceed 1e-6 absolute error, since |z| can reach ~0.245 after the 1.65 halving rule; truncation error of order z^9/9 is tiny but coefficient rounding of 0.142857 (~1.4e-6 relative) times z^2 ~ 0.06 contributes ~4e-8... but 0.33333 vs 1/3 error ~3.3e-6 absolute times 2z ~ 0.49 gives ~1.6e-7 \u2014 needs numeric check; boundary near u=1.65 where z jumps between reduction regimes.",
+        "log2(ln2) split: high=0.69313812256, low=0.0000090580006145 sums to 0.69314718056... vs true ln2=0.693147180559945; residual ~1e-10*exponent, fine up to exponent ~15 (x up to 65504 gives u up to 65505, exponent ~15) \u2014 small.",
+        "Cancellation for x near -1: u = 1+x is exact in FP32 for FP16 x near -1 (Sterbenz), so u can be as small as the next FP16 above -0.0? Actually x>-1 means u>0; smallest u ~ 4.88e-4 (FP16 -0.9995 -> u ~ 4.8828e-4) \u2014 exponent ~-11; z from mantissa in [1,2) fine. But if u subnormal in FP32? No, u>=~4.8e-4 is normal. However for x values like -0.9995, correction = (x - (u-1))/u: u-1 is computed in FP32 and is inexact for u near 1 only; near u=4.8e-4 rounding pattern differs \u2014 needs probe.",
+        "Coefficient 0.2 is not a rounded power (1/5=0.2 exact in decimal but 0.2 is not exact in binary); tiny.",
+        "The mantissa normalization uses |u| bits: u>0 always here, but for u in (0.5,1) exponent extraction handles it; for u subnormal in FP32 (impossible here since x FP16 >-1 gives u >= ~2^-11) fine. Edge: u exactly 1.0 (x=0): exponent 0, mantissa 1.0, z=0, correction 0 \u2014 output 0, correct for signed zeros.",
+        "Rounding of x - (u - 1.0): for |x| < 2^-11 subnormal FP16, 1+x rounds and correction compensates; check correction formula's own rounding for subnormal x (e.g. x=5.96e-8, log1p ~ 5.96e-8; correction = (x-(u-1))/u where u-1 may be 0 or 2^-24 steps \u2014 possible loss below tolerance? absolute tolerance 1e-6 makes tiny x trivially pass).",
+        "Potential Triton fp32 constant folding/fusion issues mitigated by enable_fp_fusion=False; verify it applies.",
+        "Threshold 1.65 mantissa split changes which path z takes; verify continuity/accuracy on both sides."
+      ],
+      "scope_notes": [
+        "The 1e-6 is ABSOLUTE tolerance; since |log1p| grows to ~11.1 at x=65504, absolute tolerance is generous at large x and tight near x=0 (target ~x for tiny x, error must stay < 1e-6 \u2014 easy since values are tiny).",
+        "Exhaustive verification over all legal FP16 values > -1 is feasible (~32k values), giving a complete-domain correctness experiment.",
+        "Correctness is one global verdict; a single failing element suffices to reject; passing benign random inputs is weak evidence."
+      ],
+      "summary": "Describer model for case_166: FP16 log1p Triton kernel using exponent range reduction plus a truncated atanh-series polynomial, targeting 1e-6 absolute tolerance over all finite FP16 inputs > -1.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_166",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_166"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_166"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_166"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_166",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 22.854811356,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full source and problem context already. I'll record the description model for this log1p kernel.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Target[i] = log(1 + x[i]) on the exact stored FP16 value, computed in real arithmetic; output is fresh FP32 tensor [N] on x.device.",
+              "Absolute tolerance 1e-6 per element, zero relative tolerance, signed zeros equivalent; single verdict over the entire legal domain, not per-distribution.",
+              "Domain: 1D contiguous FP16 [N], 1<=N<=131072, CUDA, ordinary tensor flags; every finite FP16 value strictly > -1 is legal, including signed zeros, subnormals, the smallest value above -1 (-0.99951171875... actually nextabove -1 in FP16 is -0.99951), and 65504.",
+              "validate_inputs() must enforce the domain and run() must call it; reference() uses FP64 library log1p; make_inputs() examples only.",
+              "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Loads FP16 x, casts to FP32, computes u=1+x and an FP32 correction term div_rn(x-(u-1),u) to compensate rounding in u (log1p-style Cody-Waite compensation).",
+              "Bitcasts u to uint32 to extract exponent and mantissa, normalizes mantissa to [1,2) then halves it when >1.65 so the atanh-series argument z=(m-1)/(m+1) stays small; z in roughly [0, ~0.245].",
+              "Computes log(u) = exponent*ln2 (split into high/low parts 0.69313812256 and 0.0000090580006145) + 2z*P(z^2), a short odd rational polynomial (coeffs 1/3, 1/5, 1/7 truncated to 0.33333, 0.2, 0.142857).",
+              "Final value = high + (local_log + (low + correction)); stores FP32 with mask; BLOCK=256, num_warps=4, enable_fp_fusion=False (to control rounding), N as constexpr.",
+              "validate_inputs mirrors the stated domain: finite, x > -1, FP16, 1D contiguous, size bounds, ordinary flags; run() calls it and allocates output on x.device."
+            ],
+            "open_questions": [
+              "Does the truncated polynomial with rounded coefficients (esp. 0.33333, 0.2, 0.142857) keep worst-case absolute error <= 1e-6 across the full u range? Needs runtime sweep, e.g. exhaustive FP16 > -1 (~32K values) compared to FP64 log1p.",
+              "Is accuracy preserved at the mantissa=1.65 split boundary and for u near the extremes (smallest u from x next above -1; u=65505)"
+            ],
+            "risk_map": [
+              "Polynomial accuracy: the series 2z*(1+z^2*(1/3+z^2*(1/5+z^2*(1/7)))) truncated at 1/7 with rounded coefficients (0.33333, 0.2, 0.142857 not 0.142857142857) may exceed 1e-6 absolute error, since |z| can reach ~0.245 after the 1.65 halving rule; truncation error of order z^9/9 is tiny but coefficient rounding of 0.142857 (~1.4e-6 relative) times z^2 ~ 0.06 contributes ~4e-8... but 0.33333 vs 1/3 error ~3.3e-6 absolute times 2z ~ 0.49 gives ~1.6e-7 \u2014 needs numeric check; boundary near u=1.65 where z jumps between reduction regimes.",
+              "log2(ln2) split: high=0.69313812256, low=0.0000090580006145 sums to 0.69314718056... vs true ln2=0.693147180559945; residual ~1e-10*exponent, fine up to exponent ~15 (x up to 65504 gives u up to 65505, exponent ~15) \u2014 small.",
+              "Cancellation for x near -1: u = 1+x is exact in FP32 for FP16 x near -1 (Sterbenz), so u can be as small as the next FP16 above -0.0? Actually x>-1 means u>0; smallest u ~ 4.88e-4 (FP16 -0.9995 -> u ~ 4.8828e-4) \u2014 exponent ~-11; z from mantissa in [1,2) fine. But if u subnormal in FP32? No, u>=~4.8e-4 is normal. However for x values like -0.9995, correction = (x - (u-1))/u: u-1 is computed in FP32 and is inexact for u near 1 only; near u=4.8e-4 rounding pattern differs \u2014 needs probe.",
+              "Coefficient 0.2 is not a rounded power (1/5=0.2 exact in decimal but 0.2 is not exact in binary); tiny.",
+              "The mantissa normalization uses |u| bits: u>0 always here, but for u in (0.5,1) exponent extraction handles it; for u subnormal in FP32 (impossible here since x FP16 >-1 gives u >= ~2^-11) fine. Edge: u exactly 1.0 (x=0): exponent 0, mantissa 1.0, z=0, correction 0 \u2014 output 0, correct for signed zeros.",
+              "Rounding of x - (u - 1.0): for |x| < 2^-11 subnormal FP16, 1+x rounds and correction compensates; check correction formula's own rounding for subnormal x (e.g. x=5.96e-8, log1p ~ 5.96e-8; correction = (x-(u-1))/u where u-1 may be 0 or 2^-24 steps \u2014 possible loss below tolerance? absolute tolerance 1e-6 makes tiny x trivially pass).",
+              "Potential Triton fp32 constant folding/fusion issues mitigated by enable_fp_fusion=False; verify it applies.",
+              "Threshold 1.65 mantissa split changes which path z takes; verify continuity/accuracy on both sides."
+            ],
+            "scope_notes": [
+              "The 1e-6 is ABSOLUTE tolerance; since |log1p| grows to ~11.1 at x=65504, absolute tolerance is generous at large x and tight near x=0 (target ~x for tiny x, error must stay < 1e-6 \u2014 easy since values are tiny).",
+              "Exhaustive verification over all legal FP16 values > -1 is feasible (~32k values), giving a complete-domain correctness experiment.",
+              "Correctness is one global verdict; a single failing element suffices to reject; passing benign random inputs is weak evidence."
+            ],
+            "summary": "Describer model for case_166: FP16 log1p Triton kernel using exponent range reduction plus a truncated atanh-series polynomial, targeting 1e-6 absolute tolerance over all finite FP16 inputs > -1."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 22.855,
+        "input_tokens": 6623,
+        "output_tokens": 1634
+      }
+    },
+    {
+      "duration_s": 16.884712853,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the highest-risk, directly testable claims from the description model's risk map, all tied to the stated absolute-tolerance contract over the full legal FP16 domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The series truncates at 1/7 and uses decimal-rounded coefficients (0.33333 instead of 1/3, 0.142857 instead of 1/7). The 0.33333 vs 1/3 deficit (~3.3e-6) multiplied through 2z (~0.4-0.5) gives ~1.6e-7, but combined with truncation error (order z^9/9 with z up to ~0.245, ~7e-10... plus 0.142857 rounding ~1.4e-6 * z^2) the total could approach or exceed the 1e-6 absolute tolerance in the worst region (max |z|, i.e. largest normalized mantissa before halving, u near 2^k*1.65). Needs an exhaustive FP16 sweep versus FP64 log1p.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - log(1 + x[i])) <= 1e-6, and 'Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain', with 'every finite FP16 value strictly greater than -1' legal."
+              }
+            ],
+            "scope_rationale": "The contract demands <= 1e-6 absolute error for every legal finite FP16 value > -1, as a single global verdict, so any single failing element (e.g. where the truncated/rounded polynomial is least accurate) is a contract violation.",
+            "statement": "The truncated atanh-series polynomial with rounded coefficients (0.33333, 0.2, 0.142857) produces worst-case absolute error exceeding 1e-6 for some legal FP16 input, most likely where |z| is largest (mantissa just below the 1.65 halving threshold, i.e. u near 1.65 or near 3.3, etc.)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "When mantissa > 1.65 the kernel uses m/2 with exponent+1, giving log(m) = (exponent+1)*ln2 + log(m/2). This is mathematically exact, but the threshold creates a discontinuity in z, and the FP32 evaluation `value = high + (local_log + (low + correction))` can lose precision when high (up to ~10.4) is added to a small local_log, potentially exceeding 1e-6 near the threshold and at extreme exponents. Also the ln2 high/low split residual (~1e-10 * exponent ~ 15 = 1.5e-9) is small, but the summation order's FP32 rounding at large values needs checking.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "abs(actual[i] - log(1 + x[i])) <= 1e-6 must hold for every legal input including 'the largest finite FP16 value 65504' and values near the reduction boundary; single verdict over entire legal domain."
+              }
+            ],
+            "scope_rationale": "The contract explicitly includes the largest FP16 value 65504 and every intermediate value on both sides of any internal reduction threshold; the 1e-6 absolute bound must hold there too.",
+            "statement": "Accuracy degrades at the mantissa=1.65 reduction split boundary and/or at the largest exponent (x near 65504, u near 65505), where the high+low ln2 split and the final summation high + (local_log + (low + correction)) suffer cancellation/rounding that pushes error above 1e-6."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "For x near -1 (e.g. -0.9995, u \u2248 4.88e-4), u-1 in FP32 is not exact (u outside [0.5,2]), so the numerator x-(u-1) relies on the error being small relative to u; if FP32 rounding of u-1 leaves a residue larger than expected relative to u (which is tiny, amplifying the division), the correction term may be wrong by more than 1e-6. log1p(-0.9995) \u2248 -7.52, so absolute tolerance 1e-6 there is relatively tight (~1.3e-7 relative).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'the representable value immediately above -1' is explicitly part of the legal domain, and the 1e-6 absolute tolerance applies to every legal element."
+              }
+            ],
+            "scope_rationale": "The contract explicitly lists the representable value immediately above -1 as legal, and the fixed 1e-6 absolute tolerance applies there, where log1p \u2248 -7.5 and the correction term divides by the tiny u.",
+            "statement": "The Cody-Waite correction term div_rn(x - (u - 1.0), u) is inaccurate for x near -1 (smallest legal u \u2248 4.88e-4) or for subnormal FP16 x, because u-1 is computed in FP32 with rounding that the correction fails to fully compensate, leaving residual error above 1e-6."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 16.885,
+        "input_tokens": 18440,
+        "output_tokens": 1440
+      }
+    },
+    {
+      "duration_s": 14.032004895999997,
+      "role": "experimenter",
+      "round": 4,
+      "text": "All three open claims concern absolute error over the legal FP16 domain, so I'll launch three independent probes: an exhaustive FP16 sweep for c1, boundary/extreme-value checks for c2, and near -1 / subnormal checks for c3.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport sys, json, torch\nsys.path.insert(0, \"/root/cases/case_166\")\nfrom kernel import run\n\n# all 65536 FP16 bit patterns, keep finite values > -1 (exclude both -inf-ish and -1... values <= -1)\nbits = torch.arange(65536, dtype=torch.int32)\nx_all = bits.to(torch.uint16).view(torch.float16)\nmask = torch.isfinite(x_all) & (x_all > -1.0)\nx = x_all[mask].to(torch.float16)\n# signed zeros collapse to one representative of each sign; keep all (both zeros legal)\nprint(\"legal count:\", x.numel(), file=sys.stderr)\nxs = x.to(\"cuda\")\nout = run(xs)\nref = torch.log1p(x.to(torch.float64).cpu())\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmaxerr = err.max().item()\ni = int(err.argmax())\n# worst region: values with mantissa near 1.65\nu = 1.0 + x.to(torch.float32).cpu()\nenc = u.view(torch.uint32) if hasattr(u, 'view') else None\n# top-5 worst\ntop = torch.topk(err, 5)\nprint(json.dumps({\n    \"metric\": \"max abs error over exhaustive legal FP16 domain vs FP64 log1p\",\n    \"n_legal\": int(x.numel()),\n    \"max_abs_err\": maxerr,\n    \"tolerance\": 1e-6,\n    \"exceeds_1e-6\": bool(maxerr > 1e-6),\n    \"worst_x\": float(x[i]),\n    \"worst_ref\": float(ref[i]),\n    \"top5_err\": [float(v) for v in top.values],\n    \"top5_x\": [float(x[int(j)]) for j in top.indices],\n}))\n",
+            "expected_signal": "max abs error over all legal FP16 values vs FP64 log1p, compare to 1e-6"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport sys, json, torch\nsys.path.insert(0, \"/root/cases/case_166\")\nfrom kernel import run\n\n# focus: mantissa split boundary (u near 1.65*2^k) and extremes (x near 65504, smallest u)\ndef err_of(vals):\n    x = vals.to(torch.float16).to(\"cuda\")\n    out = run(x)\n    ref = torch.log1p(x.cpu().to(torch.float64))\n    return (out.cpu().to(torch.float64) - ref).abs()\n\ncands = []\n# boundary region: mantissa in [1.60, 1.70] across exponents of u\nfor k in range(-11, 16):\n    base = (1.65 * (2.0 ** k))\n    lo, hi = 1.60 * (2.0**k), 1.70 * (2.0**k)\n    n = 300\n    vals = torch.linspace(lo, hi, n)\n    cands.append(vals)\n# extremes\ncands += [torch.tensor([65504.0, 65503.0, 65000.0, -0.99951171875, -0.999]),\n          torch.linspace(0.99, 1.01, 400), torch.linspace(-0.99, -1.0+1e-3, 400)]\nvals = torch.cat(cands)\nvals = vals[torch.isfinite(vals) & (vals > -1.0)]\nx = vals.to(torch.float16)\ne = err_of(x)\nmaxerr = float(e.max())\ni = int(e.argmax())\n# also the largest-exponent path: x = 65504\ne_ext = err_of(torch.tensor([65504.0]))\nprint(json.dumps({\n    \"metric\": \"max abs error near mantissa=1.65 split boundary and extreme exponents\",\n    \"n_tested\": int(x.numel()),\n    \"max_abs_err\": maxerr,\n    \"tolerance\": 1e-6,\n    \"exceeds_1e-6\": bool(maxerr > 1e-6),\n    \"worst_x\": float(x[i]),\n    \"worst_err_at_65504\": float(e_ext.max()),\n}))\n",
+            "expected_signal": "max abs error near the 1.65 reduction boundary and at extremes vs 1e-6"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "\nimport sys, json, torch\nsys.path.insert(0, \"/root/cases/case_166\")\nfrom kernel import run\n\n# values just above -1 plus subnormal FP16 x, vs FP64 log1p\nbits = torch.arange(65536, dtype=torch.int32)\nx_all = bits.to(torch.uint16).view(torch.float16)\nneg_near = x_all[(x_all > -1.0) & (x_all < -0.9)]\nsub = x_all[(x_all.abs() > 0) & (x_all.abs() < 6.104e-5)]  # subnormal magnitudes\ntiny_norm = x_all[(x_all.abs() >= 6.104e-5) & (x_all.abs() < 1e-3)]\nvals = torch.cat([neg_near, sub, tiny_norm, torch.tensor([0.0, -0.0, -0.99951171875])]).to(torch.float16)\nx = vals.to(\"cuda\")\nout = run(x)\nref = torch.log1p(vals.cpu().to(torch.float64))\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmaxerr = float(err.max())\ni = int(err.argmax())\nsubmask = torch.cat([torch.zeros(len(neg_near), dtype=torch.bool), torch.ones(len(sub)+len(tiny_norm)+2, dtype=torch.bool)])\nprint(json.dumps({\n    \"metric\": \"max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p\",\n    \"n_tested\": int(vals.numel()),\n    \"n_near_minus1\": int(len(neg_near)),\n    \"n_subnormal_or_tiny\": int(len(sub)+len(tiny_norm)),\n    \"max_abs_err\": maxerr,\n    \"tolerance\": 1e-6,\n    \"exceeds_1e-6\": bool(maxerr > 1e-6),\n    \"worst_x\": float(vals[i]),\n    \"worst_ref\": float(ref[i]),\n}))\n",
+            "expected_signal": "max abs error near x=-1 and subnormals vs 1e-6"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.032,
+        "input_tokens": 24144,
+        "output_tokens": 1689
+      }
+    },
+    {
+      "duration_s": 9.852257430000009,
+      "role": "experimenter",
+      "round": 5,
+      "text": "All three probe results are in: the exhaustive FP16 sweep shows max error 1.30e-6 > 1e-6 (confirming c1, worst at x=3378, u near the reduction region), c2 also shows 1.30e-6 at x=3378 (same root cause, error at 65504 only 1.4e-7), and c3 stays under tolerance at 8.58e-7 near -1/subnormals. I'll finalize evidence for all three claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "exceeds_1e-6": true,
+              "max_abs_err": 1.3007035484235985e-06,
+              "n_legal": 47104,
+              "tolerance": 1e-06,
+              "top5_err": [
+                1.3007035484235985e-06,
+                1.2807968641226353e-06,
+                1.2436994385467415e-06,
+                1.236186040642906e-06,
+                1.231679771507288e-06
+              ],
+              "top5_x": [
+                3378.0,
+                3374.0,
+                27008.0,
+                13496.0,
+                27024.0
+              ],
+              "worst_ref": 8.12533508671429,
+              "worst_x": 3378.0
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Exhaustive sweep of all 47104 legal finite FP16 values > -1 vs FP64 log1p: max absolute error 1.3007e-06, exceeding the 1e-6 tolerance. Worst offenders at large x (3378, 27008, 13496, ...), consistent with polynomial/summation error at high exponents rather than near x=0. Confirms c1.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "max_abs_err": 1.3007035484235985e-06,
+              "n_tested": 8905,
+              "tolerance": 1e-06,
+              "worst_err_at_65504": 1.4238488610374134e-07,
+              "worst_x": 3378.0
+            },
+            "event_id": "t10",
+            "status": "confirmed",
+            "summary": "Boundary/extreme probe (8905 values around mantissa=1.65*2^k for k in [-11,15], x=65504, and near-\u00b11 regions): max error 1.3007e-06 at x=3378, above tolerance. Error at x=65504 itself is only 1.42e-07, so the failure is in the large-exponent regime generally (worst at x=3378, u\u22483379) rather than at the extreme end, but it confirms absolute error above 1e-6 occurs in the tested boundary/large-value region, matching c2's stated failure mode (FP32 summation at large values).",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "max_abs_err": 8.583981494503234e-07,
+              "n_near_minus1": 204,
+              "n_subnormal_or_tiny": 10288,
+              "n_tested": 10495,
+              "tolerance": 1e-06,
+              "worst_ref": -2.970658636001875,
+              "worst_x": -0.94873046875
+            },
+            "event_id": "t11",
+            "status": "rebutted",
+            "summary": "Probe over all 204 legal FP16 values in (-1,-0.9) (including the value immediately above -1), all subnormal magnitudes, and small normalized magnitudes: max absolute error 8.58e-07, below the 1e-6 tolerance. The Cody-Waite correction remains accurate near x=-1 and for subnormals, so c3's asserted residual error above 1e-6 is not observed (the worst error in this region is at x=-0.9487, still under tolerance).",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.852,
+        "input_tokens": 33059,
+        "output_tokens": 976
+      }
+    },
+    {
+      "duration_s": 6.581359106000008,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The evidence is decisive: an exhaustive sweep over all 47,104 legal FP16 values confirms in-scope violations of the 1e-6 absolute tolerance (max error 1.30e-06 at large x), while the near -1/subnormal concern was rebutted. No new in-scope claims are needed.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: c1 and c2 are confirmed by an exhaustive probe over all 47104 legal FP16 values (max abs error 1.3007e-06 > 1e-6 tolerance, worst at large x such as 3378 and 27008), and c3 was rebutted (max error 8.58e-07 near -1/subnormals). The confirmed claims already cover the material in-scope defect; no additional testable in-scope problem is exposed by the new evidence.",
+            "reviewed_claims": [
+              "c1",
+              "c2",
+              "c3"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.581,
+        "input_tokens": 43820,
+        "output_tokens": 229
+      }
+    },
+    {
+      "duration_s": 6.903776983,
+      "role": "judge",
+      "round": 7,
+      "text": "The evidence is decisive: an exhaustive sweep over all 47,104 legal FP16 values confirms max absolute error 1.30e-06 > 1e-6, violating the contract's explicit fixed absolute tolerance. Scope evidence directly cites the stated input domain, the Skeptic has signed off with no new claims, and no open claims remain. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract (problem.txt) explicitly requires abs(actual[i] - log(1+x[i])) <= 1e-6 with zero relative tolerance for every finite FP16 value > -1, as a single global verdict. An exhaustive probe (t9) over all 47104 legal FP16 values found max absolute error 1.3007e-06 (worst at x=3378, ref 8.1253; top errors also at x=3374, 27008, 13496), above the 1e-6 tolerance \u2014 a confirmed in-scope contract violation. The boundary/extreme probe (t10) independently confirms errors above 1e-6 in the large-exponent region (error at x=65504 itself is only 1.4e-07, so the defect is in the large-x mid-range, consistent with the truncated/rounded polynomial and FP32 summation in c1/c2). This is not an acceptable rounding-order or declared-precision deviation: the contract mandates a fixed absolute tolerance throughout the entire legal domain, and the kernel demonstrably exceeds it. Claim c3 (near x=-1 / subnormals) was rebutted (max error 8.58e-07 there), which does not affect the verdict. All claims are resolved; Skeptic signed off with no new claims after reviewing the latest evidence.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.904,
+        "input_tokens": 44941,
+        "output_tokens": 418
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-20T05:47:02Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: c1 and c2 are confirmed by an exhaustive probe over all 47104 legal FP16 values (max abs error 1.3007e-06 > 1e-6 tolerance, worst at large x such as 3378 and 27008), and c3 was rebutted (max error 8.58e-07 near -1/subnormals). The confirmed claims already cover the material in-scope defect; no additional testable in-scope problem is exposed by the new evidence.",
+    "reviewed_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reviewed_tool_event_count": 14,
+    "tool_event_id": "t15",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_166"
+      },
+      "created_at": "2026-10-20T05:45:36Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_166",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise log1p with exponent reduction and a short odd polynomial.\n\nOriginal synthetic Triton implementation, not an upstream bug reproduction.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _log1p_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    u = 1.0 + x\n    correction = tl.div_rn(x - (u - 1.0), u)\n    encoding = u.to(tl.uint32, bitcast=True)\n    exponent = ((encoding >> 23) & 255).to(tl.int32) - 127\n    mantissa = ((encoding & 0x007fffff) | 0x3f800000).to(tl.float32, bitcast=True)\n    upper = mantissa > 1.65\n    mantissa = tl.where(upper, mantissa * 0.5, mantissa)\n    exponent = exponent + upper.to(tl.int32)\n    z = tl.div_rn(mantissa - 1.0, mantissa + 1.0)\n    square = z * z\n    polynomial = 0.142857\n    polynomial = polynomial * square + 0.2\n    polynomial = polynomial * square + 0.33333\n    polynomial = 1.0 + square * polynomial\n    local_log = (2.0 * z) * polynomial\n    high = exponent.to(tl.float32) * 0.69313812256\n    low = exponent.to(tl.float32) * 0.0000090580006145\n    value = high + (local_log + (low + correction))\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool((torch.isfinite(x) & (x > -1.0)).all().item()),\n            \"all input values must be finite and greater than -1\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating log(1+x).\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _log1p_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical target with the FP64 library log1p.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.log1p(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples only; all finite FP16 values greater than -1 are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (4.0 * torch.rand((size,), generator=generator) - 0.75).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute log1p elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = log(1 + x[i]), where log is the natural logarithm.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value strictly greater than -1 is legal. This includes both signed zeros, positive and negative subnormals, the representable value immediately above -1, and the largest finite FP16 value 65504. NaN, infinity and values at or below -1 are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - log(1 + x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the FP64 library log1p and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_166",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_166"
+      },
+      "created_at": "2026-10-20T05:45:36Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute log1p elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = log(1 + x[i]), where log is the natural logarithm.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- Every finite FP16 value strictly greater than -1 is legal. This includes both signed zeros, positive and negative subnormals, the representable value immediately above -1, and the largest finite FP16 value 65504. NaN, infinity and values at or below -1 are outside this domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - log(1 + x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the FP64 library log1p and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic Triton implementation of a standard elementary function. It is not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_166",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_166"
+      },
+      "created_at": "2026-10-20T05:45:36Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_166",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3268
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1942
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_166",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-20T05:45:36Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_166",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Target[i] = log(1 + x[i]) on the exact stored FP16 value, computed in real arithmetic; output is fresh FP32 tensor [N] on x.device.",
+          "Absolute tolerance 1e-6 per element, zero relative tolerance, signed zeros equivalent; single verdict over the entire legal domain, not per-distribution.",
+          "Domain: 1D contiguous FP16 [N], 1<=N<=131072, CUDA, ordinary tensor flags; every finite FP16 value strictly > -1 is legal, including signed zeros, subnormals, the smallest value above -1 (-0.99951171875... actually nextabove -1 in FP16 is -0.99951), and 65504.",
+          "validate_inputs() must enforce the domain and run() must call it; reference() uses FP64 library log1p; make_inputs() examples only.",
+          "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Loads FP16 x, casts to FP32, computes u=1+x and an FP32 correction term div_rn(x-(u-1),u) to compensate rounding in u (log1p-style Cody-Waite compensation).",
+          "Bitcasts u to uint32 to extract exponent and mantissa, normalizes mantissa to [1,2) then halves it when >1.65 so the atanh-series argument z=(m-1)/(m+1) stays small; z in roughly [0, ~0.245].",
+          "Computes log(u) = exponent*ln2 (split into high/low parts 0.69313812256 and 0.0000090580006145) + 2z*P(z^2), a short odd rational polynomial (coeffs 1/3, 1/5, 1/7 truncated to 0.33333, 0.2, 0.142857).",
+          "Final value = high + (local_log + (low + correction)); stores FP32 with mask; BLOCK=256, num_warps=4, enable_fp_fusion=False (to control rounding), N as constexpr.",
+          "validate_inputs mirrors the stated domain: finite, x > -1, FP16, 1D contiguous, size bounds, ordinary flags; run() calls it and allocates output on x.device."
+        ],
+        "open_questions": [
+          "Does the truncated polynomial with rounded coefficients (esp. 0.33333, 0.2, 0.142857) keep worst-case absolute error <= 1e-6 across the full u range? Needs runtime sweep, e.g. exhaustive FP16 > -1 (~32K values) compared to FP64 log1p.",
+          "Is accuracy preserved at the mantissa=1.65 split boundary and for u near the extremes (smallest u from x next above -1; u=65505)"
+        ],
+        "risk_map": [
+          "Polynomial accuracy: the series 2z*(1+z^2*(1/3+z^2*(1/5+z^2*(1/7)))) truncated at 1/7 with rounded coefficients (0.33333, 0.2, 0.142857 not 0.142857142857) may exceed 1e-6 absolute error, since |z| can reach ~0.245 after the 1.65 halving rule; truncation error of order z^9/9 is tiny but coefficient rounding of 0.142857 (~1.4e-6 relative) times z^2 ~ 0.06 contributes ~4e-8... but 0.33333 vs 1/3 error ~3.3e-6 absolute times 2z ~ 0.49 gives ~1.6e-7 \u2014 needs numeric check; boundary near u=1.65 where z jumps between reduction regimes.",
+          "log2(ln2) split: high=0.69313812256, low=0.0000090580006145 sums to 0.69314718056... vs true ln2=0.693147180559945; residual ~1e-10*exponent, fine up to exponent ~15 (x up to 65504 gives u up to 65505, exponent ~15) \u2014 small.",
+          "Cancellation for x near -1: u = 1+x is exact in FP32 for FP16 x near -1 (Sterbenz), so u can be as small as the next FP16 above -0.0? Actually x>-1 means u>0; smallest u ~ 4.88e-4 (FP16 -0.9995 -> u ~ 4.8828e-4) \u2014 exponent ~-11; z from mantissa in [1,2) fine. But if u subnormal in FP32? No, u>=~4.8e-4 is normal. However for x values like -0.9995, correction = (x - (u-1))/u: u-1 is computed in FP32 and is inexact for u near 1 only; near u=4.8e-4 rounding pattern differs \u2014 needs probe.",
+          "Coefficient 0.2 is not a rounded power (1/5=0.2 exact in decimal but 0.2 is not exact in binary); tiny.",
+          "The mantissa normalization uses |u| bits: u>0 always here, but for u in (0.5,1) exponent extraction handles it; for u subnormal in FP32 (impossible here since x FP16 >-1 gives u >= ~2^-11) fine. Edge: u exactly 1.0 (x=0): exponent 0, mantissa 1.0, z=0, correction 0 \u2014 output 0, correct for signed zeros.",
+          "Rounding of x - (u - 1.0): for |x| < 2^-11 subnormal FP16, 1+x rounds and correction compensates; check correction formula's own rounding for subnormal x (e.g. x=5.96e-8, log1p ~ 5.96e-8; correction = (x-(u-1))/u where u-1 may be 0 or 2^-24 steps \u2014 possible loss below tolerance? absolute tolerance 1e-6 makes tiny x trivially pass).",
+          "Potential Triton fp32 constant folding/fusion issues mitigated by enable_fp_fusion=False; verify it applies.",
+          "Threshold 1.65 mantissa split changes which path z takes; verify continuity/accuracy on both sides."
+        ],
+        "scope_notes": [
+          "The 1e-6 is ABSOLUTE tolerance; since |log1p| grows to ~11.1 at x=65504, absolute tolerance is generous at large x and tight near x=0 (target ~x for tiny x, error must stay < 1e-6 \u2014 easy since values are tiny).",
+          "Exhaustive verification over all legal FP16 values > -1 is feasible (~32k values), giving a complete-domain correctness experiment.",
+          "Correctness is one global verdict; a single failing element suffices to reject; passing benign random inputs is weak evidence."
+        ],
+        "summary": "Describer model for case_166: FP16 log1p Triton kernel using exponent range reduction plus a truncated atanh-series polynomial, targeting 1e-6 absolute tolerance over all finite FP16 inputs > -1."
+      },
+      "created_at": "2026-10-20T05:46:01Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Target[i] = log(1 + x[i]) on the exact stored FP16 value, computed in real arithmetic; output is fresh FP32 tensor [N] on x.device.",
+            "Absolute tolerance 1e-6 per element, zero relative tolerance, signed zeros equivalent; single verdict over the entire legal domain, not per-distribution.",
+            "Domain: 1D contiguous FP16 [N], 1<=N<=131072, CUDA, ordinary tensor flags; every finite FP16 value strictly > -1 is legal, including signed zeros, subnormals, the smallest value above -1 (-0.99951171875... actually nextabove -1 in FP16 is -0.99951), and 65504.",
+            "validate_inputs() must enforce the domain and run() must call it; reference() uses FP64 library log1p; make_inputs() examples only.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Loads FP16 x, casts to FP32, computes u=1+x and an FP32 correction term div_rn(x-(u-1),u) to compensate rounding in u (log1p-style Cody-Waite compensation).",
+            "Bitcasts u to uint32 to extract exponent and mantissa, normalizes mantissa to [1,2) then halves it when >1.65 so the atanh-series argument z=(m-1)/(m+1) stays small; z in roughly [0, ~0.245].",
+            "Computes log(u) = exponent*ln2 (split into high/low parts 0.69313812256 and 0.0000090580006145) + 2z*P(z^2), a short odd rational polynomial (coeffs 1/3, 1/5, 1/7 truncated to 0.33333, 0.2, 0.142857).",
+            "Final value = high + (local_log + (low + correction)); stores FP32 with mask; BLOCK=256, num_warps=4, enable_fp_fusion=False (to control rounding), N as constexpr.",
+            "validate_inputs mirrors the stated domain: finite, x > -1, FP16, 1D contiguous, size bounds, ordinary flags; run() calls it and allocates output on x.device."
+          ],
+          "open_questions": [
+            "Does the truncated polynomial with rounded coefficients (esp. 0.33333, 0.2, 0.142857) keep worst-case absolute error <= 1e-6 across the full u range? Needs runtime sweep, e.g. exhaustive FP16 > -1 (~32K values) compared to FP64 log1p.",
+            "Is accuracy preserved at the mantissa=1.65 split boundary and for u near the extremes (smallest u from x next above -1; u=65505)"
+          ],
+          "risk_map": [
+            "Polynomial accuracy: the series 2z*(1+z^2*(1/3+z^2*(1/5+z^2*(1/7)))) truncated at 1/7 with rounded coefficients (0.33333, 0.2, 0.142857 not 0.142857142857) may exceed 1e-6 absolute error, since |z| can reach ~0.245 after the 1.65 halving rule; truncation error of order z^9/9 is tiny but coefficient rounding of 0.142857 (~1.4e-6 relative) times z^2 ~ 0.06 contributes ~4e-8... but 0.33333 vs 1/3 error ~3.3e-6 absolute times 2z ~ 0.49 gives ~1.6e-7 \u2014 needs numeric check; boundary near u=1.65 where z jumps between reduction regimes.",
+            "log2(ln2) split: high=0.69313812256, low=0.0000090580006145 sums to 0.69314718056... vs true ln2=0.693147180559945; residual ~1e-10*exponent, fine up to exponent ~15 (x up to 65504 gives u up to 65505, exponent ~15) \u2014 small.",
+            "Cancellation for x near -1: u = 1+x is exact in FP32 for FP16 x near -1 (Sterbenz), so u can be as small as the next FP16 above -0.0? Actually x>-1 means u>0; smallest u ~ 4.88e-4 (FP16 -0.9995 -> u ~ 4.8828e-4) \u2014 exponent ~-11; z from mantissa in [1,2) fine. But if u subnormal in FP32? No, u>=~4.8e-4 is normal. However for x values like -0.9995, correction = (x - (u-1))/u: u-1 is computed in FP32 and is inexact for u near 1 only; near u=4.8e-4 rounding pattern differs \u2014 needs probe.",
+            "Coefficient 0.2 is not a rounded power (1/5=0.2 exact in decimal but 0.2 is not exact in binary); tiny.",
+            "The mantissa normalization uses |u| bits: u>0 always here, but for u in (0.5,1) exponent extraction handles it; for u subnormal in FP32 (impossible here since x FP16 >-1 gives u >= ~2^-11) fine. Edge: u exactly 1.0 (x=0): exponent 0, mantissa 1.0, z=0, correction 0 \u2014 output 0, correct for signed zeros.",
+            "Rounding of x - (u - 1.0): for |x| < 2^-11 subnormal FP16, 1+x rounds and correction compensates; check correction formula's own rounding for subnormal x (e.g. x=5.96e-8, log1p ~ 5.96e-8; correction = (x-(u-1))/u where u-1 may be 0 or 2^-24 steps \u2014 possible loss below tolerance? absolute tolerance 1e-6 makes tiny x trivially pass).",
+            "Potential Triton fp32 constant folding/fusion issues mitigated by enable_fp_fusion=False; verify it applies.",
+            "Threshold 1.65 mantissa split changes which path z takes; verify continuity/accuracy on both sides."
+          ],
+          "scope_notes": [
+            "The 1e-6 is ABSOLUTE tolerance; since |log1p| grows to ~11.1 at x=65504, absolute tolerance is generous at large x and tight near x=0 (target ~x for tiny x, error must stay < 1e-6 \u2014 easy since values are tiny).",
+            "Exhaustive verification over all legal FP16 values > -1 is feasible (~32k values), giving a complete-domain correctness experiment.",
+            "Correctness is one global verdict; a single failing element suffices to reject; passing benign random inputs is weak evidence."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Target[i] = log(1 + x[i]) on the exact stored FP16 value, computed in real arithmetic; output is fresh FP32 tensor [N] on x.device.",
+            "Absolute tolerance 1e-6 per element, zero relative tolerance, signed zeros equivalent; single verdict over the entire legal domain, not per-distribution.",
+            "Domain: 1D contiguous FP16 [N], 1<=N<=131072, CUDA, ordinary tensor flags; every finite FP16 value strictly > -1 is legal, including signed zeros, subnormals, the smallest value above -1 (-0.99951171875... actually nextabove -1 in FP16 is -0.99951), and 65504.",
+            "validate_inputs() must enforce the domain and run() must call it; reference() uses FP64 library log1p; make_inputs() examples only.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-20T05:46:01Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Loads FP16 x, casts to FP32, computes u=1+x and an FP32 correction term div_rn(x-(u-1),u) to compensate rounding in u (log1p-style Cody-Waite compensation).",
+            "Bitcasts u to uint32 to extract exponent and mantissa, normalizes mantissa to [1,2) then halves it when >1.65 so the atanh-series argument z=(m-1)/(m+1) stays small; z in roughly [0, ~0.245].",
+            "Computes log(u) = exponent*ln2 (split into high/low parts 0.69313812256 and 0.0000090580006145) + 2z*P(z^2), a short odd rational polynomial (coeffs 1/3, 1/5, 1/7 truncated to 0.33333, 0.2, 0.142857).",
+            "Final value = high + (local_log + (low + correction)); stores FP32 with mask; BLOCK=256, num_warps=4, enable_fp_fusion=False (to control rounding), N as constexpr.",
+            "validate_inputs mirrors the stated domain: finite, x > -1, FP16, 1D contiguous, size bounds, ordinary flags; run() calls it and allocates output on x.device."
+          ],
+          "open_questions": [
+            "Does the truncated polynomial with rounded coefficients (esp. 0.33333, 0.2, 0.142857) keep worst-case absolute error <= 1e-6 across the full u range? Needs runtime sweep, e.g. exhaustive FP16 > -1 (~32K values) compared to FP64 log1p.",
+            "Is accuracy preserved at the mantissa=1.65 split boundary and for u near the extremes (smallest u from x next above -1; u=65505)"
+          ],
+          "risk_map": [
+            "Polynomial accuracy: the series 2z*(1+z^2*(1/3+z^2*(1/5+z^2*(1/7)))) truncated at 1/7 with rounded coefficients (0.33333, 0.2, 0.142857 not 0.142857142857) may exceed 1e-6 absolute error, since |z| can reach ~0.245 after the 1.65 halving rule; truncation error of order z^9/9 is tiny but coefficient rounding of 0.142857 (~1.4e-6 relative) times z^2 ~ 0.06 contributes ~4e-8... but 0.33333 vs 1/3 error ~3.3e-6 absolute times 2z ~ 0.49 gives ~1.6e-7 \u2014 needs numeric check; boundary near u=1.65 where z jumps between reduction regimes.",
+            "log2(ln2) split: high=0.69313812256, low=0.0000090580006145 sums to 0.69314718056... vs true ln2=0.693147180559945; residual ~1e-10*exponent, fine up to exponent ~15 (x up to 65504 gives u up to 65505, exponent ~15) \u2014 small.",
+            "Cancellation for x near -1: u = 1+x is exact in FP32 for FP16 x near -1 (Sterbenz), so u can be as small as the next FP16 above -0.0? Actually x>-1 means u>0; smallest u ~ 4.88e-4 (FP16 -0.9995 -> u ~ 4.8828e-4) \u2014 exponent ~-11; z from mantissa in [1,2) fine. But if u subnormal in FP32? No, u>=~4.8e-4 is normal. However for x values like -0.9995, correction = (x - (u-1))/u: u-1 is computed in FP32 and is inexact for u near 1 only; near u=4.8e-4 rounding pattern differs \u2014 needs probe.",
+            "Coefficient 0.2 is not a rounded power (1/5=0.2 exact in decimal but 0.2 is not exact in binary); tiny.",
+            "The mantissa normalization uses |u| bits: u>0 always here, but for u in (0.5,1) exponent extraction handles it; for u subnormal in FP32 (impossible here since x FP16 >-1 gives u >= ~2^-11) fine. Edge: u exactly 1.0 (x=0): exponent 0, mantissa 1.0, z=0, correction 0 \u2014 output 0, correct for signed zeros.",
+            "Rounding of x - (u - 1.0): for |x| < 2^-11 subnormal FP16, 1+x rounds and correction compensates; check correction formula's own rounding for subnormal x (e.g. x=5.96e-8, log1p ~ 5.96e-8; correction = (x-(u-1))/u where u-1 may be 0 or 2^-24 steps \u2014 possible loss below tolerance? absolute tolerance 1e-6 makes tiny x trivially pass).",
+            "Potential Triton fp32 constant folding/fusion issues mitigated by enable_fp_fusion=False; verify it applies.",
+            "Threshold 1.65 mantissa split changes which path z takes; verify continuity/accuracy on both sides."
+          ],
+          "scope_notes": [
+            "The 1e-6 is ABSOLUTE tolerance; since |log1p| grows to ~11.1 at x=65504, absolute tolerance is generous at large x and tight near x=0 (target ~x for tiny x, error must stay < 1e-6 \u2014 easy since values are tiny).",
+            "Exhaustive verification over all legal FP16 values > -1 is feasible (~32k values), giving a complete-domain correctness experiment.",
+            "Correctness is one global verdict; a single failing element suffices to reject; passing benign random inputs is weak evidence."
+          ],
+          "summary": "Describer model for case_166: FP16 log1p Triton kernel using exponent range reduction plus a truncated atanh-series polynomial, targeting 1e-6 absolute tolerance over all finite FP16 inputs > -1.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "The series truncates at 1/7 and uses decimal-rounded coefficients (0.33333 instead of 1/3, 0.142857 instead of 1/7). The 0.33333 vs 1/3 deficit (~3.3e-6) multiplied through 2z (~0.4-0.5) gives ~1.6e-7, but combined with truncation error (order z^9/9 with z up to ~0.245, ~7e-10... plus 0.142857 rounding ~1.4e-6 * z^2) the total could approach or exceed the 1e-6 absolute tolerance in the worst region (max |z|, i.e. largest normalized mantissa before halving, u near 2^k*1.65). Needs an exhaustive FP16 sweep versus FP64 log1p.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - log(1 + x[i])) <= 1e-6, and 'Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain', with 'every finite FP16 value strictly greater than -1' legal."
+          }
+        ],
+        "scope_rationale": "The contract demands <= 1e-6 absolute error for every legal finite FP16 value > -1, as a single global verdict, so any single failing element (e.g. where the truncated/rounded polynomial is least accurate) is a contract violation.",
+        "statement": "The truncated atanh-series polynomial with rounded coefficients (0.33333, 0.2, 0.142857) produces worst-case absolute error exceeding 1e-6 for some legal FP16 input, most likely where |z| is largest (mantissa just below the 1.65 halving threshold, i.e. u near 1.65 or near 3.3, etc.)."
+      },
+      "created_at": "2026-10-20T05:46:18Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-20T05:46:18Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "The series truncates at 1/7 and uses decimal-rounded coefficients (0.33333 instead of 1/3, 0.142857 instead of 1/7). The 0.33333 vs 1/3 deficit (~3.3e-6) multiplied through 2z (~0.4-0.5) gives ~1.6e-7, but combined with truncation error (order z^9/9 with z up to ~0.245, ~7e-10... plus 0.142857 rounding ~1.4e-6 * z^2) the total could approach or exceed the 1e-6 absolute tolerance in the worst region (max |z|, i.e. largest normalized mantissa before halving, u near 2^k*1.65). Needs an exhaustive FP16 sweep versus FP64 log1p.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - log(1 + x[i])) <= 1e-6, and 'Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain', with 'every finite FP16 value strictly greater than -1' legal."
+          }
+        ],
+        "scope_rationale": "The contract demands <= 1e-6 absolute error for every legal finite FP16 value > -1, as a single global verdict, so any single failing element (e.g. where the truncated/rounded polynomial is least accurate) is a contract violation.",
+        "statement": "The truncated atanh-series polynomial with rounded coefficients (0.33333, 0.2, 0.142857) produces worst-case absolute error exceeding 1e-6 for some legal FP16 input, most likely where |z| is largest (mantissa just below the 1.65 halving threshold, i.e. u near 1.65 or near 3.3, etc.).",
+        "status": "open",
+        "updated_at": "2026-10-20T05:46:18Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "When mantissa > 1.65 the kernel uses m/2 with exponent+1, giving log(m) = (exponent+1)*ln2 + log(m/2). This is mathematically exact, but the threshold creates a discontinuity in z, and the FP32 evaluation `value = high + (local_log + (low + correction))` can lose precision when high (up to ~10.4) is added to a small local_log, potentially exceeding 1e-6 near the threshold and at extreme exponents. Also the ln2 high/low split residual (~1e-10 * exponent ~ 15 = 1.5e-9) is small, but the summation order's FP32 rounding at large values needs checking.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "abs(actual[i] - log(1 + x[i])) <= 1e-6 must hold for every legal input including 'the largest finite FP16 value 65504' and values near the reduction boundary; single verdict over entire legal domain."
+          }
+        ],
+        "scope_rationale": "The contract explicitly includes the largest FP16 value 65504 and every intermediate value on both sides of any internal reduction threshold; the 1e-6 absolute bound must hold there too.",
+        "statement": "Accuracy degrades at the mantissa=1.65 reduction split boundary and/or at the largest exponent (x near 65504, u near 65505), where the high+low ln2 split and the final summation high + (local_log + (low + correction)) suffer cancellation/rounding that pushes error above 1e-6."
+      },
+      "created_at": "2026-10-20T05:46:18Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-20T05:46:18Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "When mantissa > 1.65 the kernel uses m/2 with exponent+1, giving log(m) = (exponent+1)*ln2 + log(m/2). This is mathematically exact, but the threshold creates a discontinuity in z, and the FP32 evaluation `value = high + (local_log + (low + correction))` can lose precision when high (up to ~10.4) is added to a small local_log, potentially exceeding 1e-6 near the threshold and at extreme exponents. Also the ln2 high/low split residual (~1e-10 * exponent ~ 15 = 1.5e-9) is small, but the summation order's FP32 rounding at large values needs checking.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "abs(actual[i] - log(1 + x[i])) <= 1e-6 must hold for every legal input including 'the largest finite FP16 value 65504' and values near the reduction boundary; single verdict over entire legal domain."
+          }
+        ],
+        "scope_rationale": "The contract explicitly includes the largest FP16 value 65504 and every intermediate value on both sides of any internal reduction threshold; the 1e-6 absolute bound must hold there too.",
+        "statement": "Accuracy degrades at the mantissa=1.65 reduction split boundary and/or at the largest exponent (x near 65504, u near 65505), where the high+low ln2 split and the final summation high + (local_log + (low + correction)) suffer cancellation/rounding that pushes error above 1e-6.",
+        "status": "open",
+        "updated_at": "2026-10-20T05:46:18Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "For x near -1 (e.g. -0.9995, u \u2248 4.88e-4), u-1 in FP32 is not exact (u outside [0.5,2]), so the numerator x-(u-1) relies on the error being small relative to u; if FP32 rounding of u-1 leaves a residue larger than expected relative to u (which is tiny, amplifying the division), the correction term may be wrong by more than 1e-6. log1p(-0.9995) \u2248 -7.52, so absolute tolerance 1e-6 there is relatively tight (~1.3e-7 relative).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'the representable value immediately above -1' is explicitly part of the legal domain, and the 1e-6 absolute tolerance applies to every legal element."
+          }
+        ],
+        "scope_rationale": "The contract explicitly lists the representable value immediately above -1 as legal, and the fixed 1e-6 absolute tolerance applies there, where log1p \u2248 -7.5 and the correction term divides by the tiny u.",
+        "statement": "The Cody-Waite correction term div_rn(x - (u - 1.0), u) is inaccurate for x near -1 (smallest legal u \u2248 4.88e-4) or for subnormal FP16 x, because u-1 is computed in FP32 with rounding that the correction fails to fully compensate, leaving residual error above 1e-6."
+      },
+      "created_at": "2026-10-20T05:46:18Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-10-20T05:46:18Z",
+        "evidence": [],
+        "id": "c3",
+        "raised_by": "skeptic",
+        "rationale": "For x near -1 (e.g. -0.9995, u \u2248 4.88e-4), u-1 in FP32 is not exact (u outside [0.5,2]), so the numerator x-(u-1) relies on the error being small relative to u; if FP32 rounding of u-1 leaves a residue larger than expected relative to u (which is tiny, amplifying the division), the correction term may be wrong by more than 1e-6. log1p(-0.9995) \u2248 -7.52, so absolute tolerance 1e-6 there is relatively tight (~1.3e-7 relative).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'the representable value immediately above -1' is explicitly part of the legal domain, and the 1e-6 absolute tolerance applies to every legal element."
+          }
+        ],
+        "scope_rationale": "The contract explicitly lists the representable value immediately above -1 as legal, and the fixed 1e-6 absolute tolerance applies there, where log1p \u2248 -7.5 and the correction term divides by the tiny u.",
+        "statement": "The Cody-Waite correction term div_rn(x - (u - 1.0), u) is inaccurate for x near -1 (smallest legal u \u2248 4.88e-4) or for subnormal FP16 x, because u-1 is computed in FP32 with rounding that the correction fails to fully compensate, leaving residual error above 1e-6.",
+        "status": "open",
+        "updated_at": "2026-10-20T05:46:18Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport sys, json, torch\nsys.path.insert(0, \"/root/cases/case_166\")\nfrom kernel import run\n\n# all 65536 FP16 bit patterns, keep finite values > -1 (exclude both -inf-ish and -1... values <= -1)\nbits = torch.arange(65536, dtype=torch.int32)\nx_all = bits.to(torch.uint16).view(torch.float16)\nmask = torch.isfinite(x_all) & (x_all > -1.0)\nx = x_all[mask].to(torch.float16)\n# signed zeros collapse to one representative of each sign; keep all (both zeros legal)\nprint(\"legal count:\", x.numel(), file=sys.stderr)\nxs = x.to(\"cuda\")\nout = run(xs)\nref = torch.log1p(x.to(torch.float64).cpu())\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmaxerr = err.max().item()\ni = int(err.argmax())\n# worst region: values with mantissa near 1.65\nu = 1.0 + x.to(torch.float32).cpu()\nenc = u.view(torch.uint32) if hasattr(u, 'view') else None\n# top-5 worst\ntop = torch.topk(err, 5)\nprint(json.dumps({\n    \"metric\": \"max abs error over exhaustive legal FP16 domain vs FP64 log1p\",\n    \"n_legal\": int(x.numel()),\n    \"max_abs_err\": maxerr,\n    \"tolerance\": 1e-6,\n    \"exceeds_1e-6\": bool(maxerr > 1e-6),\n    \"worst_x\": float(x[i]),\n    \"worst_ref\": float(ref[i]),\n    \"top5_err\": [float(v) for v in top.values],\n    \"top5_x\": [float(x[int(j)]) for j in top.indices],\n}))\n",
+        "expected_signal": "max abs error over all legal FP16 values vs FP64 log1p, compare to 1e-6"
+      },
+      "created_at": "2026-10-20T05:46:38Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "0d21c363f26aeb8e777caa23a2501e135c00bdf403455dff034da3f438ec7e10"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "c7522643f4333eeffc476208cc3d78028ad9aae3066002b3acc8f9fef6d7962f"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "5053f49ba85fc8e314f564bda4af2020fe30acec80c958afb18b3966cddaa46b"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "a9324f95e7c876001f94e1269181e0ca478ac325e8c5115f1b0d5c0a3e6a2e0e"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The truncated atanh-series polynomial with rounded coefficients (0.33333, 0.2, 0.142857) produces worst-case absolute error exceeding 1e-6 for some legal FP16 input, most likely where |z| is largest (mantissa just below the 1.65 halving threshold, i.e. u near 1.65 or near 3.3, etc.).",
+        "cwd": "/root/cases/case_166",
+        "duration_s": 5.878084,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "0d21c363f26aeb8e777caa23a2501e135c00bdf403455dff034da3f438ec7e10"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "c7522643f4333eeffc476208cc3d78028ad9aae3066002b3acc8f9fef6d7962f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "5053f49ba85fc8e314f564bda4af2020fe30acec80c958afb18b3966cddaa46b"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "a9324f95e7c876001f94e1269181e0ca478ac325e8c5115f1b0d5c0a3e6a2e0e"
+              }
+            ],
+            "duration_s": 5.878084,
+            "exit_code": 0,
+            "expected_signal": "max abs error over all legal FP16 values vs FP64 log1p, compare to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": true,
+              "max_abs_err": 1.3007035484235985e-06,
+              "metric": "max abs error over exhaustive legal FP16 domain vs FP64 log1p",
+              "n_legal": 47104,
+              "tolerance": 1e-06,
+              "top5_err": [
+                1.3007035484235985e-06,
+                1.2807968641226353e-06,
+                1.2436994385467415e-06,
+                1.236186040642906e-06,
+                1.231679771507288e-06
+              ],
+              "top5_x": [
+                3378.0,
+                3374.0,
+                27008.0,
+                13496.0,
+                27024.0
+              ],
+              "worst_ref": 8.12533508671429,
+              "worst_x": 3378.0
+            },
+            "stderr": "legal count: 47104\n",
+            "stdout": "{\"metric\": \"max abs error over exhaustive legal FP16 domain vs FP64 log1p\", \"n_legal\": 47104, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_ref\": 8.12533508671429, \"top5_err\": [1.3007035484235985e-06, 1.2807968641226353e-06, 1.2436994385467415e-06, 1.236186040642906e-06, 1.231679771507288e-06], \"top5_x\": [3378.0, 3374.0, 27008.0, 13496.0, 27024.0]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error over all legal FP16 values vs FP64 log1p, compare to 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "exceeds_1e-6": true,
+          "max_abs_err": 1.3007035484235985e-06,
+          "metric": "max abs error over exhaustive legal FP16 domain vs FP64 log1p",
+          "n_legal": 47104,
+          "tolerance": 1e-06,
+          "top5_err": [
+            1.3007035484235985e-06,
+            1.2807968641226353e-06,
+            1.2436994385467415e-06,
+            1.236186040642906e-06,
+            1.231679771507288e-06
+          ],
+          "top5_x": [
+            3378.0,
+            3374.0,
+            27008.0,
+            13496.0,
+            27024.0
+          ],
+          "worst_ref": 8.12533508671429,
+          "worst_x": 3378.0
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "legal count: 47104\n",
+        "stdout": "{\"metric\": \"max abs error over exhaustive legal FP16 domain vs FP64 log1p\", \"n_legal\": 47104, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_ref\": 8.12533508671429, \"top5_err\": [1.3007035484235985e-06, 1.2807968641226353e-06, 1.2436994385467415e-06, 1.236186040642906e-06, 1.231679771507288e-06], \"top5_x\": [3378.0, 3374.0, 27008.0, 13496.0, 27024.0]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport sys, json, torch\nsys.path.insert(0, \"/root/cases/case_166\")\nfrom kernel import run\n\n# focus: mantissa split boundary (u near 1.65*2^k) and extremes (x near 65504, smallest u)\ndef err_of(vals):\n    x = vals.to(torch.float16).to(\"cuda\")\n    out = run(x)\n    ref = torch.log1p(x.cpu().to(torch.float64))\n    return (out.cpu().to(torch.float64) - ref).abs()\n\ncands = []\n# boundary region: mantissa in [1.60, 1.70] across exponents of u\nfor k in range(-11, 16):\n    base = (1.65 * (2.0 ** k))\n    lo, hi = 1.60 * (2.0**k), 1.70 * (2.0**k)\n    n = 300\n    vals = torch.linspace(lo, hi, n)\n    cands.append(vals)\n# extremes\ncands += [torch.tensor([65504.0, 65503.0, 65000.0, -0.99951171875, -0.999]),\n          torch.linspace(0.99, 1.01, 400), torch.linspace(-0.99, -1.0+1e-3, 400)]\nvals = torch.cat(cands)\nvals = vals[torch.isfinite(vals) & (vals > -1.0)]\nx = vals.to(torch.float16)\ne = err_of(x)\nmaxerr = float(e.max())\ni = int(e.argmax())\n# also the largest-exponent path: x = 65504\ne_ext = err_of(torch.tensor([65504.0]))\nprint(json.dumps({\n    \"metric\": \"max abs error near mantissa=1.65 split boundary and extreme exponents\",\n    \"n_tested\": int(x.numel()),\n    \"max_abs_err\": maxerr,\n    \"tolerance\": 1e-6,\n    \"exceeds_1e-6\": bool(maxerr > 1e-6),\n    \"worst_x\": float(x[i]),\n    \"worst_err_at_65504\": float(e_ext.max()),\n}))\n",
+        "expected_signal": "max abs error near the 1.65 reduction boundary and at extremes vs 1e-6"
+      },
+      "created_at": "2026-10-20T05:46:41Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "ff4e1ba01ac051721bf75e7cd3e955af01e2174c070f57df3161f680a5371e03"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "9bfd9017801c5619dcbb76de9b7137f44df66ad1f8880a403071d8c044dbb11d"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "fc8bbeb168aebf0ab9d1d0e225a2114de31e7a33300c163fe5631a29238b0135"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "Accuracy degrades at the mantissa=1.65 reduction split boundary and/or at the largest exponent (x near 65504, u near 65505), where the high+low ln2 split and the final summation high + (local_log + (low + correction)) suffer cancellation/rounding that pushes error above 1e-6.",
+        "cwd": "/root/cases/case_166",
+        "duration_s": 3.879685,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "ff4e1ba01ac051721bf75e7cd3e955af01e2174c070f57df3161f680a5371e03"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "9bfd9017801c5619dcbb76de9b7137f44df66ad1f8880a403071d8c044dbb11d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "fc8bbeb168aebf0ab9d1d0e225a2114de31e7a33300c163fe5631a29238b0135"
+              }
+            ],
+            "duration_s": 3.879685,
+            "exit_code": 0,
+            "expected_signal": "max abs error near the 1.65 reduction boundary and at extremes vs 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": true,
+              "max_abs_err": 1.3007035484235985e-06,
+              "metric": "max abs error near mantissa=1.65 split boundary and extreme exponents",
+              "n_tested": 8905,
+              "tolerance": 1e-06,
+              "worst_err_at_65504": 1.4238488610374134e-07,
+              "worst_x": 3378.0
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error near mantissa=1.65 split boundary and extreme exponents\", \"n_tested\": 8905, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_err_at_65504\": 1.4238488610374134e-07}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error near the 1.65 reduction boundary and at extremes vs 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "exceeds_1e-6": true,
+          "max_abs_err": 1.3007035484235985e-06,
+          "metric": "max abs error near mantissa=1.65 split boundary and extreme exponents",
+          "n_tested": 8905,
+          "tolerance": 1e-06,
+          "worst_err_at_65504": 1.4238488610374134e-07,
+          "worst_x": 3378.0
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"max abs error near mantissa=1.65 split boundary and extreme exponents\", \"n_tested\": 8905, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_err_at_65504\": 1.4238488610374134e-07}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "\nimport sys, json, torch\nsys.path.insert(0, \"/root/cases/case_166\")\nfrom kernel import run\n\n# values just above -1 plus subnormal FP16 x, vs FP64 log1p\nbits = torch.arange(65536, dtype=torch.int32)\nx_all = bits.to(torch.uint16).view(torch.float16)\nneg_near = x_all[(x_all > -1.0) & (x_all < -0.9)]\nsub = x_all[(x_all.abs() > 0) & (x_all.abs() < 6.104e-5)]  # subnormal magnitudes\ntiny_norm = x_all[(x_all.abs() >= 6.104e-5) & (x_all.abs() < 1e-3)]\nvals = torch.cat([neg_near, sub, tiny_norm, torch.tensor([0.0, -0.0, -0.99951171875])]).to(torch.float16)\nx = vals.to(\"cuda\")\nout = run(x)\nref = torch.log1p(vals.cpu().to(torch.float64))\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmaxerr = float(err.max())\ni = int(err.argmax())\nsubmask = torch.cat([torch.zeros(len(neg_near), dtype=torch.bool), torch.ones(len(sub)+len(tiny_norm)+2, dtype=torch.bool)])\nprint(json.dumps({\n    \"metric\": \"max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p\",\n    \"n_tested\": int(vals.numel()),\n    \"n_near_minus1\": int(len(neg_near)),\n    \"n_subnormal_or_tiny\": int(len(sub)+len(tiny_norm)),\n    \"max_abs_err\": maxerr,\n    \"tolerance\": 1e-6,\n    \"exceeds_1e-6\": bool(maxerr > 1e-6),\n    \"worst_x\": float(vals[i]),\n    \"worst_ref\": float(ref[i]),\n}))\n",
+        "expected_signal": "max abs error near x=-1 and subnormals vs 1e-6"
+      },
+      "created_at": "2026-10-20T05:46:45Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "817f4c5c1e6b5cc8102af7d140bdba9134d46394406b33d9b2dea2ae596d8983"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "86285af24912a576d97741ada51c2f88a02b3aa9c77116c7dbcdacc1a11d5e95"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t11_json_result.json",
+            "sha256": "1784dacd0864b88fc1128d7f2c50d0e0dae2eb9e44b8c790bfb62411998fb473"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "The Cody-Waite correction term div_rn(x - (u - 1.0), u) is inaccurate for x near -1 (smallest legal u \u2248 4.88e-4) or for subnormal FP16 x, because u-1 is computed in FP32 with rounding that the correction fails to fully compensate, leaving residual error above 1e-6.",
+        "cwd": "/root/cases/case_166",
+        "duration_s": 3.745008,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "817f4c5c1e6b5cc8102af7d140bdba9134d46394406b33d9b2dea2ae596d8983"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "86285af24912a576d97741ada51c2f88a02b3aa9c77116c7dbcdacc1a11d5e95"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "1784dacd0864b88fc1128d7f2c50d0e0dae2eb9e44b8c790bfb62411998fb473"
+              }
+            ],
+            "duration_s": 3.745008,
+            "exit_code": 0,
+            "expected_signal": "max abs error near x=-1 and subnormals vs 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": false,
+              "max_abs_err": 8.583981494503234e-07,
+              "metric": "max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p",
+              "n_near_minus1": 204,
+              "n_subnormal_or_tiny": 10288,
+              "n_tested": 10495,
+              "tolerance": 1e-06,
+              "worst_ref": -2.970658636001875,
+              "worst_x": -0.94873046875
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p\", \"n_tested\": 10495, \"n_near_minus1\": 204, \"n_subnormal_or_tiny\": 10288, \"max_abs_err\": 8.583981494503234e-07, \"tolerance\": 1e-06, \"exceeds_1e-6\": false, \"worst_x\": -0.94873046875, \"worst_ref\": -2.970658636001875}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error near x=-1 and subnormals vs 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "exceeds_1e-6": false,
+          "max_abs_err": 8.583981494503234e-07,
+          "metric": "max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p",
+          "n_near_minus1": 204,
+          "n_subnormal_or_tiny": 10288,
+          "n_tested": 10495,
+          "tolerance": 1e-06,
+          "worst_ref": -2.970658636001875,
+          "worst_x": -0.94873046875
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p\", \"n_tested\": 10495, \"n_near_minus1\": 204, \"n_subnormal_or_tiny\": 10288, \"max_abs_err\": 8.583981494503234e-07, \"tolerance\": 1e-06, \"exceeds_1e-6\": false, \"worst_x\": -0.94873046875, \"worst_ref\": -2.970658636001875}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "exceeds_1e-6": true,
+          "max_abs_err": 1.3007035484235985e-06,
+          "n_legal": 47104,
+          "tolerance": 1e-06,
+          "top5_err": [
+            1.3007035484235985e-06,
+            1.2807968641226353e-06,
+            1.2436994385467415e-06,
+            1.236186040642906e-06,
+            1.231679771507288e-06
+          ],
+          "top5_x": [
+            3378.0,
+            3374.0,
+            27008.0,
+            13496.0,
+            27024.0
+          ],
+          "worst_ref": 8.12533508671429,
+          "worst_x": 3378.0
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Exhaustive sweep of all 47104 legal finite FP16 values > -1 vs FP64 log1p: max absolute error 1.3007e-06, exceeding the 1e-6 tolerance. Worst offenders at large x (3378, 27008, 13496, ...), consistent with polynomial/summation error at high exponents rather than near x=0. Confirms c1.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-20T05:46:55Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T05:46:18Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T05:46:55Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "0d21c363f26aeb8e777caa23a2501e135c00bdf403455dff034da3f438ec7e10"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "c7522643f4333eeffc476208cc3d78028ad9aae3066002b3acc8f9fef6d7962f"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "5053f49ba85fc8e314f564bda4af2020fe30acec80c958afb18b3966cddaa46b"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "a9324f95e7c876001f94e1269181e0ca478ac325e8c5115f1b0d5c0a3e6a2e0e"
+                  }
+                ],
+                "duration_s": 5.878084,
+                "exceeds_1e-6": true,
+                "exit_code": 0,
+                "expected_signal": "max abs error over all legal FP16 values vs FP64 log1p, compare to 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "exceeds_1e-6": true,
+                  "max_abs_err": 1.3007035484235985e-06,
+                  "metric": "max abs error over exhaustive legal FP16 domain vs FP64 log1p",
+                  "n_legal": 47104,
+                  "tolerance": 1e-06,
+                  "top5_err": [
+                    1.3007035484235985e-06,
+                    1.2807968641226353e-06,
+                    1.2436994385467415e-06,
+                    1.236186040642906e-06,
+                    1.231679771507288e-06
+                  ],
+                  "top5_x": [
+                    3378.0,
+                    3374.0,
+                    27008.0,
+                    13496.0,
+                    27024.0
+                  ],
+                  "worst_ref": 8.12533508671429,
+                  "worst_x": 3378.0
+                },
+                "max_abs_err": 1.3007035484235985e-06,
+                "n_legal": 47104,
+                "stderr": "legal count: 47104\n",
+                "stdout": "{\"metric\": \"max abs error over exhaustive legal FP16 domain vs FP64 log1p\", \"n_legal\": 47104, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_ref\": 8.12533508671429, \"top5_err\": [1.3007035484235985e-06, 1.2807968641226353e-06, 1.2436994385467415e-06, 1.236186040642906e-06, 1.231679771507288e-06], \"top5_x\": [3378.0, 3374.0, 27008.0, 13496.0, 27024.0]}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "top5_err": [
+                  1.3007035484235985e-06,
+                  1.2807968641226353e-06,
+                  1.2436994385467415e-06,
+                  1.236186040642906e-06,
+                  1.231679771507288e-06
+                ],
+                "top5_x": [
+                  3378.0,
+                  3374.0,
+                  27008.0,
+                  13496.0,
+                  27024.0
+                ],
+                "worst_ref": 8.12533508671429,
+                "worst_x": 3378.0
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 47104 legal finite FP16 values > -1 vs FP64 log1p: max absolute error 1.3007e-06, exceeding the 1e-6 tolerance. Worst offenders at large x (3378, 27008, 13496, ...), consistent with polynomial/summation error at high exponents rather than near x=0. Confirms c1.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "The series truncates at 1/7 and uses decimal-rounded coefficients (0.33333 instead of 1/3, 0.142857 instead of 1/7). The 0.33333 vs 1/3 deficit (~3.3e-6) multiplied through 2z (~0.4-0.5) gives ~1.6e-7, but combined with truncation error (order z^9/9 with z up to ~0.245, ~7e-10... plus 0.142857 rounding ~1.4e-6 * z^2) the total could approach or exceed the 1e-6 absolute tolerance in the worst region (max |z|, i.e. largest normalized mantissa before halving, u near 2^k*1.65). Needs an exhaustive FP16 sweep versus FP64 log1p.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - log(1 + x[i])) <= 1e-6, and 'Approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain', with 'every finite FP16 value strictly greater than -1' legal."
+            }
+          ],
+          "scope_rationale": "The contract demands <= 1e-6 absolute error for every legal finite FP16 value > -1, as a single global verdict, so any single failing element (e.g. where the truncated/rounded polynomial is least accurate) is a contract violation.",
+          "statement": "The truncated atanh-series polynomial with rounded coefficients (0.33333, 0.2, 0.142857) produces worst-case absolute error exceeding 1e-6 for some legal FP16 input, most likely where |z| is largest (mantissa just below the 1.65 halving threshold, i.e. u near 1.65 or near 3.3, etc.).",
+          "status": "confirmed",
+          "updated_at": "2026-10-20T05:46:55Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "0d21c363f26aeb8e777caa23a2501e135c00bdf403455dff034da3f438ec7e10"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "c7522643f4333eeffc476208cc3d78028ad9aae3066002b3acc8f9fef6d7962f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "5053f49ba85fc8e314f564bda4af2020fe30acec80c958afb18b3966cddaa46b"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "a9324f95e7c876001f94e1269181e0ca478ac325e8c5115f1b0d5c0a3e6a2e0e"
+              }
+            ],
+            "duration_s": 5.878084,
+            "exceeds_1e-6": true,
+            "exit_code": 0,
+            "expected_signal": "max abs error over all legal FP16 values vs FP64 log1p, compare to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": true,
+              "max_abs_err": 1.3007035484235985e-06,
+              "metric": "max abs error over exhaustive legal FP16 domain vs FP64 log1p",
+              "n_legal": 47104,
+              "tolerance": 1e-06,
+              "top5_err": [
+                1.3007035484235985e-06,
+                1.2807968641226353e-06,
+                1.2436994385467415e-06,
+                1.236186040642906e-06,
+                1.231679771507288e-06
+              ],
+              "top5_x": [
+                3378.0,
+                3374.0,
+                27008.0,
+                13496.0,
+                27024.0
+              ],
+              "worst_ref": 8.12533508671429,
+              "worst_x": 3378.0
+            },
+            "max_abs_err": 1.3007035484235985e-06,
+            "n_legal": 47104,
+            "stderr": "legal count: 47104\n",
+            "stdout": "{\"metric\": \"max abs error over exhaustive legal FP16 domain vs FP64 log1p\", \"n_legal\": 47104, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_ref\": 8.12533508671429, \"top5_err\": [1.3007035484235985e-06, 1.2807968641226353e-06, 1.2436994385467415e-06, 1.236186040642906e-06, 1.231679771507288e-06], \"top5_x\": [3378.0, 3374.0, 27008.0, 13496.0, 27024.0]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "top5_err": [
+              1.3007035484235985e-06,
+              1.2807968641226353e-06,
+              1.2436994385467415e-06,
+              1.236186040642906e-06,
+              1.231679771507288e-06
+            ],
+            "top5_x": [
+              3378.0,
+              3374.0,
+              27008.0,
+              13496.0,
+              27024.0
+            ],
+            "worst_ref": 8.12533508671429,
+            "worst_x": 3378.0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 47104 legal finite FP16 values > -1 vs FP64 log1p: max absolute error 1.3007e-06, exceeding the 1e-6 tolerance. Worst offenders at large x (3378, 27008, 13496, ...), consistent with polynomial/summation error at high exponents rather than near x=0. Confirms c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err": 1.3007035484235985e-06,
+          "n_tested": 8905,
+          "tolerance": 1e-06,
+          "worst_err_at_65504": 1.4238488610374134e-07,
+          "worst_x": 3378.0
+        },
+        "event_id": "t10",
+        "status": "confirmed",
+        "summary": "Boundary/extreme probe (8905 values around mantissa=1.65*2^k for k in [-11,15], x=65504, and near-\u00b11 regions): max error 1.3007e-06 at x=3378, above tolerance. Error at x=65504 itself is only 1.42e-07, so the failure is in the large-exponent regime generally (worst at x=3378, u\u22483379) rather than at the extreme end, but it confirms absolute error above 1e-6 occurs in the tested boundary/large-value region, matching c2's stated failure mode (FP32 summation at large values).",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-20T05:46:55Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T05:46:18Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T05:46:55Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "ff4e1ba01ac051721bf75e7cd3e955af01e2174c070f57df3161f680a5371e03"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "9bfd9017801c5619dcbb76de9b7137f44df66ad1f8880a403071d8c044dbb11d"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "fc8bbeb168aebf0ab9d1d0e225a2114de31e7a33300c163fe5631a29238b0135"
+                  }
+                ],
+                "duration_s": 3.879685,
+                "exit_code": 0,
+                "expected_signal": "max abs error near the 1.65 reduction boundary and at extremes vs 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "exceeds_1e-6": true,
+                  "max_abs_err": 1.3007035484235985e-06,
+                  "metric": "max abs error near mantissa=1.65 split boundary and extreme exponents",
+                  "n_tested": 8905,
+                  "tolerance": 1e-06,
+                  "worst_err_at_65504": 1.4238488610374134e-07,
+                  "worst_x": 3378.0
+                },
+                "max_abs_err": 1.3007035484235985e-06,
+                "n_tested": 8905,
+                "stderr": "",
+                "stdout": "{\"metric\": \"max abs error near mantissa=1.65 split boundary and extreme exponents\", \"n_tested\": 8905, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_err_at_65504\": 1.4238488610374134e-07}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "worst_err_at_65504": 1.4238488610374134e-07,
+                "worst_x": 3378.0
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Boundary/extreme probe (8905 values around mantissa=1.65*2^k for k in [-11,15], x=65504, and near-\u00b11 regions): max error 1.3007e-06 at x=3378, above tolerance. Error at x=65504 itself is only 1.42e-07, so the failure is in the large-exponent regime generally (worst at x=3378, u\u22483379) rather than at the extreme end, but it confirms absolute error above 1e-6 occurs in the tested boundary/large-value region, matching c2's stated failure mode (FP32 summation at large values).",
+              "supports": "confirmed",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "When mantissa > 1.65 the kernel uses m/2 with exponent+1, giving log(m) = (exponent+1)*ln2 + log(m/2). This is mathematically exact, but the threshold creates a discontinuity in z, and the FP32 evaluation `value = high + (local_log + (low + correction))` can lose precision when high (up to ~10.4) is added to a small local_log, potentially exceeding 1e-6 near the threshold and at extreme exponents. Also the ln2 high/low split residual (~1e-10 * exponent ~ 15 = 1.5e-9) is small, but the summation order's FP32 rounding at large values needs checking.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "abs(actual[i] - log(1 + x[i])) <= 1e-6 must hold for every legal input including 'the largest finite FP16 value 65504' and values near the reduction boundary; single verdict over entire legal domain."
+            }
+          ],
+          "scope_rationale": "The contract explicitly includes the largest FP16 value 65504 and every intermediate value on both sides of any internal reduction threshold; the 1e-6 absolute bound must hold there too.",
+          "statement": "Accuracy degrades at the mantissa=1.65 reduction split boundary and/or at the largest exponent (x near 65504, u near 65505), where the high+low ln2 split and the final summation high + (local_log + (low + correction)) suffer cancellation/rounding that pushes error above 1e-6.",
+          "status": "confirmed",
+          "updated_at": "2026-10-20T05:46:55Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "ff4e1ba01ac051721bf75e7cd3e955af01e2174c070f57df3161f680a5371e03"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "9bfd9017801c5619dcbb76de9b7137f44df66ad1f8880a403071d8c044dbb11d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "fc8bbeb168aebf0ab9d1d0e225a2114de31e7a33300c163fe5631a29238b0135"
+              }
+            ],
+            "duration_s": 3.879685,
+            "exit_code": 0,
+            "expected_signal": "max abs error near the 1.65 reduction boundary and at extremes vs 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": true,
+              "max_abs_err": 1.3007035484235985e-06,
+              "metric": "max abs error near mantissa=1.65 split boundary and extreme exponents",
+              "n_tested": 8905,
+              "tolerance": 1e-06,
+              "worst_err_at_65504": 1.4238488610374134e-07,
+              "worst_x": 3378.0
+            },
+            "max_abs_err": 1.3007035484235985e-06,
+            "n_tested": 8905,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error near mantissa=1.65 split boundary and extreme exponents\", \"n_tested\": 8905, \"max_abs_err\": 1.3007035484235985e-06, \"tolerance\": 1e-06, \"exceeds_1e-6\": true, \"worst_x\": 3378.0, \"worst_err_at_65504\": 1.4238488610374134e-07}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_err_at_65504": 1.4238488610374134e-07,
+            "worst_x": 3378.0
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Boundary/extreme probe (8905 values around mantissa=1.65*2^k for k in [-11,15], x=65504, and near-\u00b11 regions): max error 1.3007e-06 at x=3378, above tolerance. Error at x=65504 itself is only 1.42e-07, so the failure is in the large-exponent regime generally (worst at x=3378, u\u22483379) rather than at the extreme end, but it confirms absolute error above 1e-6 occurs in the tested boundary/large-value region, matching c2's stated failure mode (FP32 summation at large values).",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err": 8.583981494503234e-07,
+          "n_near_minus1": 204,
+          "n_subnormal_or_tiny": 10288,
+          "n_tested": 10495,
+          "tolerance": 1e-06,
+          "worst_ref": -2.970658636001875,
+          "worst_x": -0.94873046875
+        },
+        "event_id": "t11",
+        "status": "rebutted",
+        "summary": "Probe over all 204 legal FP16 values in (-1,-0.9) (including the value immediately above -1), all subnormal magnitudes, and small normalized magnitudes: max absolute error 8.58e-07, below the 1e-6 tolerance. The Cody-Waite correction remains accurate near x=-1 and for subnormals, so c3's asserted residual error above 1e-6 is not observed (the worst error in this region is at x=-0.9487, still under tolerance).",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-20T05:46:55Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T05:46:18Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T05:46:55Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "817f4c5c1e6b5cc8102af7d140bdba9134d46394406b33d9b2dea2ae596d8983"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "86285af24912a576d97741ada51c2f88a02b3aa9c77116c7dbcdacc1a11d5e95"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t11_json_result.json",
+                    "sha256": "1784dacd0864b88fc1128d7f2c50d0e0dae2eb9e44b8c790bfb62411998fb473"
+                  }
+                ],
+                "duration_s": 3.745008,
+                "exit_code": 0,
+                "expected_signal": "max abs error near x=-1 and subnormals vs 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "exceeds_1e-6": false,
+                  "max_abs_err": 8.583981494503234e-07,
+                  "metric": "max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p",
+                  "n_near_minus1": 204,
+                  "n_subnormal_or_tiny": 10288,
+                  "n_tested": 10495,
+                  "tolerance": 1e-06,
+                  "worst_ref": -2.970658636001875,
+                  "worst_x": -0.94873046875
+                },
+                "max_abs_err": 8.583981494503234e-07,
+                "n_near_minus1": 204,
+                "n_subnormal_or_tiny": 10288,
+                "n_tested": 10495,
+                "stderr": "",
+                "stdout": "{\"metric\": \"max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p\", \"n_tested\": 10495, \"n_near_minus1\": 204, \"n_subnormal_or_tiny\": 10288, \"max_abs_err\": 8.583981494503234e-07, \"tolerance\": 1e-06, \"exceeds_1e-6\": false, \"worst_x\": -0.94873046875, \"worst_ref\": -2.970658636001875}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "worst_ref": -2.970658636001875,
+                "worst_x": -0.94873046875
+              },
+              "id": "c3.e1",
+              "kind": "runtime_probe",
+              "summary": "Probe over all 204 legal FP16 values in (-1,-0.9) (including the value immediately above -1), all subnormal magnitudes, and small normalized magnitudes: max absolute error 8.58e-07, below the 1e-6 tolerance. The Cody-Waite correction remains accurate near x=-1 and for subnormals, so c3's asserted residual error above 1e-6 is not observed (the worst error in this region is at x=-0.9487, still under tolerance).",
+              "supports": "rebutted",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c3",
+          "raised_by": "skeptic",
+          "rationale": "For x near -1 (e.g. -0.9995, u \u2248 4.88e-4), u-1 in FP32 is not exact (u outside [0.5,2]), so the numerator x-(u-1) relies on the error being small relative to u; if FP32 rounding of u-1 leaves a residue larger than expected relative to u (which is tiny, amplifying the division), the correction term may be wrong by more than 1e-6. log1p(-0.9995) \u2248 -7.52, so absolute tolerance 1e-6 there is relatively tight (~1.3e-7 relative).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'the representable value immediately above -1' is explicitly part of the legal domain, and the 1e-6 absolute tolerance applies to every legal element."
+            }
+          ],
+          "scope_rationale": "The contract explicitly lists the representable value immediately above -1 as legal, and the fixed 1e-6 absolute tolerance applies there, where log1p \u2248 -7.5 and the correction term divides by the tiny u.",
+          "statement": "The Cody-Waite correction term div_rn(x - (u - 1.0), u) is inaccurate for x near -1 (smallest legal u \u2248 4.88e-4) or for subnormal FP16 x, because u-1 is computed in FP32 with rounding that the correction fails to fully compensate, leaving residual error above 1e-6.",
+          "status": "rebutted",
+          "updated_at": "2026-10-20T05:46:55Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:46:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "817f4c5c1e6b5cc8102af7d140bdba9134d46394406b33d9b2dea2ae596d8983"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "86285af24912a576d97741ada51c2f88a02b3aa9c77116c7dbcdacc1a11d5e95"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "1784dacd0864b88fc1128d7f2c50d0e0dae2eb9e44b8c790bfb62411998fb473"
+              }
+            ],
+            "duration_s": 3.745008,
+            "exit_code": 0,
+            "expected_signal": "max abs error near x=-1 and subnormals vs 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "exceeds_1e-6": false,
+              "max_abs_err": 8.583981494503234e-07,
+              "metric": "max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p",
+              "n_near_minus1": 204,
+              "n_subnormal_or_tiny": 10288,
+              "n_tested": 10495,
+              "tolerance": 1e-06,
+              "worst_ref": -2.970658636001875,
+              "worst_x": -0.94873046875
+            },
+            "max_abs_err": 8.583981494503234e-07,
+            "n_near_minus1": 204,
+            "n_subnormal_or_tiny": 10288,
+            "n_tested": 10495,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error for x near -1 and subnormal/small FP16 x vs FP64 log1p\", \"n_tested\": 10495, \"n_near_minus1\": 204, \"n_subnormal_or_tiny\": 10288, \"max_abs_err\": 8.583981494503234e-07, \"tolerance\": 1e-06, \"exceeds_1e-6\": false, \"worst_x\": -0.94873046875, \"worst_ref\": -2.970658636001875}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_ref": -2.970658636001875,
+            "worst_x": -0.94873046875
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe over all 204 legal FP16 values in (-1,-0.9) (including the value immediately above -1), all subnormal magnitudes, and small normalized magnitudes: max absolute error 8.58e-07, below the 1e-6 tolerance. The Cody-Waite correction remains accurate near x=-1 and for subnormals, so c3's asserted residual error above 1e-6 is not observed (the worst error in this region is at x=-0.9487, still under tolerance).",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: c1 and c2 are confirmed by an exhaustive probe over all 47104 legal FP16 values (max abs error 1.3007e-06 > 1e-6 tolerance, worst at large x such as 3378 and 27008), and c3 was rebutted (max error 8.58e-07 near -1/subnormals). The confirmed claims already cover the material in-scope defect; no additional testable in-scope problem is exposed by the new evidence.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ]
+      },
+      "created_at": "2026-10-20T05:47:02Z",
+      "id": "t15",
+      "output": {
+        "created_at": "2026-10-20T05:47:02Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: c1 and c2 are confirmed by an exhaustive probe over all 47104 legal FP16 values (max abs error 1.3007e-06 > 1e-6 tolerance, worst at large x such as 3378 and 27008), and c3 was rebutted (max error 8.58e-07 near -1/subnormals). The confirmed claims already cover the material in-scope defect; no additional testable in-scope problem is exposed by the new evidence.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ],
+        "reviewed_tool_event_count": 14,
+        "tool_event_id": "t15",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt) explicitly requires abs(actual[i] - log(1+x[i])) <= 1e-6 with zero relative tolerance for every finite FP16 value > -1, as a single global verdict. An exhaustive probe (t9) over all 47104 legal FP16 values found max absolute error 1.3007e-06 (worst at x=3378, ref 8.1253; top errors also at x=3374, 27008, 13496), above the 1e-6 tolerance \u2014 a confirmed in-scope contract violation. The boundary/extreme probe (t10) independently confirms errors above 1e-6 in the large-exponent region (error at x=65504 itself is only 1.4e-07, so the defect is in the large-x mid-range, consistent with the truncated/rounded polynomial and FP32 summation in c1/c2). This is not an acceptable rounding-order or declared-precision deviation: the contract mandates a fixed absolute tolerance throughout the entire legal domain, and the kernel demonstrably exceeds it. Claim c3 (near x=-1 / subnormals) was rebutted (max error 8.58e-07 there), which does not affect the verdict. All claims are resolved; Skeptic signed off with no new claims after reviewing the latest evidence.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-20T05:47:09Z",
+      "id": "t16",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-10-20T05:47:09Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt) explicitly requires abs(actual[i] - log(1+x[i])) <= 1e-6 with zero relative tolerance for every finite FP16 value > -1, as a single global verdict. An exhaustive probe (t9) over all 47104 legal FP16 values found max absolute error 1.3007e-06 (worst at x=3378, ref 8.1253; top errors also at x=3374, 27008, 13496), above the 1e-6 tolerance \u2014 a confirmed in-scope contract violation. The boundary/extreme probe (t10) independently confirms errors above 1e-6 in the large-exponent region (error at x=65504 itself is only 1.4e-07, so the defect is in the large-x mid-range, consistent with the truncated/rounded polynomial and FP32 summation in c1/c2). This is not an acceptable rounding-order or declared-precision deviation: the contract mandates a fixed absolute tolerance throughout the entire legal domain, and the kernel demonstrably exceeds it. Claim c3 (near x=-1 / subnormals) was rebutted (max error 8.58e-07 there), which does not affect the verdict. All claims are resolved; Skeptic signed off with no new claims after reviewing the latest evidence.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-10-20T05:47:09Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract (problem.txt) explicitly requires abs(actual[i] - log(1+x[i])) <= 1e-6 with zero relative tolerance for every finite FP16 value > -1, as a single global verdict. An exhaustive probe (t9) over all 47104 legal FP16 values found max absolute error 1.3007e-06 (worst at x=3378, ref 8.1253; top errors also at x=3374, 27008, 13496), above the 1e-6 tolerance \u2014 a confirmed in-scope contract violation. The boundary/extreme probe (t10) independently confirms errors above 1e-6 in the large-exponent region (error at x=65504 itself is only 1.4e-07, so the defect is in the large-x mid-range, consistent with the truncated/rounded polynomial and FP32 summation in c1/c2). This is not an acceptable rounding-order or declared-precision deviation: the contract mandates a fixed absolute tolerance throughout the entire legal domain, and the kernel demonstrably exceeds it. Claim c3 (near x=-1 / subnormals) was rebutted (max error 8.58e-07 there), which does not affect the verdict. All claims are resolved; Skeptic signed off with no new claims after reviewing the latest evidence.",
+    "verdict": "reject"
+  }
+}

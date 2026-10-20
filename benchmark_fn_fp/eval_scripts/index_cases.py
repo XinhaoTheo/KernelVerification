@@ -55,6 +55,26 @@ def _cell(value):
     return str(value or "—").replace("|", "\\|").replace("\n", " ")
 
 
+def _case_ranges(cases):
+    """List each contiguous numeric range without filling gaps in the registry."""
+    ranges = []
+    start = previous = None
+    previous_key = None
+    for case in sorted(set(cases), key=case_sort_key):
+        key = case_sort_key(case)
+        consecutive = (previous_key is not None and key[0] == previous_key[0] == 0
+                       and key[1] == previous_key[1] + 1)
+        if start is not None and not consecutive:
+            ranges.append(f"`{start}`" if start == previous else f"`{start}`–`{previous}`")
+            start = None
+        if start is None:
+            start = case
+        previous, previous_key = case, key
+    if start is not None:
+        ranges.append(f"`{start}`" if start == previous else f"`{start}`–`{previous}`")
+    return "、".join(ranges) or "无"
+
+
 def main():
     registry = load_registry(ROOT)
     details = registry.get("case_details", {})
@@ -67,16 +87,17 @@ def main():
             groups[case_collection(row)].append(case)
         else:
             archived.append(case)
+    active_cases = [case for cases in groups.values() for case in cases]
     lines = ["# Benchmark 案例总索引", "",
         "所有题库和 traces 共用 `case_数字` 编号。本次重排后的编号、旧编号与来源记录在 case_map.json，部分题库共用统一公开目录。",
         "本页是说明与答案侧索引，不作为模型输入。编号描述实验来源，不保证某种方法一定获胜。", "",
-        f"当前 {len(details) - len(archived)} 题；另有 {len(archived)} 题已归档。当前题连续编号；归档题排在其后，不进入默认实验。", "",
+        f"当前 {len(active_cases)} 题；另有 {len(archived)} 题已归档。当前编号：{_case_ranges(active_cases)}。归档题不进入默认实验，新增题使用后续未用编号。", "",
         "| 编号范围 | 数量 | 测什么 | 说明与题目 |", "|---|---:|---|---|"]
     for dataset, cases in groups.items():
         path = cases_dir(ROOT.parent, dataset).relative_to(ROOT).as_posix()
         guide = dataset_root(ROOT, dataset).relative_to(ROOT).as_posix()
         guide = "README.md" if dataset == "benchmark_fn_fp" else f"{guide}/README.md"
-        lines.append(f"| `{cases[0]}`–`{cases[-1]}` | {len(cases)} | "
+        lines.append(f"| {_case_ranges(cases)} | {len(cases)} | "
                      f"{DATASET_LABELS.get(dataset, dataset)} | [说明]({guide}) · [题目]({path}/) |")
     if archived:
         lines += ["", "| 归档 | 数量 | 保留内容 |", "|---|---:|---|"]

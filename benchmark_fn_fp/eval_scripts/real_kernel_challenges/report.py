@@ -43,7 +43,11 @@ COHORTS = {"pilot": tuple(f"case_{i:02d}" for i in range(33, 39)),
            "requant_compose": ("case_83", "case_84"),
            "affine_scan": ("case_85", "case_86"),
            "winograd": ("case_87", "case_88"),
-           "realfft": ("case_89", "case_90")}
+           "realfft": ("case_89", "case_90"),
+           "exp2": ("case_163", "case_164"),
+           "log1p": ("case_165", "case_166"),
+           "aes": ("case_167", "case_168"),
+           "oct20": tuple(f"case_{i}" for i in range(163, 169))}
 SCOPED_TOOL_CASES = frozenset(case for cohort, cases in COHORTS.items()
                              if cohort != "pilot" for case in cases)
 CASES = COHORTS["pilot"]
@@ -61,7 +65,9 @@ def _markers(cohort):
               "fastdiv": " FASTDIV", "butterfly": " BUTTERFLY", "packed_argmax": " PACKED ARGMAX",
               "atan": " ATAN", "rounding": " ROUNDING", "ntt": " NTT",
               "crc": " CRC", "complex": " COMPLEX", "requant_compose": " REQUANT COMPOSE",
-              "affine_scan": " AFFINE SCAN", "winograd": " WINOGRAD", "realfft": " REALFFT"}[cohort]
+              "affine_scan": " AFFINE SCAN", "winograd": " WINOGRAD", "realfft": " REALFFT",
+              "exp2": " EXP2", "log1p": " LOG1P", "aes": " AES",
+              "oct20": " OCTOBER20"}[cohort]
     return (f"<!-- BEGIN REAL KERNEL{suffix} RESULTS -->",
             f"<!-- END REAL KERNEL{suffix} RESULTS -->")
 
@@ -321,7 +327,7 @@ def render(report):
                   "不作为四次模型答错。下列这些 r1 的 API/runtime 缺项来自进程未启动。", ""]
     batches = sorted({row["batch"] for row in rows})
     if batches:
-        lines.append("原始提交批次：" + "、".join(f"`{batch}`" for batch in batches) + "。按 rN 核验共同 verifier 指纹；保留原始提交身份。")
+        lines += ["", "原始提交批次：" + "、".join(f"`{batch}`" for batch in batches) + "。按 rN 核验共同 verifier 指纹；保留原始提交身份。", ""]
     issues = [r for r in rows if r["audit_issues"]]
     if issues:
         lines += ["", "记录一致性审计问题：", ""]
@@ -335,7 +341,7 @@ def render(report):
             lines += ["", f"`{case}` 真值修正：初始 {correction['previous_ground_truth']} 已撤回，"
                        f"当前固定标签为 {label['ground_truth']}。{correction['reason']} "
                        "原源码、合同与所有模型 traces 均保持原样；初始资格结果作为历史记录保留。"]
-    lines += ["", "完整记录不等于所有 probe 都合法或构成充分证据；另见下方人工证据审计。",
+    lines += ["", "完整记录不等于所有 probe 都合法或构成充分证据；另见下方人工证据审计。", "",
               f"样本量仅 {len(cases)} 例。" + ("其中 110–111 是补审后新增的修复实现；" if report["cohort"] == "pilot" else "") +
               "单次胜负不能证明普遍工具收益或 debate 优势。", "", end]
     return "\n".join(lines)

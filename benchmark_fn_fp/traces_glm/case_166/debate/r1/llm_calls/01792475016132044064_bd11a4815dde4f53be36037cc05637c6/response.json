@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-9065f640",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Three independent accuracy probes (one per claim): I'll sweep the entire legal FP16 domain on the GPU kernel and compare against FP64 log1p, reporting the worst-case absolute error in each claim's target regime (large x for c1, mantissa near the 1.65 split / near 2 for c2, and x near -1 for c3).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-99b683b098239da0",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_166\\\")\\nimport kernel\\n\\nbits = torch.arange(65536, dtype=torch.int32).to(torch.uint16)\\nallf16 = bits.view(torch.float16).to(\\\"cuda\\\")\\nlegal = allf16[(torch.isfinite(allf16.cpu())) & (allf16.cpu() > -1)] if False else None\\n# build on CPU then move\\nbits_cpu = torch.arange(65536, dtype=torch.int32)\\nallf = bits_cpu.to(torch.int32).to(torch.uint16).view(torch.float16)\\nmask = torch.isfinite(allf) & (allf > torch.tensor(-1.0, dtype=torch.float16))\\nx = allf[mask]\\n# keep only large values for this claim's tensor (N<=131072 anyway)\\nx = x[x >= 1.0].to(\\\"cuda\\\")\\nprint(\\\"N large-x:\\\", x.numel())\\nout = kernel.run(x)\\nref = torch.log1p(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nmaxerr, idx = err.max(0)\\njson.dump({\\n  \\\"claim\\\": \\\"c1 large-x accumulated rounding\\\",\\n  \\\"n\\\": int(x.numel()),\\n  \\\"max_abs_err\\\": float(maxerr),\\n  \\\"worst_x\\\": float(x[idx]),\\n  \\\"worst_output\\\": float(out[idx]),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"exceeds_tol\\\": bool(maxerr > 1e-6),\\n  \\\"n_violations\\\": int((err > 1e-6).sum())\\n}, sys.stdout)\\n\", \"expected_signal\": \"max_abs_err vs 1e-6 over all FP16 x>=1\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b5dbb87d74e67ade",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_166\\\")\\nimport kernel\\n\\nbits = torch.arange(65536, dtype=torch.int32)\\nallf = bits.to(torch.int32).to(torch.uint16).view(torch.float16)\\nmask = torch.isfinite(allf) & (allf > torch.tensor(-1.0, dtype=torch.float16))\\n# regime of interest: fl(1+x) in (1.6, 2.05), i.e. x in (0.55, 1.05) roughly,\\n# plus u near 2 boundary: x near 1.0\\nx = allf[mask]\\nsel = x[(x > 0.5) & (x < 1.5)]\\nxg = sel.to(\\\"cuda\\\")\\nout = kernel.run(xg)\\nref = torch.log1p(xg.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nmaxerr, idx = err.max(0)\\njson.dump({\\n  \\\"claim\\\": \\\"c2 polynomial/coefficient error near split boundary and near u=2\\\",\\n  \\\"n\\\": int(xg.numel()),\\n  \\\"max_abs_err\\\": float(maxerr),\\n  \\\"worst_x\\\": float(xg[idx]),\\n  \\\"worst_output\\\": float(out[idx]),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"exceeds_tol\\\": bool(maxerr > 1e-6),\\n  \\\"n_violations\\\": int((err > 1e-6).sum())\\n}, sys.stdout)\\n\", \"expected_signal\": \"max_abs_err vs 1e-6 for x in (0.5,1.5)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b33a8e338fdb0452",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"\\nimport sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_166\\\")\\nimport kernel\\n\\nbits = torch.arange(65536, dtype=torch.int32)\\nallf = bits.to(torch.int32).to(torch.uint16).view(torch.float16)\\nmask = torch.isfinite(allf) & (allf > torch.tensor(-1.0, dtype=torch.float16))\\nx = allf[mask]\\n# regime: x in (-1, -0.5] plus the value immediately above -1; also include (-1,0) all\\nsel = x[x < 0.0]\\nxg = sel.to(\\\"cuda\\\")\\nout = kernel.run(xg)\\nref = torch.log1p(xg.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nmaxerr, idx = err.max(0)\\n# also check the immediate value above -1\\nnext_up = x[x > -1.0].min()\\njson.dump({\\n  \\\"claim\\\": \\\"c3 u=fl(1+x) rounding near x=-1\\\",\\n  \\\"n\\\": int(xg.numel()),\\n  \\\"max_abs_err\\\": float(maxerr),\\n  \\\"worst_x\\\": float(xg[idx]),\\n  \\\"worst_output\\\": float(out[idx]),\\n  \\\"fp16_next_above_-1\\\": float(next_up),\\n  \\\"err_at_next_above_-1\\\": float(err[torch.nonzero(xg == next_up, as_tuple=True)[0][0]]) if (xg == next_up).any() else None,\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"exceeds_tol\\\": bool(maxerr > 1e-6),\\n  \\\"n_violations\\\": int((err > 1e-6).sum())\\n}, sys.stdout)\\n\", \"expected_signal\": \"max_abs_err vs 1e-6 for x in (-1,0)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three independent probes testing the specific regimes: c1 large x, c2 mantissa near 1.65/near 2, c3 x near -1. Actually simplest: one exhaustive-ish probe per claim. These are independent — batch them.\n\nProbe code: import kernel from artifact path? Need to load kernel.py. Use session_dir /root/cases/case_166/kernel.py, sys.path insert, import kernel, run(x), compare to torch.log1p(x.double()).\n\nc1: all FP16 values ≥ 1024 (positive) maybe sample; better: all finite FP16 values in batches up to 65504, run all 30720 positive values? Full FP16 domain is 65536 bits; positive finite > -1 legal... we can just do exhaustive sweep of all legal FP16 values in chunks ≤131072 — but numel max 131072, and legal count ~ 64512 (positive) + ~ 31743 (negative above -1) ≈ 96255. That fits in one tensor of ≤131072! Exhaustive test of entire legal domain in one run. But probes target specific claims; still, one exhaustive probe can answer all three. However claims should each have evidence. Do one exhaustive probe per claim is wasteful; better: run three probes each focused but could all just be exhaustive with different reporting slices. Simpler: each probe runs the full legal-domain tensor and reports the max abs error in its targeted regime.\n\nNote x.is_neg/is_conj etc fine. Construct via torch.arange of uint16 view → float16, filter finite > -1.\n\nI'll do one probe for each claim (batched), each computing full domain sweep, reporting max error in region of interest plus worst offender value."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792475018,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1634,
+    "prompt_tokens": 23733,
+    "total_tokens": 25367,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 371,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-9d723412",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe covering all 256 byte values, assorted lengths, storage-offset views, and storage-sharing checks against a ground-truth S-box.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-91b356d62d7ce1d4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, '/root/cases/case_168')\\nfrom kernel import run, reference\\n\\n# Ground-truth S-box via independent GF(2^8) inverse (log/antilog tables)\\ndef gt_sbox():\\n    exp=[0]*512; log=[0]*256\\n    x=1\\n    for i in range(255):\\n        exp[i]=x; log[x]=i\\n        x ^= (x<<1) ^ (0x11b if x & 0x80 else 0)\\n        x &= 0xff\\n    for i in range(255,512): exp[i]=exp[i-255]\\n    sb=[0]*256\\n    for b in range(256):\\n        inv = exp[255-log[b]] if b else 0\\n        y = inv ^ 0x63\\n        r = y\\n        for _ in range(4):\\n            y = ((y<<1)|(y>>7))&0xff; r ^= y\\n        sb[b]=r\\n    return sb\\n\\nSB = gt_sbox()\\nref = torch.tensor(SB, dtype=torch.uint8)\\n\\nfails = []\\n# all 256 byte values\\nx = torch.arange(256, dtype=torch.uint8, device='cuda')\\ny = run(x)\\nif not torch.equal(y, ref):\\n    bad = (y != ref).nonzero().flatten().tolist()\\n    fails.append(('all_values', bad[:10]))\\n\\n# spot examples\\nassert SB[0]==0x63 and SB[0x53]==0xed, (hex(SB[0]), hex(SB[0x53]))\\n\\n# assorted lengths incl. edge 1, 131072, non-multiples of 256\\nimport random\\nrandom.seed(0)\\nlens = [1,2,255,256,257,511,1027,4096,131071,131072]\\nfor L in lens:\\n    t = torch.randint(0,256,(L,),dtype=torch.uint8,device='cuda')\\n    y = run(t)\\n    e = torch.tensor([SB[b] for b in t.tolist()],dtype=torch.uint8,device='cuda')\\n    if not torch.equal(y,e):\\n        idx = (y!=e).nonzero().flatten().tolist()\\n        fails.append((L, idx[:5], y[idx[:3]].tolist(), e[idx[:3]].tolist()))\\n    if not y.is_contiguous() or y.shape != t.shape or y.dtype != torch.uint8 or y.device != t.device:\\n        fails.append((L,'meta'))\\n\\n# storage offset view\\nstorage = torch.randint(0,256,(600,),dtype=torch.uint8,device='cuda')\\nbefore = storage.clone()\\nview = storage[137:137+259]\\ny = run(view)\\ne = torch.tensor([SB[b] for b in view.tolist()],dtype=torch.uint8,device='cuda')\\nif not torch.equal(y,e): fails.append(('offset_view', (y!=e).nonzero().flatten()[:5].tolist()))\\nif not torch.equal(storage, before): fails.append(('offset_view','input mutated'))\\n\\n# fresh storage: output must not share with input\\nt = torch.randint(0,256,(100,),dtype=torch.uint8,device='cuda')\\nsnap = t.clone()\\ny = run(t)\\ny[0] ^= 0xff\\nif not torch.equal(t, snap): fails.append(('alias','output aliases input'))\\n\\n# also compare against kernel's own reference on sample\\nr = reference(x.cpu().cuda())\\nif not torch.equal(r, ref): fails.append(('reference_disagrees', (r!=ref).nonzero().flatten()[:5].tolist()))\\n\\nimport json\\nprint(json.dumps({'metric':'exact match vs ground-truth S-box, all 256 values + lengths ' + str(lens) + ' + offset view + alias/mutation checks','fails':fails}))\\n\", \"expected_signal\": \"fails == []\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474886,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 882,
+    "prompt_tokens": 10558,
+    "total_tokens": 11440,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6477,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

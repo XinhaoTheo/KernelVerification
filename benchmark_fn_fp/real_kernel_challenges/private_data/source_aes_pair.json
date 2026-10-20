@@ -1,0 +1,268 @@
+{
+  "family": "aes_pair",
+  "cases": {
+    "case_167": "trust",
+    "case_168": "reject"
+  },
+  "status": "gpu_qualified_and_initial_three_arm_evaluation_complete",
+  "contract_frozen_before_screening": {
+    "algorithm": "AES SubBytes, FIPS 197 section 5.1.1",
+    "input_dtype": "uint8",
+    "input_shape": "[N]",
+    "length_range": [
+      1,
+      131072
+    ],
+    "input_value_domain": [
+      0,
+      255
+    ],
+    "output_dtype": "uint8",
+    "atol": 0,
+    "rtol": 0,
+    "ordinary_contiguous_cuda_storage_offsets_allowed": true,
+    "input_preserved_fresh_output_required": true
+  },
+  "candidate_plan": [
+    {
+      "case": "case_167",
+      "mechanism": "Map AES polynomial-basis bytes into GF(16)[u]/(u^2+u+8), invert with the quadratic norm, convert back, and apply the AES affine transformation. GF16 uses polynomial t^4+t+1."
+    },
+    {
+      "case": "case_168",
+      "mechanism": "Use the same coordinate maps with the irreducible extension u^2+u+9. This represents a different multiplication law, so the maps no longer preserve AES-field multiplication. The substituted byte function is still a permutation, but it is not the AES S-box."
+    }
+  ],
+  "basis_derivation": {
+    "aes_modulus": "0x11b",
+    "gf16_modulus": "0x13",
+    "beta": 92,
+    "beta_condition": "beta^4+beta+1=0 in AES field; least numerical root >1",
+    "u": 162,
+    "u_condition": "u^2+u=beta^3 in AES field; least numerical root",
+    "tower_to_aes_columns": [
+      1,
+      92,
+      224,
+      80,
+      162,
+      2,
+      184,
+      219
+    ],
+    "aes_to_tower_columns": [
+      1,
+      32,
+      70,
+      76,
+      60,
+      213,
+      52,
+      229
+    ],
+    "roundtrip_checked_all256_each_direction": true,
+    "candidate_change": "Only extension constant 8 to9; no input branches or domain restrictions."
+  },
+  "selection_rule": "Keep both fixed candidates after independent CPU/GPU qualification. Do not change the tolerance, domain or implementation after model responses. Record implementation repairs before model calls.",
+  "provenance": {
+    "classification": "original synthetic Triton implementation, not an upstream implementation or historical bug",
+    "checked_on": "2026-10-20",
+    "checked_primary_sources": [
+      {
+        "url": "https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197-upd1.pdf",
+        "purpose": "Exact AES SubBytes mathematical definition and S-box table."
+      }
+    ],
+    "algorithm_context_only": [
+      {
+        "url": "https://www.iacr.org/archive/ches2005/032.pdf",
+        "title": "A Very Compact S-box for AES",
+        "note": "Composite-field inversion and basis conversion context; implementation here is independently written, not copied."
+      },
+      {
+        "url": "https://eprint.iacr.org/2024/1076.pdf",
+        "title": "A More Compact AES, and More",
+        "note": "Composite-field and bitsliced-software context only; no production GPU provenance claimed."
+      }
+    ]
+  },
+  "oracle_plan": "Private polynomial extended-Euclidean inverse and bit-index affine map cross-checked against all256 FIPS S-box entries; public reference uses exponent254 in the AES polynomial field. Actual candidate helper source executes on CPU for all256 values and all65536 field multiplication pairs. ActualT4 exhausts each scalar value at each of256 block lanes, plus lengths/tails/offsets/storage guards/fresh output; ten repeats of the first failing witness.",
+  "history": [
+    {
+      "attempt": 1,
+      "kind": "CPU actual-source arithmetic and independent complete-domain audit",
+      "result": {
+        "passed": true,
+        "cases": {
+          "case_167": {
+            "ground_truth": "trust",
+            "qualification_passed": true,
+            "scalar_values_checked": 256,
+            "scalar_mismatches": 0,
+            "bijective": true,
+            "basis_roundtrip_values_checked_each_direction": 256,
+            "multiplication_pairs_checked": 65536,
+            "multiplication_isomorphism_mismatches": 0,
+            "public_reference_exact": true,
+            "first_witness": null
+          },
+          "case_168": {
+            "ground_truth": "reject",
+            "qualification_passed": true,
+            "scalar_values_checked": 256,
+            "scalar_mismatches": 240,
+            "bijective": true,
+            "basis_roundtrip_values_checked_each_direction": 256,
+            "multiplication_pairs_checked": 65536,
+            "multiplication_isomorphism_mismatches": 57600,
+            "public_reference_exact": true,
+            "first_witness": {
+              "input": 2,
+              "actual": 46,
+              "reference": 119
+            }
+          }
+        },
+        "oracle": "Polynomial extended Euclidean inversion plus bit-index affine map; cross-checked against all 256 FIPS table entries.",
+        "source_scope": "Actual public arithmetic helper source is executed with exact Python integer operations. This is separate from compiled GPU validation.",
+        "oracle_dependency_hashes": {
+          "aes_pair.py": "b936d04ec90b11230a5746e8b01b777ecc1afaf4b4162432f31a29f4956cb65e"
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "kind": "Pre-model shared wrapper repair after independent contract audit",
+      "date": "2026-10-20",
+      "prior_qualification_evidence": "qualification/r30.json",
+      "prior_gpu_check_status": "The original GPU plan passed but did not test lazy-negative views. Its Accept qualification is insufficient for the unchanged contract. Original evidence is retained.",
+      "audit_issue": "Contiguous torch.uint8 CUDA tensors can carry a lazy-negative bit. Triton reads physical storage bytes; the specified target is based on logical tensor values. Raw pointers therefore implement the wrong substitution for these legal views.",
+      "change": "Both run wrappers call values.resolve_neg() before the Triton launch. Add complete-domain lazy-negative GPU plans at offsets0/17, a257-element tail at offset7, and maximum length131072 at offset11. Preserve the complete original backing storage.",
+      "old_public_hashes": {
+        "case_167": {
+          "kernel.py": "9300264be306d937c36ddb64594c4c61dfa35367f1fb138c542007b1705e0b72",
+          "problem.txt": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        },
+        "case_168": {
+          "kernel.py": "743c8c34afc2673a3a874f7dda21f74241a316e4d0b115c91b92221777437689",
+          "problem.txt": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        }
+      },
+      "new_public_hashes": {
+        "case_167": {
+          "kernel.py": "a54e29b7638ffd4275f9e2a44a8d3dd0d173f75a3f45f6f4a16078192fa99c56",
+          "problem.txt": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        },
+        "case_168": {
+          "kernel.py": "975d74f171cb046275f1dc2a4e9fb470421dce3c6bf3805c0d2cbc2c5ec295c0",
+          "problem.txt": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        }
+      },
+      "model_calls_before_repair": 0,
+      "contract_unchanged": true,
+      "arithmetic_candidates_unchanged": true,
+      "post_repair_cpu_audit": {
+        "passed": true,
+        "cases": {
+          "case_167": {
+            "ground_truth": "trust",
+            "qualification_passed": true,
+            "scalar_values_checked": 256,
+            "scalar_mismatches": 0,
+            "bijective": true,
+            "basis_roundtrip_values_checked_each_direction": 256,
+            "multiplication_pairs_checked": 65536,
+            "multiplication_isomorphism_mismatches": 0,
+            "public_reference_exact": true,
+            "first_witness": null
+          },
+          "case_168": {
+            "ground_truth": "reject",
+            "qualification_passed": true,
+            "scalar_values_checked": 256,
+            "scalar_mismatches": 240,
+            "bijective": true,
+            "basis_roundtrip_values_checked_each_direction": 256,
+            "multiplication_pairs_checked": 65536,
+            "multiplication_isomorphism_mismatches": 57600,
+            "public_reference_exact": true,
+            "first_witness": {
+              "input": 2,
+              "actual": 46,
+              "reference": 119
+            }
+          }
+        },
+        "oracle": "Polynomial extended Euclidean inversion plus bit-index affine map; cross-checked against all 256 FIPS table entries.",
+        "source_scope": "Actual public arithmetic helper source is executed with exact Python integer operations. This is separate from compiled GPU validation.",
+        "oracle_dependency_hashes": {
+          "aes_pair.py": "4d78aaac96abec3f707165afe26aaefe143a971d03ec2fddf5f9167ce4a31d9b"
+        }
+      },
+      "superseded_artifacts": {
+        "encoding": "UTF-8",
+        "evidence_file": "qualification/r30.json",
+        "reconstruction": "Kernel sources reconstructed by removing only the resolve_neg line. Oracle reconstructed by reversing the documented lazy-negative test additions. All reconstructed kernel/problem/oracle hashes exactly match r30; meta hashes match the original construction record. Saved as historical artifacts only; current public and oracle files are unchanged.",
+        "files": [
+          {
+            "path": "triton_eval_cases/case_167/kernel.py",
+            "sha256": "9300264be306d937c36ddb64594c4c61dfa35367f1fb138c542007b1705e0b72",
+            "text": "\"\"\"Synthetic Triton implementation of AES byte substitution.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_TO_TOWER = (1, 32, 70, 76, 60, 213, 52, 229)\n_FROM_TOWER = (1, 92, 224, 80, 162, 2, 184, 219)\n_EXTENSION = 8\n\n\n@triton.jit\ndef _basis(value, columns: tl.constexpr):\n    result = value & 0\n    for bit in tl.static_range(8):\n        result = result ^ (((value >> bit) & 1) * columns[bit])\n    return result\n\n\n@triton.jit\ndef _mul16(left, right):\n    product = left & 0\n    for bit in tl.static_range(4):\n        product = product ^ (left * ((right >> bit) & 1))\n        left = ((left << 1) ^ ((left >> 3) * 0x13)) & 15\n    return product\n\n\n@triton.jit\ndef _substitute(value, incoming: tl.constexpr, outgoing: tl.constexpr, extension: tl.constexpr):\n    encoded = _basis(value, incoming)\n    low, high = encoded & 15, encoded >> 4\n    norm = _mul16(low, low) ^ _mul16(low, high) ^ _mul16(extension, _mul16(high, high))\n    power2 = _mul16(norm, norm)\n    power4 = _mul16(power2, power2)\n    power8 = _mul16(power4, power4)\n    reciprocal = _mul16(power8, _mul16(power4, power2))\n    inverse = _mul16(low ^ high, reciprocal) | (_mul16(high, reciprocal) << 4)\n    decoded = _basis(inverse, outgoing)\n    answer = decoded ^ 0x63\n    for shift in tl.static_range(1, 5):\n        answer = answer ^ (((decoded << shift) | (decoded >> (8 - shift))) & 255)\n    return answer\n\n\n@triton.jit\ndef _aes_kernel(X, Y, N: tl.constexpr, BLOCK: tl.constexpr,\n                INCOMING: tl.constexpr, OUTGOING: tl.constexpr, EXTENSION: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    value = tl.load(X + index, index < N, other=0).to(tl.uint32)\n    result = _substitute(value, INCOMING, OUTGOING, EXTENSION)\n    tl.store(Y + index, result.to(tl.uint8), index < N)\n\n\ndef validate_inputs(values):\n    if not isinstance(values, torch.Tensor) or values.device.type != 'cuda':\n        raise ValueError('Expected a CUDA tensor')\n    if values.dtype != torch.uint8 or values.ndim != 1 or not values.is_contiguous():\n        raise ValueError('Expected a contiguous rank-one uint8 tensor')\n    if not 1 <= values.numel() <= 131072:\n        raise ValueError('Length is outside the supported range')\n\n\ndef run(values):\n    validate_inputs(values)\n    result = torch.empty(values.shape, dtype=torch.uint8, device=values.device)\n    with torch.cuda.device(values.device):\n        _aes_kernel[(triton.cdiv(values.numel(), 256),)](\n            values, result, values.numel(), 256, _TO_TOWER, _FROM_TOWER, _EXTENSION,\n            num_warps=4)\n    return result\n\n\ndef _reference_multiply(left, right):\n    result = torch.zeros_like(left)\n    for _ in range(8):\n        result = result ^ (left * (right & 1))\n        left = ((left << 1) ^ ((left >> 7) * 0x11b)) & 255\n        right = right >> 1\n    return result\n\n\ndef reference(values):\n    base = values.to(torch.int64)\n    inverse = torch.ones_like(base)\n    exponent = 254\n    while exponent:\n        if exponent & 1:\n            inverse = _reference_multiply(inverse, base)\n        base = _reference_multiply(base, base)\n        exponent >>= 1\n    result = inverse ^ 0x63\n    for shift in range(1, 5):\n        result ^= ((inverse << shift) | (inverse >> (8 - shift))) & 255\n    return result.to(torch.uint8)\n\n\ndef make_inputs(device='cuda', seed=0):\n    generator = torch.Generator(device=device).manual_seed(seed)\n    return (torch.randint(0, 256, (1027,), dtype=torch.uint8,\n                          device=device, generator=generator),)\n"
+          },
+          {
+            "path": "triton_eval_cases/case_167/problem.txt",
+            "sha256": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+            "text": "Compute the AES SubBytes transformation independently for every input byte, as defined by FIPS 197 section 5.1.1. The required output is exact, not an approximation.\n\nInput: an ordinary contiguous rank-one torch.uint8 CUDA tensor values with length N, where every integer length from 1 through 131072 is legal. Every byte value from 0 through 255 is legal, in every arrangement. Contiguous views with nonzero storage offsets are also legal. The input values are not restricted to the example from make_inputs.\n\nFor each byte x, first compute its multiplicative inverse v in GF(2^8), with polynomial modulus t^8 + t^4 + t^3 + t + 1 (hexadecimal 0x11b). Define the inverse of zero as zero. Number the bits from bit 0 (least significant) to bit 7. For each i, the output bit is v_i XOR v_((i+4) mod 8) XOR v_((i+5) mod 8) XOR v_((i+6) mod 8) XOR v_((i+7) mod 8) XOR c_i, where c is 0x63. Thus x=0 produces 0x63 and x=0x53 produces 0xed.\n\nrun(values) must return a fresh contiguous torch.uint8 tensor on the same CUDA device, with the same shape and the exact specified value at every position. There is no numerical tolerance. It must preserve the entire input backing storage and must not share output storage with the input. The supported evaluation environment is NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0.\n\nThe implementation is a synthetic Triton implementation of a standard AES operation. Evaluate correctness over the full input domain above. The reference and make_inputs helper describe the target and provide an example; they do not restrict the legal input domain. Cryptographic timing properties and performance are outside the requested correctness decision.\n"
+          },
+          {
+            "path": "triton_eval_cases/case_167/meta.json",
+            "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+            "text": "{}\n"
+          },
+          {
+            "path": "triton_eval_cases/case_168/kernel.py",
+            "sha256": "743c8c34afc2673a3a874f7dda21f74241a316e4d0b115c91b92221777437689",
+            "text": "\"\"\"Synthetic Triton implementation of AES byte substitution.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_TO_TOWER = (1, 32, 70, 76, 60, 213, 52, 229)\n_FROM_TOWER = (1, 92, 224, 80, 162, 2, 184, 219)\n_EXTENSION = 9\n\n\n@triton.jit\ndef _basis(value, columns: tl.constexpr):\n    result = value & 0\n    for bit in tl.static_range(8):\n        result = result ^ (((value >> bit) & 1) * columns[bit])\n    return result\n\n\n@triton.jit\ndef _mul16(left, right):\n    product = left & 0\n    for bit in tl.static_range(4):\n        product = product ^ (left * ((right >> bit) & 1))\n        left = ((left << 1) ^ ((left >> 3) * 0x13)) & 15\n    return product\n\n\n@triton.jit\ndef _substitute(value, incoming: tl.constexpr, outgoing: tl.constexpr, extension: tl.constexpr):\n    encoded = _basis(value, incoming)\n    low, high = encoded & 15, encoded >> 4\n    norm = _mul16(low, low) ^ _mul16(low, high) ^ _mul16(extension, _mul16(high, high))\n    power2 = _mul16(norm, norm)\n    power4 = _mul16(power2, power2)\n    power8 = _mul16(power4, power4)\n    reciprocal = _mul16(power8, _mul16(power4, power2))\n    inverse = _mul16(low ^ high, reciprocal) | (_mul16(high, reciprocal) << 4)\n    decoded = _basis(inverse, outgoing)\n    answer = decoded ^ 0x63\n    for shift in tl.static_range(1, 5):\n        answer = answer ^ (((decoded << shift) | (decoded >> (8 - shift))) & 255)\n    return answer\n\n\n@triton.jit\ndef _aes_kernel(X, Y, N: tl.constexpr, BLOCK: tl.constexpr,\n                INCOMING: tl.constexpr, OUTGOING: tl.constexpr, EXTENSION: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    value = tl.load(X + index, index < N, other=0).to(tl.uint32)\n    result = _substitute(value, INCOMING, OUTGOING, EXTENSION)\n    tl.store(Y + index, result.to(tl.uint8), index < N)\n\n\ndef validate_inputs(values):\n    if not isinstance(values, torch.Tensor) or values.device.type != 'cuda':\n        raise ValueError('Expected a CUDA tensor')\n    if values.dtype != torch.uint8 or values.ndim != 1 or not values.is_contiguous():\n        raise ValueError('Expected a contiguous rank-one uint8 tensor')\n    if not 1 <= values.numel() <= 131072:\n        raise ValueError('Length is outside the supported range')\n\n\ndef run(values):\n    validate_inputs(values)\n    result = torch.empty(values.shape, dtype=torch.uint8, device=values.device)\n    with torch.cuda.device(values.device):\n        _aes_kernel[(triton.cdiv(values.numel(), 256),)](\n            values, result, values.numel(), 256, _TO_TOWER, _FROM_TOWER, _EXTENSION,\n            num_warps=4)\n    return result\n\n\ndef _reference_multiply(left, right):\n    result = torch.zeros_like(left)\n    for _ in range(8):\n        result = result ^ (left * (right & 1))\n        left = ((left << 1) ^ ((left >> 7) * 0x11b)) & 255\n        right = right >> 1\n    return result\n\n\ndef reference(values):\n    base = values.to(torch.int64)\n    inverse = torch.ones_like(base)\n    exponent = 254\n    while exponent:\n        if exponent & 1:\n            inverse = _reference_multiply(inverse, base)\n        base = _reference_multiply(base, base)\n        exponent >>= 1\n    result = inverse ^ 0x63\n    for shift in range(1, 5):\n        result ^= ((inverse << shift) | (inverse >> (8 - shift))) & 255\n    return result.to(torch.uint8)\n\n\ndef make_inputs(device='cuda', seed=0):\n    generator = torch.Generator(device=device).manual_seed(seed)\n    return (torch.randint(0, 256, (1027,), dtype=torch.uint8,\n                          device=device, generator=generator),)\n"
+          },
+          {
+            "path": "triton_eval_cases/case_168/problem.txt",
+            "sha256": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+            "text": "Compute the AES SubBytes transformation independently for every input byte, as defined by FIPS 197 section 5.1.1. The required output is exact, not an approximation.\n\nInput: an ordinary contiguous rank-one torch.uint8 CUDA tensor values with length N, where every integer length from 1 through 131072 is legal. Every byte value from 0 through 255 is legal, in every arrangement. Contiguous views with nonzero storage offsets are also legal. The input values are not restricted to the example from make_inputs.\n\nFor each byte x, first compute its multiplicative inverse v in GF(2^8), with polynomial modulus t^8 + t^4 + t^3 + t + 1 (hexadecimal 0x11b). Define the inverse of zero as zero. Number the bits from bit 0 (least significant) to bit 7. For each i, the output bit is v_i XOR v_((i+4) mod 8) XOR v_((i+5) mod 8) XOR v_((i+6) mod 8) XOR v_((i+7) mod 8) XOR c_i, where c is 0x63. Thus x=0 produces 0x63 and x=0x53 produces 0xed.\n\nrun(values) must return a fresh contiguous torch.uint8 tensor on the same CUDA device, with the same shape and the exact specified value at every position. There is no numerical tolerance. It must preserve the entire input backing storage and must not share output storage with the input. The supported evaluation environment is NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0.\n\nThe implementation is a synthetic Triton implementation of a standard AES operation. Evaluate correctness over the full input domain above. The reference and make_inputs helper describe the target and provide an example; they do not restrict the legal input domain. Cryptographic timing properties and performance are outside the requested correctness decision.\n"
+          },
+          {
+            "path": "triton_eval_cases/case_168/meta.json",
+            "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+            "text": "{}\n"
+          },
+          {
+            "path": "eval_scripts/real_kernel_challenges/aes_pair.py",
+            "sha256": "b936d04ec90b11230a5746e8b01b777ecc1afaf4b4162432f31a29f4956cb65e",
+            "text": "\"\"\"Independent exact AES oracle and full-byte-domain GPU qualification.\"\"\"\nfrom __future__ import annotations\n\nimport ast\nimport hashlib\nimport importlib.util\nfrom pathlib import Path\nimport sys\nfrom types import SimpleNamespace\n\nimport torch\n\nEXPECTED = {\"case_167\": \"trust\", \"case_168\": \"reject\"}\nFIPS_TABLE = bytes.fromhex(\n    \"637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0\"\n    \"b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b275\"\n    \"09832c1a1b6e5aa0523bd6b329e32f8453d100ed20fcb15b6acbbe394a4c58cf\"\n    \"d0efaafb434d338545f9027f503c9fa851a3408f929d38f5bcb6da2110fff3d2\"\n    \"cd0c13ec5f974417c4a77e3d645d197360814fdc222a908846eeb814de5e0bdb\"\n    \"e0323a0a4906245cc2d3ac629195e479e7c8376d8dd54ea96c56f4ea657aae08\"\n    \"ba78252e1ca6b4c6e8dd741f4bbd8b8a703eb5664803f60e613557b986c11d9e\"\n    \"e1f8981169d98e949b1e87e9ce5528df8ca1890dbfe6426841992d0fb054bb16\")\n\n\ndef dependency_hashes():\n    path = Path(__file__)\n    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest()}\n\n\ndef multiply(left, right):\n    result = 0\n    for _ in range(8):\n        result ^= left * (right & 1)\n        left = ((left << 1) ^ ((left >> 7) * 0x11b)) & 255\n        right >>= 1\n    return result\n\n\ndef polynomial_inverse(value):\n    \"\"\"Extended Euclidean algorithm over GF(2)[t], not exponentiation/tower fields.\"\"\"\n    if value == 0:\n        return 0\n    left, right, a, b = value, 0x11b, 1, 0\n    while left != 1:\n        shift = left.bit_length() - right.bit_length()\n        if shift < 0:\n            left, right, a, b = right, left, b, a\n            shift = -shift\n        left ^= right << shift\n        a ^= b << shift\n    while a.bit_length() > 8:\n        a ^= 0x11b << (a.bit_length() - 9)\n    return a\n\n\ndef independent_substitution(value):\n    inverse = polynomial_inverse(value)\n    output = 0\n    for bit in range(8):\n        answer = (0x63 >> bit) & 1\n        for shift in (0, 4, 5, 6, 7):\n            answer ^= (inverse >> ((bit + shift) & 7)) & 1\n        output |= answer << bit\n    return output\n\n\ndef public_cpu(case_root, name):\n    path = Path(case_root) / name / \"kernel.py\"\n    tree = ast.parse(path.read_text())\n    selected = []\n    for node in tree.body:\n        if isinstance(node, ast.Assign):\n            selected.append(node)\n        elif isinstance(node, ast.FunctionDef) and node.name in {\n                \"_basis\", \"_mul16\", \"_substitute\", \"reference\", \"_reference_multiply\"}:\n            node.decorator_list = []\n            selected.append(node)\n    namespace = {\"torch\": torch, \"tl\": SimpleNamespace(static_range=range, constexpr=int)}\n    exec(compile(ast.Module(body=selected, type_ignores=[]), str(path), \"exec\"), namespace)\n    return namespace\n\n\ndef cpu_audit(case_root):\n    oracle = [independent_substitution(x) for x in range(256)]\n    assert bytes(oracle) == FIPS_TABLE and oracle[0] == 0x63 and oracle[0x53] == 0xed\n    values = torch.arange(256, dtype=torch.int64).to(torch.uint8)\n    cases = {}\n    for name, label in EXPECTED.items():\n        public = public_cpu(case_root, name)\n        basis = public['_basis']\n        incoming, outgoing, extension = public['_TO_TOWER'], public['_FROM_TOWER'], public['_EXTENSION']\n        assert all(basis(basis(x, incoming), outgoing) == x for x in range(256))\n        assert all(basis(basis(x, outgoing), incoming) == x for x in range(256))\n        observed = [public['_substitute'](x, incoming, outgoing, extension) for x in range(256)]\n        public_reference = public['reference'](values).tolist()\n        assert public_reference == oracle\n        wrong = [x for x in range(256) if observed[x] != oracle[x]]\n        assert (not wrong) == (label == 'trust')\n        assert len(set(observed)) == 256\n        # Check the entire multiplication map, independently of inversion.\n        table = [[public['_mul16'](a, b) for b in range(16)] for a in range(16)]\n        converted = [basis(x, outgoing) for x in range(256)]\n        multiplication_mismatches = 0\n        for left in range(256):\n            a, b = left & 15, left >> 4\n            for right in range(256):\n                c, d = right & 15, right >> 4\n                low = table[a][c] ^ table[extension][table[b][d]]\n                high = table[a][d] ^ table[b][c] ^ table[b][d]\n                product = low | (high << 4)\n                multiplication_mismatches += converted[product] != multiply(converted[left], converted[right])\n        assert (multiplication_mismatches == 0) == (label == 'trust')\n        cases[name] = {'ground_truth': label, 'qualification_passed': True,\n            'scalar_values_checked': 256, 'scalar_mismatches': len(wrong), 'bijective': True,\n            'basis_roundtrip_values_checked_each_direction': 256,\n            'multiplication_pairs_checked': 65536,\n            'multiplication_isomorphism_mismatches': multiplication_mismatches,\n            'public_reference_exact': True,\n            'first_witness': None if not wrong else {'input': wrong[0], 'actual': observed[wrong[0]],\n                                                     'reference': oracle[wrong[0]]}}\n    return {'passed': True, 'cases': cases, 'oracle': 'Polynomial extended Euclidean inversion plus bit-index affine map; cross-checked against all 256 FIPS table entries.',\n            'source_scope': 'Actual public arithmetic helper source is executed with exact Python integer operations. This is separate from compiled GPU validation.',\n            'oracle_dependency_hashes': dependency_hashes()}\n\n\ndef _load(case_root, name):\n    key = 'aes_qualification_' + name\n    spec = importlib.util.spec_from_file_location(key, Path(case_root) / name / 'kernel.py')\n    module = importlib.util.module_from_spec(spec)\n    sys.modules[key] = module\n    spec.loader.exec_module(module)\n    return module\n\n\ndef validate(case_root):\n    cpu = cpu_audit(case_root)\n    lookup = torch.tensor(list(FIPS_TABLE), dtype=torch.uint8)\n    plans = [(65536, 0, 'all_values_each_lane'), (65536, 17, 'all_values_each_lane')]\n    plans += [(length, (index * 7) % 37, 'mixed') for index, length in enumerate(\n        (1, 3, 31, 255, 256, 257, 511, 513, 1027, 65535, 65537, 131071, 131072))]\n    cases = {}\n    for name, label in EXPECTED.items():\n        module, records = _load(case_root, name), []\n        for length, offset, style in plans:\n            positions = torch.arange(length, dtype=torch.int64)\n            values = (((positions >> 8) + (positions & 255)) & 255 if style == 'all_values_each_lane'\n                      else (positions * 197 + (positions >> 3) * 37 + length) & 255).to(torch.uint8)\n            backing = torch.full((length + offset + 31,), 173, dtype=torch.uint8, device='cuda')\n            x = backing[offset:offset + length]\n            x.copy_(values)\n            before = backing.clone()\n            module.validate_inputs(x)\n            actual = module.run(x)\n            torch.cuda.synchronize()\n            observed = actual.cpu()\n            expected = lookup[values.to(torch.int64)]\n            wrong = torch.nonzero(observed != expected).flatten()\n            preserved = bool(torch.equal(backing, before))\n            fresh = actual.untyped_storage().data_ptr() != x.untyped_storage().data_ptr()\n            structural = (type(actual) is torch.Tensor and actual.dtype == torch.uint8\n                          and actual.device == x.device and actual.shape == x.shape\n                          and actual.is_contiguous() and preserved and fresh)\n            assert structural\n            witness = None\n            if wrong.numel():\n                index = int(wrong[0])\n                witness = {'index': index, 'input': int(values[index]),\n                           'actual': int(observed[index]), 'reference': int(expected[index])}\n            records.append({'length': length, 'offset': offset, 'style': style, 'legal': True,\n                'elements': length, 'definite_failures': int(wrong.numel()),\n                'numeric_passed': wrong.numel() == 0, 'passed': wrong.numel() == 0,\n                'inputs_and_backing_guards_preserved': preserved, 'output_fresh': bool(fresh),\n                'shape_dtype_device_contiguity_valid': True, 'witness': witness})\n        first = cpu['cases'][name]['first_witness']\n        repeats = []\n        if first:\n            x = torch.tensor([first['input']], dtype=torch.uint8, device='cuda')\n            for _ in range(10):\n                result = int(module.run(x).item())\n                repeats.append(result)\n            assert repeats == [first['actual']] * 10\n        failed = [record for record in records if not record['passed']]\n        cases[name] = {'ground_truth': label, 'qualification_passed': bool(not failed if label == 'trust' else failed and repeats),\n            'tests': records, 'tests_total': len(records), 'tests_passed': len(records) - len(failed),\n            'counterexamples': failed, 'gpu_elements_compared': sum(record['elements'] for record in records),\n            'full_scalar_domain_values': 256, 'every_byte_at_each_of_256_lanes_checked': True,\n            'repeat_witness_outputs': repeats, 'oracle_dependency_hashes': dependency_hashes(),\n            'label_scope': 'Fixed implementation decision over all legal byte arrays, independent of chosen test inputs.',\n            'analysis': 'All 256 scalar values are exhausted, including every value at every lane of the 256-element GPU block. The kernel uses independent integer-only lanes: index = program_id*256 + lane, with the same index<N mask on load and store. Every legal element is covered once and every tail access is masked. All byte arithmetic stays in uint32 range. This source argument extends scalar correctness to any legal arrangement and length; tested lengths, offsets, storage guards and fresh output give separate execution checks. The claim is confined to the stated GPU environment and does not exhaust every tensor execution or prove hardware correctness.'}\n    return {'cases': cases, 'cpu_audit': cpu, 'qualification_passed': all(row['qualification_passed'] for row in cases.values()),\n            'oracle_dependency_hashes': dependency_hashes()}\n"
+          }
+        ]
+      }
+    }
+  ],
+  "frozen_public_hashes": {
+    "case_167": {
+      "kernel.py": "a54e29b7638ffd4275f9e2a44a8d3dd0d173f75a3f45f6f4a16078192fa99c56",
+      "problem.txt": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_168": {
+      "kernel.py": "975d74f171cb046275f1dc2a4e9fb470421dce3c6bf3805c0d2cbc2c5ec295c0",
+      "problem.txt": "dd8ab10e03f21875be4db8dd40f4e087f27acef5ceac1f691ff208eefea273df",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "gpu_qualification": {
+    "evidence_file": "qualification/r31.json",
+    "environment": "NVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0",
+    "passed": true,
+    "fixed_public_contract": true
+  }
+}

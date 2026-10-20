@@ -1,0 +1,207 @@
+[
+  {
+    "created_at": "2026-10-20T05:48:27Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-20T05:49:37Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "b4caa58fb3556f90395928796565e80bd830f1311a11f2caf2df544cfbe8b894"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "9a860c827cf95a0fa69f46f110d6149ea76603a74823576ae527cddd7cc96954"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "cb6a145118abead9058566513481ff43f26fd7ef8a578bd08772c3a158fcb035"
+            }
+          ],
+          "duration_s": 8.557635,
+          "exit_code": 0,
+          "expected_signal": "max abs error exceeding or under 1e-6 on inputs with reduced mantissa near 1.65",
+          "json_parse_error": null,
+          "json_result": {
+            "max_abs_err": 1.3007035484235985e-06,
+            "max_err_region_0.6_0.66": 8.910300632880563e-07,
+            "max_err_region_2.2_2.35": 8.403309332827291e-07,
+            "metric": "max abs error vs FP64 log1p over all 15359 legal FP16 values",
+            "n": 47104,
+            "n_violations": 55,
+            "tolerance": 1e-06,
+            "top5_err": [
+              1.231679771507288e-06,
+              1.236186040642906e-06,
+              1.2436994385467415e-06,
+              1.2807968641226353e-06,
+              1.3007035484235985e-06
+            ],
+            "worst_x": 3378.0
+          },
+          "max_abs_err": 1.3007035484235985e-06,
+          "max_err_region_0.6_0.66": 8.910300632880563e-07,
+          "max_err_region_2.2_2.35": 8.403309332827291e-07,
+          "n_tested": 47104,
+          "n_violations": 55,
+          "stderr": "",
+          "stdout": "{\"metric\": \"max abs error vs FP64 log1p over all 15359 legal FP16 values\", \"n\": 47104, \"max_abs_err\": 1.3007035484235985e-06, \"worst_x\": 3378.0, \"tolerance\": 1e-06, \"n_violations\": 55, \"max_err_region_0.6_0.66\": 8.910300632880563e-07, \"max_err_region_2.2_2.35\": 8.403309332827291e-07, \"top5_err\": [1.231679771507288e-06, 1.236186040642906e-06, 1.2436994385467415e-06, 1.2807968641226353e-06, 1.3007035484235985e-06]}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-06,
+          "top5_err": [
+            1.231679771507288e-06,
+            1.236186040642906e-06,
+            1.2436994385467415e-06,
+            1.2807968641226353e-06,
+            1.3007035484235985e-06
+          ],
+          "worst_x": 3378.0,
+          "worst_x_mantissa_note": "u=3379=2^11*1.6499, reduced mantissa just under 1.65 cutoff -> z~0.2453 max, c1 mechanism"
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive sweep of all legal FP16 values > -1 (47104 values incl. signed zeros/subnormals): 55 values exceed the 1e-6 absolute tolerance; worst abs error 1.30e-6 at x=3378, where u=3379=2^11*1.6499, i.e. reduced mantissa just under the 1.65 cutoff with maximal z\u22480.2453 \u2014 precisely the rounded-coefficient + truncation mechanism claimed in c1, amplified by large-exponent FP32 summation. In-scope decisive failure of the contract.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The atanh series uses c3=0.33333 (off from 1/3 by ~3.3e-6), c5=0.2, c7=0.142857, and truncates after z^7. At max reachable |z|\u22480.2455 (mantissa just under 1.65), the coefficient error contributes ~2z*3.33e-6*z^2 \u2248 9.8e-7 and the dropped z^9/9 term another ~2.5e-7, so total local_log error can reach or exceed the 1e-6 absolute tolerance (rel tol zero), e.g. for x \u2248 0.64 (u\u22481.64, mantissa\u22481.64).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Every finite FP16 value strictly greater than -1 is legal; every output element must satisfy abs(actual - log(1+x)) <= 1e-6 with relative tolerance zero, single verdict for the whole domain."
+      }
+    ],
+    "scope_rationale": "Contract requires abs error <= 1e-6 with zero relative tolerance for every finite FP16 x > -1, and states a single correctness verdict over the entire legal domain, so any single failing legal value (e.g. x just below 0.65 where mantissa near 1.65 maximizes z) is decisive.",
+    "statement": "For legal inputs where the reduced mantissa is near the 1.65 halving cutoff (e.g. u in [1.6, 1.65), corresponding to x in ~[0.6, 0.65)), the rounded polynomial coefficients (0.33333 vs 1/3) combined with z^7 truncation produce a log(mantissa) error exceeding 1e-6, violating the absolute tolerance.",
+    "status": "confirmed",
+    "updated_at": "2026-10-20T05:49:37Z"
+  },
+  {
+    "created_at": "2026-10-20T05:48:27Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-20T05:49:53Z",
+        "data": {
+          "all_within_tol": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "3ad03f23e84d63fd2e4f215d100cc6903ac805fb26d686c945ee41cbfb2536ae"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "7db1a2c70de98152f7fa404ed317386becb9c3b8a5a1079042b500e3a7dac01c"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "eed53ba8e5568925d995a24cbc0e26fc2f583bf2d810f7cd00d6832bafdf2bb3"
+            }
+          ],
+          "duration_s": 4.847519,
+          "exit_code": 0,
+          "expected_signal": "large-x accumulated FP32 rounding error vs 1e-6 tolerance",
+          "inputs": [
+            65504.0,
+            32768.0,
+            16384.0,
+            8192.0,
+            60000.0,
+            40000.0,
+            65438.496
+          ],
+          "json_parse_error": null,
+          "json_result": {
+            "all_within_tol": true,
+            "errors": [
+              1.4238488610374134e-07,
+              4.4780169261571245e-07,
+              2.8527729512006772e-08,
+              4.4462667858624627e-07,
+              3.0442391185658835e-07,
+              7.244422306484921e-08,
+              1.284648725174975e-07
+            ],
+            "inputs": [
+              65504.0,
+              32768.0,
+              16384.0,
+              8192.0,
+              60000.0,
+              40000.0,
+              65438.496
+            ],
+            "max_abs_err": 4.4780169261571245e-07,
+            "metric": "per-value abs error vs FP64 log1p for large FP16 inputs (exponent 13-16)",
+            "tolerance": 1e-06
+          },
+          "max_abs_err": 4.4780169261571245e-07,
+          "per_value_errors": [
+            1.4238488610374134e-07,
+            4.4780169261571245e-07,
+            2.8527729512006772e-08,
+            4.4462667858624627e-07,
+            3.0442391185658835e-07,
+            7.244422306484921e-08,
+            1.284648725174975e-07
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"per-value abs error vs FP64 log1p for large FP16 inputs (exponent 13-16)\", \"inputs\": [65504.0, 32768.0, 16384.0, 8192.0, 60000.0, 40000.0, 65438.496], \"errors\": [1.4238488610374134e-07, 4.4780169261571245e-07, 2.8527729512006772e-08, 4.4462667858624627e-07, 3.0442391185658835e-07, 7.244422306484921e-08, 1.284648725174975e-07], \"max_abs_err\": 4.4780169261571245e-07, \"tolerance\": 1e-06, \"all_within_tol\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-06
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Large-x probe (x = 65504, 32768, 16384, 8192, 60000, 40000, 65438.5 \u2014 u exponents 13-16): all seven errors within the 1e-6 tolerance; max abs error 4.48e-7 at x=32768, and x=65504 itself only 1.42e-7. The claimed accumulation of FP32 roundings in the high/low split summation at exponent 16 does not push the total past 1e-6. Follow-up probe will check whether any of the 55 domain-wide violations occur at large exponent without the near-1.65 mantissa mechanism.",
+        "supports": "rebutted",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "high = exponent*ln2_high in FP32 at exponent 16 rounds with ulp ~1e-6, the final sum rounds again, and the FP32 store rounds once more; three independent ~0.5e-6 roundings on a value ~11.09 can sum past 1e-6 even with a mathematically exact reconstruction. The kernel relies on the high/low split absorbing this, which only protects the ln2 product itself, not the other roundings.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The largest finite FP16 value 65504 is explicitly legal, and every output element must satisfy the 1e-6 absolute bound; single verdict over the whole domain."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly names max FP16 65504 as a legal input and requires abs(actual - log(1+x)) <= 1e-6 for every element, with zero relative tolerance; at log~11.09 that is <1 FP32 ulp, so accumulated FP32 roundings in the final summation are a decisive failure mode.",
+    "statement": "For large x such as the legal FP16 maximum 65504 (exponent up to 16, log(65505)\u224811.09), accumulated FP32 roundings in `high = exponent*0.69313812256`, the intermediate `local_log + (low + correction)` sum, and the final `high + (...)` addition each contribute up to ~0.5 ulp(11)\u22485e-7, so the total absolute error can exceed 1e-6.",
+    "status": "rebutted",
+    "updated_at": "2026-10-20T05:49:53Z"
+  }
+]

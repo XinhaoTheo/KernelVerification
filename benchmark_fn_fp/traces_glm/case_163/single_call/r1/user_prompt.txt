@@ -1,0 +1,97 @@
+## Problem statement (contract + reference behavior)
+
+Compute the base-two exponential elementwise on stored BF16 inputs, returning FP32 output.
+The mathematical target is target[i] = 2 ** x[i].
+
+Inputs and complete public domain:
+- x is a one-dimensional BF16 tensor [N], with 1<=N<=131072.
+- EVERY finite BF16 value in the closed interval [-10,10] is legal, including both signed zeros and positive and negative subnormal values. NaN, infinity and values outside this interval are outside the input domain.
+- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.
+
+Return a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:
+
+  abs(actual[i] - 2 ** x[i]) <= 1e-6 * (2 ** x[i]).
+
+The absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library exp2 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic implementation of a standard scalar operation, not a reproduction of an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Elementwise base-two exponential with integer range reduction."""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _exp2_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    active = index < N
+    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)
+    integer = tl.floor(x + 0.5).to(tl.int32)
+    fraction = x - integer.to(tl.float32)
+    polynomial = 0.0013391
+    polynomial = polynomial * fraction + 0.009676
+    polynomial = polynomial * fraction + 0.055504
+    polynomial = polynomial * fraction + 0.24022
+    polynomial = polynomial * fraction + 0.69315
+    polynomial = polynomial * fraction + 1.0
+    scale = ((integer + 127) << 23).to(tl.float32, bitcast=True)
+    value = scale * polynomial
+    tl.store(OUT + index, value, mask=active)
+
+
+def validate_inputs(x, require_cuda=True):
+    """Validate the complete public input domain; also usable on CPU."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    require(type(x) is torch.Tensor, "ordinary torch.Tensor required")
+    require(x.layout == torch.strided and x.is_contiguous(),
+            "contiguous strided input required")
+    require(not x.requires_grad and not x.is_inference(),
+            "ordinary non-gradient input required")
+    require(not x.is_neg() and not x.is_conj(),
+            "logical view flags are outside this domain")
+    require(not require_cuda or x.is_cuda, "CUDA input required by run")
+    require(x.ndim == 1 and 1 <= x.numel() <= 131072,
+            "x must have shape [N] with N in [1,131072]")
+    require(x.dtype == torch.bfloat16, "BF16 input required")
+    require(bool(torch.isfinite(x).all().item()), "all input values must be finite")
+    require(bool((x.abs() <= 10).all().item()), "all input values must be in [-10,10]")
+    return {"valid": True, "size": x.numel()}
+
+
+def run(x):
+    """Return a fresh FP32 tensor approximating 2**x for every stored input."""
+    validate_inputs(x)
+    n = x.numel()
+    with torch.cuda.device(x.device):
+        output = torch.empty((n,), dtype=torch.float32, device=x.device)
+        _exp2_kernel[(triton.cdiv(n, 256),)](
+            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)
+    return output
+
+
+def reference(x):
+    """Evaluate mathematical exp2 independently using the FP64 library function."""
+    validate_inputs(x, require_cuda=False)
+    return torch.exp2(x.to(torch.float64))
+
+
+def make_inputs(device="cuda", size=4093, seed=0):
+    """Convenience example generator, not a restriction on the input domain."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x = (20.0 * torch.rand((size,), generator=generator) - 10.0).to(torch.bfloat16)
+    return (x.to(device),)
+
+```
+
+Is this implementation correct?

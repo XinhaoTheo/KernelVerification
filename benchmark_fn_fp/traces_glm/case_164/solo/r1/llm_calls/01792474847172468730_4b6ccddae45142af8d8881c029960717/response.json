@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-b7171240",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive probe over every legal BF16 value in [-10,10] (~3300 values), checking relative error against FP64 exp2.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b12eafda6d37fd94",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_164\\\")\\nimport kernel\\n\\n# all finite BF16 values in [-10,10]\\nvals = []\\nbits = torch.arange(0x0000, 0x10000, dtype=torch.int32)\\nbf = bits.to(torch.uint16).view(torch.bfloat16).to(torch.float64)\\nmask = torch.isfinite(bf) & (bf.abs() <= 10)\\nsub = torch.arange(0x10000, dtype=torch.int32)[mask]\\nallv = torch.from_numpy(sub.numpy().astype('int32')).to(torch.uint16).view(torch.bfloat16).to(torch.float64)\\nprint(\\\"num legal values:\\\", allv.numel())\\n\\nx = torch.from_numpy(sub.numpy().astype('int32')).to(torch.uint16).view(torch.bfloat16).to('cuda')\\nout = kernel.run(x)\\nref = torch.exp2(x.to(torch.float64).cpu())\\nrel = (out.cpu().to(torch.float64) - ref).abs() / ref\\nbad = (rel > 1e-6)\\nprint(\\\"max rel err:\\\", rel.max().item())\\nprint(\\\"count violations:\\\", int(bad.sum()))\\nif bad.any():\\n    i = rel.argmax()\\n    print(\\\"worst x:\\\", x.cpu().float()[i].item(), \\\"out:\\\", out.cpu()[i].item(), \\\"ref:\\\", ref[i].item(), \\\"rel:\\\", rel[i].item())\\n    idxs = torch.nonzero(bad).flatten()[:10]\\n    for j in idxs:\\n        print(\\\"  viol x=\\\", x.cpu().float()[j].item(), \\\"rel=\\\", rel[j].item())\\nimport json\\nprint(json.dumps({\\\"metric\\\":\\\"max relative error over exhaustive BF16 domain [-10,10]\\\",\\\"max_rel\\\":rel.max().item(),\\\"violations\\\":int(bad.sum()),\\\"n\\\":int(x.numel())}))\\n\", \"expected_signal\": \"max relative error and violation count over exhaustive domain\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The kernel has a clear bug: scale uses (integer + 127) << 23 but bitcast to float32 — for negative x, integer can be -10, so exponent 117, fine. But for x near boundary where integer + 127 could exceed... x in [-10,10], integer in [-10,10], exponent field 117..137, fine. But x=0.5 → integer=1, fraction=-0.5, fine. Polynomial degree 5 for ln(2)... wait polynomial approximates 2^f for f in [-0.5,0.5]. Coefficients look like ln2 series. Degree 5 polynomial error may exceed 1e-6? Actually 2^f Taylor: 1 + ln2 f + ... error term ~ ln2^6 f^6/720 ≈ 0.111*0.0156/720 ≈ 2.4e-6? ln2^6 ≈ 0.111, f^6 ≤ 0.0156 (0.5^6=0.015625), /720 → 2.4e-6. But Horner coefficients given only ~6 digits. So error likely > 1e-6. Exhaustive test all BF16 values in [-10,10] (~ each exponent ~ 512 values; 4-bit exponent... BF16 has 8 exponent bits; values in [-10,10] span ~exponents from -9..3, ~13 * 256 ≈ 3300 values). Exhaustive probe.\n\nNote scale via (integer+127)<<23: for integer from -10 to 10, exponent 117-137, fine, no subnormal issue. But wait: for negative x, e.g. x=-10, fraction in [-0.5,0.5], scale = 2^integer, fine. Also integer+127 for x ≤ -126? Not here.\n\nRun exhaustive probe via run_claim_probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474848,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 883,
+    "prompt_tokens": 9912,
+    "total_tokens": 10795,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 419,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6148,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

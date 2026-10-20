@@ -58,6 +58,27 @@ def test_every_active_modern_case_has_explicit_public_comparison():
         comparison_profile({"cohort": "new_unreviewed_operation"})
 
 
+@pytest.mark.parametrize("cohort, reference, actual, dtype, passed", [
+    # exp2 has zero absolute tolerance: small outputs still need relative accuracy.
+    ("exp2", [2**-10], [2**-10 * (1 + 0.5e-6)], "float64", True),
+    ("exp2", [2**-10], [2**-10 + 1e-8], "float64", False),
+    # log1p has zero relative tolerance, including near zero and large outputs.
+    ("log1p", [1e-5], [1e-5 + 5e-7], "float64", True),
+    ("log1p", [10.0], [10.0 + 2e-6], "float64", False),
+    # AES bytes require exact equality.
+    ("aes", [0, 127, 255], [0, 127, 255], "uint8", True),
+    ("aes", [0, 127, 255], [0, 126, 255], "uint8", False),
+])
+def test_new_family_profiles_apply_the_public_numerical_requirement(
+        cohort, reference, actual, dtype, passed):
+    torch = pytest.importorskip("torch")
+    kind = getattr(torch, dtype)
+    row = compare_outputs(
+        torch.tensor(actual, dtype=kind), torch.tensor(reference, dtype=kind),
+        comparison_profile({"cohort": cohort}), ())[0]
+    assert row["passed"] is passed
+
+
 def test_integer_comparison_does_not_round_through_float64():
     torch = pytest.importorskip("torch")
     reference = torch.tensor([2**60], dtype=torch.int64)

@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-d87a09dc",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll probe claim c1 exhaustively: all 256 byte values against an independently computed AES S-box, plus edge lengths (1, 255, 256, 257, 131072), nonzero storage-offset views, and input-preservation checks.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-be1818a272599522",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, sys, json\\nsys.path.insert(0, '/root/cases/case_167')\\nimport kernel\\n\\n# Independent AES S-box (standard FIPS 197 affine transform reference)\\ndef gf_mul(a,b):\\n    p=0\\n    for _ in range(8):\\n        if b&1: p^=a\\n        hi=a&0x80\\n        a=(a<<1)&0xff\\n        if hi: a^=0x1b\\n        b>>=1\\n    return p\\nsbox=[0]*256\\nfor x in range(256):\\n    if x==0: inv=0\\n    else:\\n        inv=1\\n        for e in range(254):\\n            inv_next=gf_mul(inv,x)\\n            inv=inv_next\\n    # verify inv actually inverse\\n    if x!=0: assert gf_mul(inv,x)==1\\n    a=inv\\n    b=(a^((a<<1)|(a>>7)) ^((a<<2)|(a>>6)) ^((a<<3)|(a>>5)) ^((a<<4)|(a>>4)))&0xff\\n    sbox[x]=b^0x63\\n\\n# sanity against problem-stated anchors\\nassert sbox[0]==0x63 and sbox[0x53]==0xed, hex(sbox[0x53])\\n\\nresults={}\\nx_all=torch.arange(256,dtype=torch.uint8,device='cuda')\\nout=kernel.run(x_all)\\nsbox_t=torch.tensor(sbox,dtype=torch.uint8,device='cuda')\\nmism=(out!=sbox_t).nonzero().flatten().tolist()\\nresults['all256_mismatch_indices']=mism\\nresults['all256_exact']=len(mism)==0\\n\\n# edge lengths incl. non-multiples of 256 and max length\\ngen=torch.Generator(device='cuda').manual_seed(1)\\nfor n in [1,2,255,256,257,1027,131071,131072]:\\n    v=torch.randint(0,256,(n,),dtype=torch.uint8,device='cuda',generator=gen)\\n    ref=sbox_t[v.cpu().to(torch.int64)].to(device='cuda')  # careful: index on cuda\\n    ref=sbox_t[v.long()]\\n    o=kernel.run(v)\\n    ok=torch.equal(o,ref)\\n    results[f'len_{n}_exact']=bool(ok)\\n\\n# nonzero storage offset view\\nbase=torch.randint(0,256,(300,),dtype=torch.uint8,device='cuda',generator=gen)\\nview=base[37:293]  # contiguous view, offset 37\\nassert view.is_contiguous() and view.storage_offset()==37\\nref=sbox_t[view.long()]\\no=kernel.run(view)\\nresults['offset_view_exact']=bool(torch.equal(o,ref))\\nresults['input_preserved']=bool(torch.equal(base[:37].long(), base[37:37].long()) or True)\\n# actually verify base unchanged after runs on views\\no2=kernel.run(view)\\nresults['view_unchanged_after']=bool(torch.equal(view, base[37:293]))\\n# output must not share storage with input\\nresults['output_contig_fresh']= (o.is_contiguous() and o.dtype==torch.uint8 and o.device.type=='cuda'\\n                                 and o.data_ptr()!=base.data_ptr() and o.data_ptr()!=view.data_ptr())\\n\\nprint(json.dumps(results))\\n\", \"expected_signal\": \"all256_exact true and all edge lengths exact and offset view exact\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474883,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 815,
+    "prompt_tokens": 11053,
+    "total_tokens": 11868,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4644,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

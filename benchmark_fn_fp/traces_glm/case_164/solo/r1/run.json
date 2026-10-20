@@ -1,0 +1,686 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_164",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise base-two exponential with integer range reduction.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _exp2_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    integer = tl.floor(x + 0.5).to(tl.int32)\n    fraction = x - integer.to(tl.float32)\n    polynomial = 0.00133909\n    polynomial = polynomial * fraction + 0.00967603\n    polynomial = polynomial * fraction + 0.0555036\n    polynomial = polynomial * fraction + 0.240221\n    polynomial = polynomial * fraction + 0.693147\n    polynomial = polynomial * fraction + 1.0\n    scale = ((integer + 127) << 23).to(tl.float32, bitcast=True)\n    value = scale * polynomial\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.bfloat16, \"BF16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    require(bool((x.abs() <= 10).all().item()), \"all input values must be in [-10,10]\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating 2**x for every stored input.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _exp2_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical exp2 independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.exp2(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (20.0 * torch.rand((size,), generator=generator) - 10.0).to(torch.bfloat16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the base-two exponential elementwise on stored BF16 inputs, returning FP32 output.\nThe mathematical target is target[i] = 2 ** x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional BF16 tensor [N], with 1<=N<=131072.\n- EVERY finite BF16 value in the closed interval [-10,10] is legal, including both signed zeros and positive and negative subnormal values. NaN, infinity and values outside this interval are outside the input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - 2 ** x[i]) <= 1e-6 * (2 ** x[i]).\n\nThe absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library exp2 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic implementation of a standard scalar operation, not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_164",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-20T05:40:47Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:41:08Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "5cd60ac8e04f1fb017935865867002ec0a51d4152cea978c2ee0183ce25162a3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "6eeb38e59620e4df9cc27967425700cdb9e88829d3d18aa24cbe20ad35393dff"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "fa7a809141ef7466f8ea610e44ad49b23f2087085ae5a897a0507f60a11a5fa1"
+              }
+            ],
+            "duration_s": 6.946039,
+            "exit_code": 0,
+            "expected_signal": "max relative error and violation count over exhaustive domain",
+            "json_parse_error": null,
+            "json_result": {
+              "max_rel": 2.2569583833987986e-07,
+              "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+              "n": 33346,
+              "violations": 0
+            },
+            "max_rel": 2.2569583833987986e-07,
+            "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+            "n": 33346,
+            "stderr": "",
+            "stdout": "num legal values: 33346\nmax rel err: 2.2569583833987986e-07\ncount violations: 0\n{\"metric\": \"max relative error over exhaustive BF16 domain [-10,10]\", \"max_rel\": 2.2569583833987986e-07, \"violations\": 0, \"n\": 33346}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "violations": 0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive test of all 33346 finite BF16 values in [-10,10]: max relative error vs FP64 exp2 is 2.26e-7, zero violations of the 1e-6 relative tolerance.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The degree-5 polynomial and fp32 scale multiply could accumulate error beyond the tight 1e-6 relative tolerance, especially for negative x near -10 where 2**x is tiny and near the rounding boundary x+0.5.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual - 2**x) <= 1e-6 * 2**x, for every finite BF16 value in [-10,10] including signed zeros and subnormals."
+        }
+      ],
+      "scope_rationale": "The contract requires relative error <= 1e-6 for every legal BF16 input in [-10,10]; a violation on any of those values breaches the tolerance clause.",
+      "statement": "The kernel's polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance for some legal BF16 input in [-10,10].",
+      "status": "rebutted",
+      "updated_at": "2026-10-20T05:41:08Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_164",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_164"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_164"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_164"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_164",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 10.845172608,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll verify by claiming the polynomial/bitcast approximation may violate the 1e-6 relative tolerance, then probing over the entire BF16 domain in [-10,10] (only ~2000 values, so exhaustive testing is feasible).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The degree-5 polynomial and fp32 scale multiply could accumulate error beyond the tight 1e-6 relative tolerance, especially for negative x near -10 where 2**x is tiny and near the rounding boundary x+0.5.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual - 2**x) <= 1e-6 * 2**x, for every finite BF16 value in [-10,10] including signed zeros and subnormals."
+              }
+            ],
+            "scope_rationale": "The contract requires relative error <= 1e-6 for every legal BF16 input in [-10,10]; a violation on any of those values breaches the tolerance clause.",
+            "statement": "The kernel's polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance for some legal BF16 input in [-10,10]."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.845,
+        "input_tokens": 8750,
+        "output_tokens": 708
+      }
+    },
+    {
+      "duration_s": 11.097464202,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run an exhaustive probe over every legal BF16 value in [-10,10] (~3300 values), checking relative error against FP64 exp2.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_164\")\nimport kernel\n\n# all finite BF16 values in [-10,10]\nvals = []\nbits = torch.arange(0x0000, 0x10000, dtype=torch.int32)\nbf = bits.to(torch.uint16).view(torch.bfloat16).to(torch.float64)\nmask = torch.isfinite(bf) & (bf.abs() <= 10)\nsub = torch.arange(0x10000, dtype=torch.int32)[mask]\nallv = torch.from_numpy(sub.numpy().astype('int32')).to(torch.uint16).view(torch.bfloat16).to(torch.float64)\nprint(\"num legal values:\", allv.numel())\n\nx = torch.from_numpy(sub.numpy().astype('int32')).to(torch.uint16).view(torch.bfloat16).to('cuda')\nout = kernel.run(x)\nref = torch.exp2(x.to(torch.float64).cpu())\nrel = (out.cpu().to(torch.float64) - ref).abs() / ref\nbad = (rel > 1e-6)\nprint(\"max rel err:\", rel.max().item())\nprint(\"count violations:\", int(bad.sum()))\nif bad.any():\n    i = rel.argmax()\n    print(\"worst x:\", x.cpu().float()[i].item(), \"out:\", out.cpu()[i].item(), \"ref:\", ref[i].item(), \"rel:\", rel[i].item())\n    idxs = torch.nonzero(bad).flatten()[:10]\n    for j in idxs:\n        print(\"  viol x=\", x.cpu().float()[j].item(), \"rel=\", rel[j].item())\nimport json\nprint(json.dumps({\"metric\":\"max relative error over exhaustive BF16 domain [-10,10]\",\"max_rel\":rel.max().item(),\"violations\":int(bad.sum()),\"n\":int(x.numel())}))\n",
+            "expected_signal": "max relative error and violation count over exhaustive domain"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.097,
+        "input_tokens": 9912,
+        "output_tokens": 883
+      }
+    },
+    {
+      "duration_s": 3.317423136000002,
+      "role": "solo",
+      "round": 4,
+      "text": "The exhaustive probe over every legal BF16 value in [-10,10] passed with max relative error 2.26e-7, well under the 1e-6 tolerance. I'll finalize that evidence, rebut the claim, and record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_rel": 2.2569583833987986e-07,
+              "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+              "n": 33346,
+              "tolerance": 1e-06,
+              "violations": 0
+            },
+            "event_id": "t6",
+            "status": "rebutted",
+            "summary": "Exhaustive test of all 33346 finite BF16 values in [-10,10]: max relative error vs FP64 exp2 is 2.26e-7, zero violations of the 1e-6 relative tolerance.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.317,
+        "input_tokens": 12358,
+        "output_tokens": 252
+      }
+    },
+    {
+      "duration_s": 4.907028130999997,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive probe covered every legal input value (all 33,346 finite BF16 values in [-10,10]) and found max relative error 2.26e-7 against the FP64 reference \u2014 well within the 1e-6 tolerance, with zero violations. The only open claim is resolved as rebutted. Since the input domain is exhaustively enumerable, this is a complete correctness proof over the contract's domain; I'll record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.99,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The single in-scope claim (c1, that the polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance somewhere in the legal domain) was rebutted by an exhaustive runtime probe (tool event t6): all 33,346 finite BF16 values in [-10,10] were passed through kernel.run on GPU and compared to FP64 torch.exp2. Max relative error was 2.26e-7 with zero violations of the 1e-6 tolerance. Because the contract's entire legal input domain is exactly the set of finite BF16 values in [-10,10], and every one of them was tested, correctness is established exhaustively; N up to 131072 is just repetition of these same values, and the kernel's masked block launch handles arbitrary N correctly. The kernel satisfies the contract.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.907,
+        "input_tokens": 15280,
+        "output_tokens": 324
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_164"
+      },
+      "created_at": "2026-10-20T05:40:34Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_164",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise base-two exponential with integer range reduction.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _exp2_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    integer = tl.floor(x + 0.5).to(tl.int32)\n    fraction = x - integer.to(tl.float32)\n    polynomial = 0.00133909\n    polynomial = polynomial * fraction + 0.00967603\n    polynomial = polynomial * fraction + 0.0555036\n    polynomial = polynomial * fraction + 0.240221\n    polynomial = polynomial * fraction + 0.693147\n    polynomial = polynomial * fraction + 1.0\n    scale = ((integer + 127) << 23).to(tl.float32, bitcast=True)\n    value = scale * polynomial\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.bfloat16, \"BF16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    require(bool((x.abs() <= 10).all().item()), \"all input values must be in [-10,10]\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating 2**x for every stored input.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _exp2_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical exp2 independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.exp2(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (20.0 * torch.rand((size,), generator=generator) - 10.0).to(torch.bfloat16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the base-two exponential elementwise on stored BF16 inputs, returning FP32 output.\nThe mathematical target is target[i] = 2 ** x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional BF16 tensor [N], with 1<=N<=131072.\n- EVERY finite BF16 value in the closed interval [-10,10] is legal, including both signed zeros and positive and negative subnormal values. NaN, infinity and values outside this interval are outside the input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - 2 ** x[i]) <= 1e-6 * (2 ** x[i]).\n\nThe absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library exp2 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic implementation of a standard scalar operation, not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_164",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_164"
+      },
+      "created_at": "2026-10-20T05:40:34Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the base-two exponential elementwise on stored BF16 inputs, returning FP32 output.\nThe mathematical target is target[i] = 2 ** x[i].\n\nInputs and complete public domain:\n- x is a one-dimensional BF16 tensor [N], with 1<=N<=131072.\n- EVERY finite BF16 value in the closed interval [-10,10] is legal, including both signed zeros and positive and negative subnormal values. NaN, infinity and values outside this interval are outside the input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - 2 ** x[i]) <= 1e-6 * (2 ** x[i]).\n\nThe absolute tolerance is zero. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, polynomial approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed relative tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library exp2 and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is an original synthetic implementation of a standard scalar operation, not a reproduction of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_164",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_164"
+      },
+      "created_at": "2026-10-20T05:40:34Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_164",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2910
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1847
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_164",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-20T05:40:34Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_164",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The degree-5 polynomial and fp32 scale multiply could accumulate error beyond the tight 1e-6 relative tolerance, especially for negative x near -10 where 2**x is tiny and near the rounding boundary x+0.5.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual - 2**x) <= 1e-6 * 2**x, for every finite BF16 value in [-10,10] including signed zeros and subnormals."
+          }
+        ],
+        "scope_rationale": "The contract requires relative error <= 1e-6 for every legal BF16 input in [-10,10]; a violation on any of those values breaches the tolerance clause.",
+        "statement": "The kernel's polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance for some legal BF16 input in [-10,10]."
+      },
+      "created_at": "2026-10-20T05:40:47Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-20T05:40:47Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The degree-5 polynomial and fp32 scale multiply could accumulate error beyond the tight 1e-6 relative tolerance, especially for negative x near -10 where 2**x is tiny and near the rounding boundary x+0.5.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual - 2**x) <= 1e-6 * 2**x, for every finite BF16 value in [-10,10] including signed zeros and subnormals."
+          }
+        ],
+        "scope_rationale": "The contract requires relative error <= 1e-6 for every legal BF16 input in [-10,10]; a violation on any of those values breaches the tolerance clause.",
+        "statement": "The kernel's polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance for some legal BF16 input in [-10,10].",
+        "status": "open",
+        "updated_at": "2026-10-20T05:40:47Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_164\")\nimport kernel\n\n# all finite BF16 values in [-10,10]\nvals = []\nbits = torch.arange(0x0000, 0x10000, dtype=torch.int32)\nbf = bits.to(torch.uint16).view(torch.bfloat16).to(torch.float64)\nmask = torch.isfinite(bf) & (bf.abs() <= 10)\nsub = torch.arange(0x10000, dtype=torch.int32)[mask]\nallv = torch.from_numpy(sub.numpy().astype('int32')).to(torch.uint16).view(torch.bfloat16).to(torch.float64)\nprint(\"num legal values:\", allv.numel())\n\nx = torch.from_numpy(sub.numpy().astype('int32')).to(torch.uint16).view(torch.bfloat16).to('cuda')\nout = kernel.run(x)\nref = torch.exp2(x.to(torch.float64).cpu())\nrel = (out.cpu().to(torch.float64) - ref).abs() / ref\nbad = (rel > 1e-6)\nprint(\"max rel err:\", rel.max().item())\nprint(\"count violations:\", int(bad.sum()))\nif bad.any():\n    i = rel.argmax()\n    print(\"worst x:\", x.cpu().float()[i].item(), \"out:\", out.cpu()[i].item(), \"ref:\", ref[i].item(), \"rel:\", rel[i].item())\n    idxs = torch.nonzero(bad).flatten()[:10]\n    for j in idxs:\n        print(\"  viol x=\", x.cpu().float()[j].item(), \"rel=\", rel[j].item())\nimport json\nprint(json.dumps({\"metric\":\"max relative error over exhaustive BF16 domain [-10,10]\",\"max_rel\":rel.max().item(),\"violations\":int(bad.sum()),\"n\":int(x.numel())}))\n",
+        "expected_signal": "max relative error and violation count over exhaustive domain"
+      },
+      "created_at": "2026-10-20T05:41:05Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "5cd60ac8e04f1fb017935865867002ec0a51d4152cea978c2ee0183ce25162a3"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "6eeb38e59620e4df9cc27967425700cdb9e88829d3d18aa24cbe20ad35393dff"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "fa7a809141ef7466f8ea610e44ad49b23f2087085ae5a897a0507f60a11a5fa1"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance for some legal BF16 input in [-10,10].",
+        "cwd": "/root/cases/case_164",
+        "duration_s": 6.946039,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "5cd60ac8e04f1fb017935865867002ec0a51d4152cea978c2ee0183ce25162a3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "6eeb38e59620e4df9cc27967425700cdb9e88829d3d18aa24cbe20ad35393dff"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "fa7a809141ef7466f8ea610e44ad49b23f2087085ae5a897a0507f60a11a5fa1"
+              }
+            ],
+            "duration_s": 6.946039,
+            "exit_code": 0,
+            "expected_signal": "max relative error and violation count over exhaustive domain",
+            "json_parse_error": null,
+            "json_result": {
+              "max_rel": 2.2569583833987986e-07,
+              "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+              "n": 33346,
+              "violations": 0
+            },
+            "stderr": "",
+            "stdout": "num legal values: 33346\nmax rel err: 2.2569583833987986e-07\ncount violations: 0\n{\"metric\": \"max relative error over exhaustive BF16 domain [-10,10]\", \"max_rel\": 2.2569583833987986e-07, \"violations\": 0, \"n\": 33346}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "max relative error and violation count over exhaustive domain",
+        "json_parse_error": null,
+        "json_result": {
+          "max_rel": 2.2569583833987986e-07,
+          "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+          "n": 33346,
+          "violations": 0
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "num legal values: 33346\nmax rel err: 2.2569583833987986e-07\ncount violations: 0\n{\"metric\": \"max relative error over exhaustive BF16 domain [-10,10]\", \"max_rel\": 2.2569583833987986e-07, \"violations\": 0, \"n\": 33346}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_rel": 2.2569583833987986e-07,
+          "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+          "n": 33346,
+          "tolerance": 1e-06,
+          "violations": 0
+        },
+        "event_id": "t6",
+        "status": "rebutted",
+        "summary": "Exhaustive test of all 33346 finite BF16 values in [-10,10]: max relative error vs FP64 exp2 is 2.26e-7, zero violations of the 1e-6 relative tolerance.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-20T05:41:08Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-20T05:40:47Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-20T05:41:08Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "5cd60ac8e04f1fb017935865867002ec0a51d4152cea978c2ee0183ce25162a3"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "6eeb38e59620e4df9cc27967425700cdb9e88829d3d18aa24cbe20ad35393dff"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "fa7a809141ef7466f8ea610e44ad49b23f2087085ae5a897a0507f60a11a5fa1"
+                  }
+                ],
+                "duration_s": 6.946039,
+                "exit_code": 0,
+                "expected_signal": "max relative error and violation count over exhaustive domain",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_rel": 2.2569583833987986e-07,
+                  "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+                  "n": 33346,
+                  "violations": 0
+                },
+                "max_rel": 2.2569583833987986e-07,
+                "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+                "n": 33346,
+                "stderr": "",
+                "stdout": "num legal values: 33346\nmax rel err: 2.2569583833987986e-07\ncount violations: 0\n{\"metric\": \"max relative error over exhaustive BF16 domain [-10,10]\", \"max_rel\": 2.2569583833987986e-07, \"violations\": 0, \"n\": 33346}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "violations": 0
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive test of all 33346 finite BF16 values in [-10,10]: max relative error vs FP64 exp2 is 2.26e-7, zero violations of the 1e-6 relative tolerance.",
+              "supports": "rebutted",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The degree-5 polynomial and fp32 scale multiply could accumulate error beyond the tight 1e-6 relative tolerance, especially for negative x near -10 where 2**x is tiny and near the rounding boundary x+0.5.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual - 2**x) <= 1e-6 * 2**x, for every finite BF16 value in [-10,10] including signed zeros and subnormals."
+            }
+          ],
+          "scope_rationale": "The contract requires relative error <= 1e-6 for every legal BF16 input in [-10,10]; a violation on any of those values breaches the tolerance clause.",
+          "statement": "The kernel's polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance for some legal BF16 input in [-10,10].",
+          "status": "rebutted",
+          "updated_at": "2026-10-20T05:41:08Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-20T05:41:08Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "5cd60ac8e04f1fb017935865867002ec0a51d4152cea978c2ee0183ce25162a3"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "6eeb38e59620e4df9cc27967425700cdb9e88829d3d18aa24cbe20ad35393dff"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "fa7a809141ef7466f8ea610e44ad49b23f2087085ae5a897a0507f60a11a5fa1"
+              }
+            ],
+            "duration_s": 6.946039,
+            "exit_code": 0,
+            "expected_signal": "max relative error and violation count over exhaustive domain",
+            "json_parse_error": null,
+            "json_result": {
+              "max_rel": 2.2569583833987986e-07,
+              "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+              "n": 33346,
+              "violations": 0
+            },
+            "max_rel": 2.2569583833987986e-07,
+            "metric": "max relative error over exhaustive BF16 domain [-10,10]",
+            "n": 33346,
+            "stderr": "",
+            "stdout": "num legal values: 33346\nmax rel err: 2.2569583833987986e-07\ncount violations: 0\n{\"metric\": \"max relative error over exhaustive BF16 domain [-10,10]\", \"max_rel\": 2.2569583833987986e-07, \"violations\": 0, \"n\": 33346}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "violations": 0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive test of all 33346 finite BF16 values in [-10,10]: max relative error vs FP64 exp2 is 2.26e-7, zero violations of the 1e-6 relative tolerance.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.99,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The single in-scope claim (c1, that the polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance somewhere in the legal domain) was rebutted by an exhaustive runtime probe (tool event t6): all 33,346 finite BF16 values in [-10,10] were passed through kernel.run on GPU and compared to FP64 torch.exp2. Max relative error was 2.26e-7 with zero violations of the 1e-6 tolerance. Because the contract's entire legal input domain is exactly the set of finite BF16 values in [-10,10], and every one of them was tested, correctness is established exhaustively; N up to 131072 is just repetition of these same values, and the kernel's masked block launch handles arbitrary N correctly. The kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-20T05:41:13Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.99,
+        "created_at": "2026-10-20T05:41:13Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The single in-scope claim (c1, that the polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance somewhere in the legal domain) was rebutted by an exhaustive runtime probe (tool event t6): all 33,346 finite BF16 values in [-10,10] were passed through kernel.run on GPU and compared to FP64 torch.exp2. Max relative error was 2.26e-7 with zero violations of the 1e-6 tolerance. Because the contract's entire legal input domain is exactly the set of finite BF16 values in [-10,10], and every one of them was tested, correctness is established exhaustively; N up to 131072 is just repetition of these same values, and the kernel's masked block launch handles arbitrary N correctly. The kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.99,
+    "created_at": "2026-10-20T05:41:13Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The single in-scope claim (c1, that the polynomial+bitcast exp2 exceeds the 1e-6 relative tolerance somewhere in the legal domain) was rebutted by an exhaustive runtime probe (tool event t6): all 33,346 finite BF16 values in [-10,10] were passed through kernel.run on GPU and compared to FP64 torch.exp2. Max relative error was 2.26e-7 with zero violations of the 1e-6 tolerance. Because the contract's entire legal input domain is exactly the set of finite BF16 values in [-10,10], and every one of them was tested, correctness is established exhaustively; N up to 131072 is just repetition of these same values, and the kernel's masked block launch handles arbitrary N correctly. The kernel satisfies the contract.",
+    "verdict": "trust"
+  }
+}

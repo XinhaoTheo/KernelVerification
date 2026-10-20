@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-648b4440",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Both probes had bugs: the c1 probe compared `p*scale` against `exp2(fraction)` instead of `exp2(x)` (hence the absurd 1023 at x=10), and the c2 probe crashed on a `NameError`. I'll relaunch both corrected probes.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-950aba4b8b2ea910",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, json\\n\\nraw = np.arange(0, 65536, dtype=np.uint16)\\nx_all = torch.from_numpy(raw.view(np.int16)).view(torch.bfloat16)\\ninrange = (x_all.abs() <= 10) & torch.isfinite(x_all)\\nx = x_all[inrange]\\nprint(\\\"num legal values:\\\", x.numel())\\n\\nx32 = x.to(torch.float32)\\ninteg = torch.floor(x32 + 0.5).to(torch.int32)\\nfrac = x32 - integ.to(torch.float32)\\n\\nf = frac.to(torch.float64)\\np = torch.full_like(f, 0.0013391)\\np = p * f + 0.009676\\np = p * f + 0.055504\\np = p * f + 0.24022\\np = p * f + 0.69315\\np = p * f + 1.0\\nexact = torch.exp2(f)  # relative error of p vs 2^fraction (scale cancels)\\n\\nrel = (p - exact).abs() / exact\\ni = rel.argmax()\\n# also dense sweep over the full interval to catch continuous worst case\\nfd = (torch.arange(-500000, 500001, dtype=torch.float64) / 1000000)\\npd = torch.full_like(fd, 0.0013391)\\npd = pd * fd + 0.009676\\npd = pd * fd + 0.055504\\npd = pd * fd + 0.24022\\npd = pd * fd + 0.69315\\npd = pd * fd + 1.0\\ned = torch.exp2(fd)\\nreld = (pd - ed).abs() / ed\\njd = reld.argmax()\\nprint(\\\"bf16-domain max rel err:\\\", rel[i].item(), \\\"at x =\\\", x[i].item(), \\\"frac =\\\", f[i].item())\\nprint(\\\"dense-sweep max rel err:\\\", reld[jd].item(), \\\"at frac =\\\", fd[jd].item())\\nprint(json.dumps({\\\"probe\\\": \\\"c1_poly_only_fp64_fixed\\\",\\n  \\\"num_legal_bf16\\\": int(x.numel()),\\n  \\\"max_rel_err_poly_bf16_domain\\\": float(rel[i].item()),\\n  \\\"worst_x_bf16\\\": float(x[i].item()),\\n  \\\"count_exceed_1e-6_bf16_domain\\\": int((rel > 1e-6).sum().item()),\\n  \\\"dense_sweep_max_rel_err\\\": float(reld[jd].item()),\\n  \\\"dense_sweep_worst_frac\\\": float(fd[jd].item())}))\\n\", \"expected_signal\": \"max relative error of FP64 polynomial vs 2^fraction over all legal BF16 inputs and dense [-0.5,0.5] sweep, compared to 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-bb72fe8c62e68627",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, numpy as np, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\\n\\ndev = 'cuda'\\nraw = np.arange(0, 65536, dtype=np.uint16)\\nx_all = torch.from_numpy(raw.view(np.int16)).view(torch.bfloat16)\\ninrange = (x_all.abs() <= 10) & torch.isfinite(x_all)\\nlegal = x_all[inrange].to(dev)\\nprint(\\\"num legal:\\\", legal.numel())\\n\\nmx_rel = 0.0; worst_x = None; worst_out = None; worst_ref = None; bad_count = 0\\nfor s in range(0, legal.numel(), 131072):\\n    c = legal[s:s+131072].contiguous()\\n    out = kernel.run(c)\\n    ref = torch.exp2(c.to(torch.float64))\\n    rel = (out.to(torch.float64) - ref).abs() / ref\\n    bad_count += int((rel > 1e-6).sum().item())\\n    j = rel.argmax().item()\\n    if rel[j].item() > mx_rel:\\n        mx_rel = rel[j].item()\\n        worst_x = c[j].item(); worst_out = out[j].item(); worst_ref = ref[j].item()\\nprint(json.dumps({\\\"probe\\\": \\\"c2_kernel_full_domain\\\",\\n  \\\"num_legal_bf16\\\": int(legal.numel()),\\n  \\\"max_rel_err_kernel\\\": float(mx_rel),\\n  \\\"count_exceed_1e-6\\\": int(bad_count),\\n  \\\"worst_x\\\": float(worst_x), \\\"worst_out\\\": float(worst_out), \\\"worst_ref\\\": float(worst_ref),\\n  \\\"tolerance\\\": 1e-6}))\\n\", \"expected_signal\": \"max relative error of actual kernel output vs FP64 exp2 over all legal BF16 values in [-10,10], and count exceeding 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "c1 probe result: max_rel_err 1023 at x=10?? That's absurd — at x=10, frac=0, polynomial=1, exact=1, error should be ~0. The rel=1023 suggests something wrong: at x=10, integ=10, scale=2^10=1024, exact... wait I compared (p*scale) vs exact = exp2(f) not exp2(x)! Bug in probe: exact should be exp2(x) i.e. exp2(f)*scale. rel = (p*scale - exp2(f))/exp2(f) at f=0: (1024-1)/1=1023. So the probe is buggy, not the polynomial. Actually the polynomial error measure should be (p - exp2(f))/exp2(f). Need to re-probe c1.\n\nc2 probe crashed with NameError; re-run fixed probe.\n\nBoth probes are buggy, launch corrected ones now."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474901,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1343,
+    "prompt_tokens": 25352,
+    "total_tokens": 26695,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 200,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 10161,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

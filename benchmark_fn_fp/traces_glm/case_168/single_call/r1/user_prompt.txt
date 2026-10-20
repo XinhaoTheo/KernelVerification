@@ -1,0 +1,121 @@
+## Problem statement (contract + reference behavior)
+
+Compute the AES SubBytes transformation independently for every input byte, as defined by FIPS 197 section 5.1.1. The required output is exact, not an approximation.
+
+Input: an ordinary contiguous rank-one torch.uint8 CUDA tensor values with length N, where every integer length from 1 through 131072 is legal. Every byte value from 0 through 255 is legal, in every arrangement. Contiguous views with nonzero storage offsets are also legal. The input values are not restricted to the example from make_inputs.
+
+For each byte x, first compute its multiplicative inverse v in GF(2^8), with polynomial modulus t^8 + t^4 + t^3 + t + 1 (hexadecimal 0x11b). Define the inverse of zero as zero. Number the bits from bit 0 (least significant) to bit 7. For each i, the output bit is v_i XOR v_((i+4) mod 8) XOR v_((i+5) mod 8) XOR v_((i+6) mod 8) XOR v_((i+7) mod 8) XOR c_i, where c is 0x63. Thus x=0 produces 0x63 and x=0x53 produces 0xed.
+
+run(values) must return a fresh contiguous torch.uint8 tensor on the same CUDA device, with the same shape and the exact specified value at every position. There is no numerical tolerance. It must preserve the entire input backing storage and must not share output storage with the input. The supported evaluation environment is NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0.
+
+The implementation is a synthetic Triton implementation of a standard AES operation. Evaluate correctness over the full input domain above. The reference and make_inputs helper describe the target and provide an example; they do not restrict the legal input domain. Cryptographic timing properties and performance are outside the requested correctness decision.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Synthetic Triton implementation of AES byte substitution."""
+import torch
+import triton
+import triton.language as tl
+
+_TO_TOWER = (1, 32, 70, 76, 60, 213, 52, 229)
+_FROM_TOWER = (1, 92, 224, 80, 162, 2, 184, 219)
+_EXTENSION = 9
+
+
+@triton.jit
+def _basis(value, columns: tl.constexpr):
+    result = value & 0
+    for bit in tl.static_range(8):
+        result = result ^ (((value >> bit) & 1) * columns[bit])
+    return result
+
+
+@triton.jit
+def _mul16(left, right):
+    product = left & 0
+    for bit in tl.static_range(4):
+        product = product ^ (left * ((right >> bit) & 1))
+        left = ((left << 1) ^ ((left >> 3) * 0x13)) & 15
+    return product
+
+
+@triton.jit
+def _substitute(value, incoming: tl.constexpr, outgoing: tl.constexpr, extension: tl.constexpr):
+    encoded = _basis(value, incoming)
+    low, high = encoded & 15, encoded >> 4
+    norm = _mul16(low, low) ^ _mul16(low, high) ^ _mul16(extension, _mul16(high, high))
+    power2 = _mul16(norm, norm)
+    power4 = _mul16(power2, power2)
+    power8 = _mul16(power4, power4)
+    reciprocal = _mul16(power8, _mul16(power4, power2))
+    inverse = _mul16(low ^ high, reciprocal) | (_mul16(high, reciprocal) << 4)
+    decoded = _basis(inverse, outgoing)
+    answer = decoded ^ 0x63
+    for shift in tl.static_range(1, 5):
+        answer = answer ^ (((decoded << shift) | (decoded >> (8 - shift))) & 255)
+    return answer
+
+
+@triton.jit
+def _aes_kernel(X, Y, N: tl.constexpr, BLOCK: tl.constexpr,
+                INCOMING: tl.constexpr, OUTGOING: tl.constexpr, EXTENSION: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    value = tl.load(X + index, index < N, other=0).to(tl.uint32)
+    result = _substitute(value, INCOMING, OUTGOING, EXTENSION)
+    tl.store(Y + index, result.to(tl.uint8), index < N)
+
+
+def validate_inputs(values):
+    if not isinstance(values, torch.Tensor) or values.device.type != 'cuda':
+        raise ValueError('Expected a CUDA tensor')
+    if values.dtype != torch.uint8 or values.ndim != 1 or not values.is_contiguous():
+        raise ValueError('Expected a contiguous rank-one uint8 tensor')
+    if not 1 <= values.numel() <= 131072:
+        raise ValueError('Length is outside the supported range')
+
+
+def run(values):
+    validate_inputs(values)
+    values = values.resolve_neg()
+    result = torch.empty(values.shape, dtype=torch.uint8, device=values.device)
+    with torch.cuda.device(values.device):
+        _aes_kernel[(triton.cdiv(values.numel(), 256),)](
+            values, result, values.numel(), 256, _TO_TOWER, _FROM_TOWER, _EXTENSION,
+            num_warps=4)
+    return result
+
+
+def _reference_multiply(left, right):
+    result = torch.zeros_like(left)
+    for _ in range(8):
+        result = result ^ (left * (right & 1))
+        left = ((left << 1) ^ ((left >> 7) * 0x11b)) & 255
+        right = right >> 1
+    return result
+
+
+def reference(values):
+    base = values.to(torch.int64)
+    inverse = torch.ones_like(base)
+    exponent = 254
+    while exponent:
+        if exponent & 1:
+            inverse = _reference_multiply(inverse, base)
+        base = _reference_multiply(base, base)
+        exponent >>= 1
+    result = inverse ^ 0x63
+    for shift in range(1, 5):
+        result ^= ((inverse << shift) | (inverse >> (8 - shift))) & 255
+    return result.to(torch.uint8)
+
+
+def make_inputs(device='cuda', seed=0):
+    generator = torch.Generator(device=device).manual_seed(seed)
+    return (torch.randint(0, 256, (1027,), dtype=torch.uint8,
+                          device=device, generator=generator),)
+
+```
+
+Is this implementation correct?

@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-c85bb5e9",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two probes: one testing large-magnitude x (c1) and one sweeping the entire legal FP16 grid against the FP64 reference (c2). They're independent, so both go out now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a0aaa94ed7527601",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\ntorch.manual_seed(0)\\n# large-magnitude legal FP16 values: exponent 15..? x near 65504, and a dense set of large values\\ndev='cuda'\\nvals=[]\\n# all positive FP16 values with exponent >= 10 (x >= 1024), plus 65504 explicitly\\nimport struct\\nall_bits=[(s,e,m) for s in (0,) for e in range(10,32) for m in range(16,1024)]\\ncand=[]\\nfor s in (0,1):\\n    for e in range(15,32):\\n        for m in range(0,1024):\\n            if e==31 and m==0: continue\\n            cand.append((s,e,m))\\n# simpler: build all positive finite fp16 large values via torch\\nt=torch.tensor([65504.0],dtype=torch.float16)\\nbig=[]\\nfor e in range(10,16):\\n    for m in range(0,1024):\\n        # normal fp16 encoding\\n        val=m*2.0**(e-25)+2.0**e\\n        big.append(val)\\nx=torch.tensor(big+[65504.0],dtype=torch.float16).to(dev)\\nn=x.numel()\\nassert n<=131072\\nimport importlib.util\\nspec=importlib.util.spec_from_file_location('kernel','/root/cases/case_165/kernel.py')\\nk=importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nout=k.run(x)\\nref=torch.log1p(x.to(torch.float64))\\nerr=(out.double()-ref).abs()\\ni=int(err.argmax())\\nmx=float(err.max())\\ntol=1e-6\\nprint(json.dumps({\\n 'metric':'max_abs_err vs FP64 log1p over large-x subset (x>=1024 + 65504)',\\n 'n':n,'max_abs_err':mx,'tolerance':tol,'violations':int((err>tol).sum()),\\n 'worst_x':float(x[i]),'worst_ref':float(ref[i]),'worst_out':float(out[i]),\\n 'violates':bool(mx>tol)}))\", \"expected_signal\": \"max abs error over large-x values vs FP64 reference exceeds 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-8d567e62a404e430",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\ndev='cuda'\\n# full legal FP16 grid: all finite values strictly > -1 (both signs, subnormals, zeros)\\nbits=torch.arange(65536,dtype=torch.int32).to(torch.uint16).to(torch.int32)\\nx=torch.tensor(bits.view(torch.uint16).numpy().view('float16').copy(),dtype=torch.float16)\\n# x computed from raw bit patterns\\nimport numpy as np\\narr=bits.numpy().astype(np.uint16)\\nxf=np.frombuffer(arr.tobytes(),dtype=np.float16).copy()\\nx=torch.from_numpy(xf).float()  # filter in fp32 first\\nfinite=torch.isfinite(x)\\ngt=x>(-1.0)\\nmask=finite&gt\\nx=x[mask].to(torch.float16)\\nn=x.numel()\\nassert 1<=n<=131072, n\\nxc=x.to(dev)\\nspec=importlib.util.spec_from_file_location('kernel','/root/cases/case_165/kernel.py')\\nk=importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nout=k.run(xc)\\nref=torch.log1p(xc.to(torch.float64))\\nerr=(out.double()-ref).abs()\\ni=int(err.argmax())\\nmx=float(err.max()); tol=1e-6\\nviol=int((err>tol).sum())\\nworst_x=float(xc[i])\\nprint(json.dumps({\\n 'metric':'exhaustive max_abs_err vs FP64 log1p over full legal FP16 grid',\\n 'n_legal_values':n,'max_abs_err':mx,'tolerance':tol,'violations':viol,\\n 'worst_x':worst_x,'worst_ref':float(ref[i]),'worst_out':float(out[i]),\\n 'contains_violation':bool(viol>0)}))\", \"expected_signal\": \"at least one legal FP16 value where abs error vs FP64 log1p exceeds 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Two claims; I can design two probes. Actually one full-grid sweep covers c2 and c1 could be tested with large-x subset. Launch both as run_claim_probe in same response. But careful: c1's outcome doesn't change c2's design. Launch both.\n\nNote N limit 131072; full FP16 grid of finite values > -1: ~15 bits → 65536*2-ish values minus excluded ~ 30000? Actually all bit patterns except NaN/inf/-1 and below: ~30700 values. Split into chunks of 131072? Only ~30k values, fits in one tensor."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792474996,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1097,
+    "prompt_tokens": 14841,
+    "total_tokens": 15938,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 133,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

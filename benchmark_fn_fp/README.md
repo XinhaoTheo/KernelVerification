@@ -5,11 +5,11 @@
 | 看什么 | 入口 | 案例 |
 |---|---|---|
 | 有工具与无工具的区分案例 | [Tools vs No Tools](SUCCESS_CASES.md) | 9 个案例的总表、详情和复测结果；尚未证明 Solo 与 Debate 有稳定差异 |
-| 专门构造的真实 kernel 验证挑战 | [real_kernel_challenges](real_kernel_challenges/README.md) | case_33–case_90，共58题 |
-| kernel、输入生成器与合同 | [统一公开题目录](triton_eval_cases/) / [题目索引](CASE_INDEX.md) | case_01–case_90，共90题 |
+| 专门构造的真实 kernel 验证挑战 | [real_kernel_challenges](real_kernel_challenges/README.md) | case_33–case_90、case_163–case_168，共64题 |
+| kernel、输入生成器与合同 | [统一公开题目录](triton_eval_cases/) / [题目索引](CASE_INDEX.md) | case_01–case_90、case_163–case_168，共96题 |
 | 按输入构造标签的旧实验（已归档） | [archive/input_specific](archive/input_specific/README.md) | case_91–case_138，共48题；不进入当前统计和实验 |
 | 早期24题pilot（已归档） | [archive/numerical_pilot](archive/numerical_pilot/README.md) | case_139–case_162及72条GLM记录；停止扩展和重跑 |
-| 每次调用、失败和probe | [GLM traces](traces_glm/INDEX.md) | 当前90题，共392条GLM记录，按case/arm/rN |
+| 每次调用、失败和probe | [GLM traces](traces_glm/INDEX.md) | 当前96题，共416条GLM记录，按case/arm/rN |
 
 GPU kernel verification datasets, evaluation programs, and recorded experiments.
 Start with [CASE_INDEX.md](CASE_INDEX.md) for the meaning and location of every
@@ -24,23 +24,23 @@ The original FN/FP suite targets fixed-tolerance `allclose`. The later kernel ch
 
 ## Current accuracy
 
-October 19, 2026. The current set contains 90 cases. For each model method, use the earliest completed record per case from the [GLM index](traces_glm/INDEX.md). Abstentions and cases without a completed record stay in the denominator and do not count as correct.
+October 20, 2026. The current set contains 96 cases. For each model method, use the earliest completed record per case from the [GLM index](traces_glm/INDEX.md). Abstentions and cases without a completed record stay in the denominator and do not count as correct. Allclose still covers the previous 90-case set; the six new cases have no allclose measurement.
 
-| Method | Correct | Wrong verdict | Abstention / unfinished | Accuracy |
+| Method | Correct | Wrong verdict | Abstention / unfinished / not run | Accuracy |
 |---|---:|---:|---:|---:|
-| [Allclose / numerical checks](traces_allclose/README.md) | 49/90 | 41 | 0 | 54.4% |
-| Single call, no tools | 73/90 | 16 | 1 | 81.1% |
-| Solo + tools | 85/90 | 5 | 0 | 94.4% |
-| Debate + tools | 79/90 | 5 | 6 | 87.8% |
+| [Allclose / numerical checks](traces_allclose/README.md) | 49/90 tested | 41 | 6 new cases not run | 54.4% of tested cases |
+| Single call, no tools | 78/96 | 17 | 1 | 81.3% |
+| Solo + tools | 91/96 | 5 | 0 | 94.8% |
+| Debate + tools | 85/96 | 5 | 6 | 88.5% |
 
-Allclose was rerun on all 90 cases on October 19. The original 32 cases keep their existing conventional checks; the other 58 use public `make_inputs(seed=0)` defaults and public numerical requirements. These are two different protocols, so the aggregate must be read with the split below. A passed sample is not a proof over the full input domain. No model runs were repeated for this update.
+Allclose was rerun on the previous 90 cases on October 19. The original 32 cases keep their existing conventional checks; the other 58 use public `make_inputs(seed=0)` defaults and public numerical requirements. These are two different protocols, so the aggregate must be read with the split below. A passed sample is not a proof over the full input domain. The October 20 experiment adds six new cases and keeps their first trials separate from conditional repeats. Historical model settings differ across older cases.
 
-| Method | Original cases 01–32 | Kernel challenges 33–90 | All 90 |
-|---|---:|---:|---:|
-| Allclose / numerical checks | 1/32 (3.1%) | 48/58 (82.8%) | 49/90 (54.4%) |
-| Single call, no tools | 30/32 (93.8%) | 43/58 (74.1%) | 73/90 (81.1%) |
-| Solo + tools | 30/32 (93.8%) | 55/58 (94.8%) | 85/90 (94.4%) |
-| Debate + tools | 27/32 (84.4%) | 52/58 (89.7%) | 79/90 (87.8%) |
+| Method | Original cases 01–32 | Previous challenges 33–90 | New cases 163–168 | Combined |
+|---|---:|---:|---:|---:|
+| Allclose / numerical checks | 1/32 (3.1%) | 48/58 (82.8%) | Not run | 49/90 tested (54.4%) |
+| Single call, no tools | 30/32 (93.8%) | 43/58 (74.1%) | 5/6 (83.3%) | 78/96 (81.3%) |
+| Solo + tools | 30/32 (93.8%) | 55/58 (94.8%) | 6/6 (100%) | 91/96 (94.8%) |
+| Debate + tools | 27/32 (84.4%) | 52/58 (89.7%) | 6/6 (100%) | 85/96 (88.5%) |
 
 The original suite deliberately targets limitations of naive comparisons, so its 3.1% is not a general estimate of allclose quality. [Allclose protocol, per-case results and costs](traces_allclose/README.md) are saved separately from model traces.
 
@@ -56,10 +56,10 @@ benchmark_fn_fp/
 ├── SUCCESS_CASES.md    tools vs no tools: table, case details and repeats
 ├── success_cases/      one description per documented success case
 ├── triton/             32 current original cases, with answers ← scorer only
-├── triton_eval_cases/  90 public cases: case_01–case_90
+├── triton_eval_cases/  96 public cases: case_01–case_90 and case_163–case_168
 ├── archive/input_specific/ case_91–case_138, old labels and experiment records
 ├── archive/numerical_pilot/ case_139–case_162, historical results and 72 GLM trials
-├── real_kernel_challenges/ case_33–case_90: purpose-built challenges; separate results
+├── real_kernel_challenges/ 64 purpose-built challenges; separate results
 │
 ├── eval_scripts/       evaluation scripts and derived scoreboard
 ├── traces_opus5/       every run on claude-opus-5 (see TRACES.md)
@@ -70,9 +70,9 @@ benchmark_fn_fp/
 └── modal_runner.py     shared Modal GPU execution wrapper
 ```
 
-There are **90 active cases**: 32 original FN/FP cases and 58 purpose-built kernel challenges. Another **72 cases are archived**: 48 input-specific cases and 24 early pilot cases. The historical total is 162. On October 19, 2026, current cases were renumbered as `case_01`–`case_90`, and archived cases as `case_91`–`case_162`. The previous numbering, including the old retired case 03, is recorded in `case_map.json`.
+There are **96 active cases**: 32 original FN/FP cases and 64 purpose-built kernel challenges. Another **72 cases are archived**: 48 input-specific cases and 24 early pilot cases. The historical total is 168. On October 19, 2026, current cases were renumbered as `case_01`–`case_90`, and archived cases as `case_91`–`case_162`. Six new cases, `case_163`–`case_168`, were added on October 20 without reusing archived IDs. The previous numbering, including the old retired case 03, is recorded in `case_map.json`.
 
-Current public cases share `triton_eval_cases/`: `case_01`–`case_90`. Archived public files and traces live under their archive group. They are excluded from current coverage and default scoring.
+Current public cases share `triton_eval_cases/`: `case_01`–`case_90` and `case_163`–`case_168`. Archived public files and traces live under their archive group. They are excluded from current coverage and default scoring.
 Runner `--all` selects the requested dataset's registered cases, not every folder
 in the shared directory. Current CLI aliases use the new descriptive names;
 historical dataset IDs remain in trace metadata for compatibility.
