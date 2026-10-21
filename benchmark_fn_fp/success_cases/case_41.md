@@ -2,9 +2,9 @@
 
 [Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
-**What it should do.** Each query computes a weighted average of the values in its allowed attention window. Old cache positions outside every query's window must have no effect. The [problem.txt](../triton_eval_cases/case_41/problem.txt) explicitly permits NaN in those unused positions; all values that a query may actually attend to must be finite.
+**What it must do.** Each query calculates a weighted average of the values in its permitted attention window. Cache positions outside all query windows must have no effect. NaN is permitted in these unused positions, as specified in the [problem description](../triton_eval_cases/case_41/problem.txt). All values in each query's window must be finite.
 
-**What goes wrong.** The [kernel](../triton_eval_cases/case_41/kernel.py) loads cache positions by tile, including some expired positions. It masks their scores, but still passes their values into the final multiplication:
+**Why it is incorrect.** The [kernel](../triton_eval_cases/case_41/kernel.py) reads cache positions in tiles. Some positions are outside the permitted attention windows. The score mask gives these positions zero attention weight. But the output calculation still includes their cached values:
 
 ```python
 scores = tl.where((qpos[:, None] < QT) & allowed & tile_mask[None, :],
@@ -25,10 +25,10 @@ Contribution to the sum   -> 0 * NaN = NaN
 Final output              -> NaN
 ```
 
-**What the model missed.** The no-tool response assumed that zero attention weight was enough to remove an unused position. In floating-point arithmetic, zero times NaN is still NaN. Score masking alone does not remove this path.
+**What the model did.** The model without tools thought that zero attention weight was sufficient to remove the effect of an unused position. In floating-point arithmetic, zero times NaN is still NaN. Score masking alone does not remove this path.
 
-**What tools established.** Debate used sequence length 100 and window size 5: the live positions were 95–99, while expired position 64 contained NaN. Both lie in the same loaded tile. The test was legal and produced **64/64 NaN output elements**, while the reference was entirely finite. Both tool workflows correctly returned **Reject**.
+**What tools found.** Debate used sequence length 100 and window size 5. The positions in the window were 95–99, and expired position 64 contained NaN. All these positions were in the same tile. This permitted input gave **64/64 NaN output elements**, but all reference values were finite. Solo and Debate correctly rejected the kernel.
 
-This mechanism can also be found by careful code review. Debate identified it before running the probe; execution confirmed the diagnosis on the actual kernel.
+A careful code review can also identify this defect. Debate identified it before the GPU test. The GPU result agreed with that diagnosis.
 
 Traces: [No tools](../traces_glm/case_41/single_call/r1/transcript.md) · [Solo](../traces_glm/case_41/solo/r1/transcript.md) · [Debate](../traces_glm/case_41/debate/r1/transcript.md).

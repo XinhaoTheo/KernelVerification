@@ -2,9 +2,13 @@
 
 [Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
-**What it must do.** The kernel must calculate `log(1 + x)`, where `log` is the natural logarithm. The [problem description](../triton_eval_cases/case_94/problem.txt) permits every finite FP16 value greater than `-1`. The output must use FP32 and have an absolute error of **at most `0.000001`**. Tensor lengths from 1 through 131072 and contiguous inputs with a nonzero storage offset are legal. The kernel must preserve the input and return a separate output tensor.
+**What it must do.** The kernel must calculate `log(1 + x)`, where `log` is the natural logarithm. The [problem description](../triton_eval_cases/case_94/problem.txt) includes each finite FP16 value larger than `-1`. The output must use FP32 and have an absolute error of **not more than `0.000001`**. Permitted tensor lengths are 1 through 131072.
 
-**What the kernel does.** This synthetic implementation first calculates `u = 1 + x`. It separates `u` into a mantissa and a power of two. It then approximates the logarithm of the mantissa with a polynomial and adds the exponent contribution. A correction term accounts for rounding in `u`. These [kernel lines](../triton_eval_cases/case_94/kernel.py) show the calculation after the initial separation:
+The input must use contiguous storage, with no gaps between elements. A nonzero storage offset is permitted, so the first input element can start after the start of the storage. The kernel must keep the input unchanged. The output must use different storage.
+
+**What the kernel does.** We made this implementation for the benchmark. It first calculates `u = 1 + x`. It uses the formula `u = mantissa * 2**exponent`. The mantissa is the result after division by that power of two. A polynomial gives an approximation for the logarithm of the mantissa. The kernel adds the exponent contribution and a correction for rounding in `u`.
+
+These [kernel lines](../triton_eval_cases/case_94/kernel.py) show the operations after the initial separation:
 
 ```python
 upper = mantissa > 1.65
@@ -22,11 +26,11 @@ low = exponent.to(tl.float32) * 0.0000090580006145
 value = high + (local_log + (low + correction))
 ```
 
-**What goes wrong.** The threshold `1.65` leaves a wider interval for the polynomial than the threshold `1.5` in the correct control, [case 93](../triton_eval_cases/case_93/kernel.py). The mathematical separation remains valid. But the short polynomial, its rounded coefficients and the FP32 operations together produce too much error for some permitted values. The correction for `1 + x` does not correct all these later errors. Both implementations have the same input domain and error limit.
+**Why it is incorrect.** The threshold `1.65` gives the polynomial a larger input interval than the threshold `1.5` in the correct implementation, [case 93](../triton_eval_cases/case_93/kernel.py). The mathematical separation is still correct. But the short polynomial, its rounded coefficients and the FP32 operations together cause too much error for some permitted values. The correction for `1 + x` does not correct all these subsequent errors. Both implementations have the same input domain and error limit.
 
-**What the model missed.** In `r1`, the model without tools estimated the first omitted series term as `z^9 / 9`. It omitted the factor of two in the logarithm formula. It also underestimated the error from FP32 operations. In `r2`, it included the factor of two, but still accepted because its series estimate was below `1e-6`. That estimate did not establish a bound for the complete FP32 computation.
+**What the model did.** In `r1`, the model without tools used `z^9 / 9` as an estimate of the first missing term in the series. The estimate did not have the factor of two in the logarithm formula. Its estimate of the FP32 error was also too small. In `r2`, it used the factor of two but still accepted the kernel because its series estimate was less than `1e-6`. That estimate did not give an error bound for the full FP32 operation.
 
-**What tools found.** Solo and Debate executed the kernel and found permitted inputs that exceeded the error limit. Independent validation checked all **47,104 legal FP16 encodings** against a high-precision reference. It found **55 failing encodings**, with this largest error:
+**What tools found.** Solo and Debate did GPU tests and found permitted inputs with output errors more than the limit. We independently compared all **47,104 permitted FP16 encodings** with a high-precision reference. An encoding is a stored bit pattern for a value. There were **55 encodings with incorrect outputs**. This example had the largest error:
 
 ```text
 Input x             = 3378
@@ -36,11 +40,13 @@ Absolute error     ≈ 0.000001300704
 Allowed error       = 0.000001
 ```
 
-This failure establishes the fixed **Reject** label for case 94. It does not assign a separate label to the input. Case 93 stays below the same limit, with a maximum absolute error bound of approximately `0.0000006675`.
+This error gives case 94 its fixed **Reject** label. The input does not get its own label. Case 93 has an error less than the same limit, with a maximum absolute error bound of approximately `0.0000006675`.
 
-Independent validation also used 36 tensor tests to check lengths, tail blocks, storage offsets, input preservation and separate output storage. The scalar check covers every permitted FP16 value. It does not cover every possible tensor execution or GPU environment.
+We independently did 36 tensor tests. These tests examined lengths, tail blocks, storage offsets, unchanged inputs and different storage for the output. A tail block is the last block when the tensor length is not a multiple of the block size. The scalar check includes each permitted FP16 value. It does not include all possible tensor executions or GPU environments.
 
-**What repeated trials showed.** The model without tools accepted in `r1` and `r2`, then rejected in `r3`. Its third response identified a risk that the combined error could exceed the limit, but did not calculate a verified failing output. The correct decision still counts. Solo and Debate correctly rejected in all three trials, with executed counterexamples. The correct counts are **1/3 without tools, 3/3 for Solo, and 3/3 for Debate**. For the two repeat trials alone, the counts are **1/2, 2/2, and 2/2**. This is an observed but variable benefit from workflows with tools. It does not establish a stable difference between Solo and Debate.
+**Results from more trials.** The model without tools accepted in `r1` and `r2`, then rejected in `r3`. Its third response identified that the combined error could be more than the limit. But it did not calculate an output to show this error. We still count the correct decision. Solo and Debate correctly rejected in all three trials, with counterexamples from GPU tests.
+
+The correct counts are **1/3 without tools, 3/3 for Solo, and 3/3 for Debate**. For the two more trials alone, the counts are **1/2, 2/2, and 2/2**. The tools helped in some trials, but the difference did not occur in each trial. These results do not show that Debate is better than Solo.
 
 | Trial | No tools | Solo + tools | Debate + tools |
 |---|---|---|---|
@@ -48,4 +54,4 @@ Independent validation also used 36 tensor tests to check lengths, tail blocks, 
 | `r2` | [Accept](../traces_glm/case_94/single_call/r2/transcript.md) | [Reject](../traces_glm/case_94/solo/r2/transcript.md) | [Reject](../traces_glm/case_94/debate/r2/transcript.md) |
 | `r3` | [Reject](../traces_glm/case_94/single_call/r3/transcript.md) | [Reject](../traces_glm/case_94/solo/r3/transcript.md) | [Reject](../traces_glm/case_94/debate/r3/transcript.md) |
 
-[Independent validation](../real_kernel_challenges/private_data/qualification/r30.json) · [Experiment record](../real_kernel_challenges/private_data/experiment_20261020.json).
+[Validation results](../real_kernel_challenges/private_data/qualification/r30.json) · [Experiment record](../real_kernel_challenges/private_data/experiment_20261020.json).

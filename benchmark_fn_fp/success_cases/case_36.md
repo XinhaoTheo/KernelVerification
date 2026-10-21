@@ -2,9 +2,9 @@
 
 [Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
-**What it should do.** RMSNorm backward computes gradients during training. The relevant output, `dw`, adds each row's contribution to the weight gradient. The [problem.txt](../triton_eval_cases/case_36/problem.txt) deliberately rounds individual products to FP16, but requires their final sum to meet a tighter accuracy limit. Those individual FP16 roundings are allowed.
+**What it must do.** RMSNorm backward calculates gradients during training. The output `dw` adds each row's contribution to the weight gradient. The [problem description](../triton_eval_cases/case_36/problem.txt) includes FP16 rounding for the individual products. This rounding is permitted. The sum must agree with the error limit in the problem description.
 
-**What goes wrong.** The block path first sums 16 rows in FP16, then adds that partial result to an FP32 accumulator. The important lines in the [kernel](../triton_eval_cases/case_36/kernel.py) are:
+**Why it is incorrect.** The block path first adds 16 rows in FP16. Then it adds that result to an FP32 accumulator. The [kernel](../triton_eval_cases/case_36/kernel.py) has these lines:
 
 ```python
 dw = tl.zeros((B,), tl.float32)
@@ -12,7 +12,7 @@ dw = tl.zeros((B,), tl.float32)
 dw += tl.sum(dy * (x * r[:, None]).to(tl.float16), 0)
 ```
 
-The destination being FP32 does not make the expression on its right FP32. The computation can be understood as this simplified sequence:
+The FP32 accumulator does not change the precision of the FP16 sum. This sequence shows how the kernel calculates the sum:
 
 ```text
 Per-row products, rounded to FP16       <- allowed by the contract
@@ -20,8 +20,10 @@ Per-row products, rounded to FP16       <- allowed by the contract
     -> add the rounded result to FP32  <- lost information stays lost
 ```
 
-**What the model missed.** The no-tool response treated the gradient reduction as FP32 and accepted. It overlooked where the low-precision sum happens.
+**What the model did.** The model without tools accepted the kernel. It incorrectly identified the gradient reduction as an FP32 calculation. It did not identify the FP16 sum.
 
-**What tools established.** Solo ran a legal `[512, 128]` input and measured a weight-gradient error **8.94457 times the allowed tolerance**. This is a concrete contract violation, so the fixed label is **Reject**. Debate exhausted its token budget without a verdict; it is not counted as a success here.
+**What tools found.** Solo did a test with a permitted `[512, 128]` input. The weight-gradient error was **8.94457 times the error limit**. This error does not agree with the problem description. Thus, the fixed label is **Reject**.
+
+Debate used all its token budget without a decision. We do not count its result as a success.
 
 Traces: [No tools](../traces_glm/case_36/single_call/r1/transcript.md) · [Solo](../traces_glm/case_36/solo/r2/transcript.md) · [Debate](../traces_glm/case_36/debate/r2/transcript.md).
